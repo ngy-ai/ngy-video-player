@@ -1,0 +1,16 @@
+# 构建产物
+/target
+
+# libmpv 动态库：体积大（Windows 版 120MB），不入库。
+# 用 scripts/fetch-libmpv.sh 拉取，或按 README 放到 libs/<平台>/ 下。
+/libs/
+
+# 下载缓存
+/.cache
+
+# 本地配置与日志
+*.log
+/settings.json
+
+# 本地 agent 笔记
+/.workbuddy/

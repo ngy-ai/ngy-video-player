@@ -1,0 +1,68 @@
+[package]
+name = "ngy-video-player"
+version = "0.1.0"
+edition = "2024"
+description = "跨平台视频播放器：GPUI 界面 + libmpv 解码"
+license = "Apache-2.0"
+
+[lib]
+name = "ngy_video_player"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ngy-video-player"
+path = "src/main.rs"
+
+[dependencies]
+# UI / 渲染：基于 Zed GPUI 的综合性桌面框架（Apache-2.0）。
+# 版本与其它 ngy-* 项目保持一致，避免重复编译一整套 gpui-pre。
+gpui-kit = "0.6.4"
+anyhow = "1.0"
+
+# libmpv 以**运行时动态加载**的方式接进来（见 src/player/ffi.rs）：
+# 构建时不需要头文件、不需要链接、不需要 C 工具链，缺库时给用户一条明确的提示，
+# 而不是让二进制直接起不来。
+libloading = "0.8"
+
+# 打开文件 / 选择字幕的原生对话框。注意它是**阻塞**的，必须放后台线程。
+rfd = "0.17"
+
+# 播放器设置持久化（音量、循环模式、上次打开的目录等）。
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 后台线程（mpv 事件循环 / 取帧）到界面线程的单向通知通道。
+# GPUI 的 AsyncApp 不是 Send，唯一合法的跨线程路径就是「后台发消息 → 界面侧 spawn 的
+# future 收消息 → 回到主线程 update」。
+futures = "0.3"
+
+# GPUI 的 RenderImage 用 image::Frame 承载像素，必须与 gpui 依赖的 image 同版本，
+# 否则类型对不上。这里只要 Frame/ImageBuffer，不需要任何编解码器。
+image = { version = "0.25", default-features = false }
+
+[target.'cfg(windows)'.build-dependencies]
+# 把 assets/icon.ico 嵌进 exe 资源段。
+winresource = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# gpui-kit 官方要求：debug 构建下这些依赖不做优化会导致界面明显卡顿。
+[profile.dev]
+debug = "limited"
+
+[profile.dev.package]
+gpui-kit = { opt-level = 3 }
+gpui-kit-assets = { opt-level = 3 }
+gpui-component = { opt-level = 3 }
+gpui-base = { opt-level = 3 }
+gpui-pre = { opt-level = 3 }
+gpui-pre-macros = { opt-level = 3 }
+gpui-pre-platform = { opt-level = 3 }
+rustybuzz = { opt-level = 3 }
+taffy = { opt-level = 3 }
+ttf-parser = { opt-level = 3 }

@@ -1,0 +1,68 @@
+//! 时间格式化与格式清单。
+
+use ngy_video_player::formats;
+use ngy_video_player::ui::format_time;
+use std::path::Path;
+
+#[test]
+fn 时间格式按长度切换() {
+    assert_eq!(format_time(0.0), "0:00");
+    assert_eq!(format_time(5.4), "0:05");
+    assert_eq!(format_time(59.6), "1:00");
+    assert_eq!(format_time(125.0), "2:05");
+    assert_eq!(format_time(3600.0), "1:00:00");
+    assert_eq!(format_time(4832.5), "1:20:33");
+}
+
+#[test]
+fn 负数表示剩余时间() {
+    assert_eq!(format_time(-65.0), "-1:05");
+    assert_eq!(format_time(-0.4), "-0:00");
+}
+
+#[test]
+fn 非法时长不显示成巨数() {
+    assert_eq!(format_time(f64::NAN), "--:--");
+    assert_eq!(format_time(f64::INFINITY), "--:--");
+}
+
+#[test]
+fn 媒体判定覆盖常见容器与音频() {
+    for name in [
+        "a.mp4", "b.MKV", "c.avi", "d.webm", "e.m2ts", "f.rmvb", "g.iso", "h.flac", "i.ape",
+        "j.opus",
+    ] {
+        assert!(formats::is_media(Path::new(name)), "{name} 应被识别为媒体");
+    }
+
+    for name in ["a.txt", "b.srt", "c.exe", "d"] {
+        assert!(
+            !formats::is_media(Path::new(name)),
+            "{name} 不应被识别为媒体"
+        );
+    }
+}
+
+#[test]
+fn 字幕与播放列表判定() {
+    assert!(formats::is_subtitle(Path::new("movie.zh.srt")));
+    assert!(formats::is_subtitle(Path::new("movie.ass")));
+    assert!(!formats::is_subtitle(Path::new("movie.mp4")));
+
+    assert!(formats::is_playlist(Path::new("list.m3u")));
+    assert!(formats::is_playlist(Path::new("list.m3u8")));
+    assert!(!formats::is_playlist(Path::new("list.mp4")));
+}
+
+#[test]
+fn 对话框通配符覆盖全部扩展名() {
+    let (label, patterns) = formats::dialog_filter();
+    assert!(!label.is_empty());
+    assert!(patterns.contains("*.mp4"));
+    assert!(patterns.contains("*.flac"));
+    // 通配符用分号分隔，去掉分隔符后的条目数应与清单一致。
+    assert_eq!(
+        patterns.split(';').count(),
+        formats::supported_extension_count()
+    );
+}
