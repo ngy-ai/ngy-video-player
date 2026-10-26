@@ -87,18 +87,24 @@ pub fn kind_label(path: &std::path::Path) -> &'static str {
     }
 }
 
-/// 文件对话框用的通配符，例如 `*.mp4;*.mkv;…`。
-pub fn dialog_patterns() -> String {
-    let mut patterns: Vec<String> = Vec::new();
-    for ext in VIDEO.iter().chain(AUDIO).chain(IMAGE).chain(DISC) {
-        patterns.push(format!("*.{ext}"));
-    }
-    patterns.join(";")
+/// 文件对话框能选的全部扩展名。
+///
+/// 注意这里给的是**裸扩展名**（`mp4`，不是 `*.mp4`）：`rfd::FileDialog::add_filter`
+/// 自己会拼上 `*.` 前缀再交给系统。送进来带通配符的字符串会被拼成 `*.*.mp4`，
+/// 那是无效的过滤串，Windows 会一个文件都不显示——「对话框里看不到 mp4」就是这么来的。
+pub fn dialog_extensions() -> Vec<&'static str> {
+    VIDEO
+        .iter()
+        .chain(AUDIO)
+        .chain(IMAGE)
+        .chain(DISC)
+        .copied()
+        .collect()
 }
 
-/// 「所有支持的文件」过滤项：(显示名, 通配符)。
-pub fn dialog_filter() -> (String, String) {
-    ("所有支持的媒体文件".to_string(), dialog_patterns())
+/// 「所有支持的文件」过滤项：(显示名, 裸扩展名列表)。
+pub fn dialog_filter() -> (String, Vec<&'static str>) {
+    ("所有支持的媒体文件".to_string(), dialog_extensions())
 }
 
 /// 给「关于/设置」页展示的计数。

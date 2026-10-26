@@ -55,14 +55,18 @@ fn 字幕与播放列表判定() {
 }
 
 #[test]
-fn 对话框通配符覆盖全部扩展名() {
-    let (label, patterns) = formats::dialog_filter();
+fn 对话框过滤器覆盖全部扩展名() {
+    let (label, extensions) = formats::dialog_filter();
     assert!(!label.is_empty());
-    assert!(patterns.contains("*.mp4"));
-    assert!(patterns.contains("*.flac"));
-    // 通配符用分号分隔，去掉分隔符后的条目数应与清单一致。
-    assert_eq!(
-        patterns.split(';').count(),
-        formats::supported_extension_count()
+    assert_eq!(extensions.len(), formats::supported_extension_count());
+    assert!(extensions.contains(&"mp4"));
+    assert!(extensions.contains(&"flac"));
+    // 交给 rfd 的必须是裸扩展名：`rfd` 会自己补 `*.`，带通配符会被拼成
+    // `*.*.mp4`，装进系统对话框后一个文件都不显示。
+    assert!(
+        extensions
+            .iter()
+            .all(|ext| !ext.contains('*') && !ext.contains('.')),
+        "对话框过滤器里不应该带通配符：{extensions:?}"
     );
 }

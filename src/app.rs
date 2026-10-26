@@ -629,10 +629,15 @@ impl PlayerApp {
         }
         self.dialog_open = true;
 
-        let (label, patterns) = formats::dialog_filter();
+        let (label, extensions) = formats::dialog_filter();
         // 挂到主窗口上：对话框是模态的，打开期间主窗口不接受输入。
+        // 过滤器给的是裸扩展名，`rfd` 自己补 `*.`；另外留一个「所有文件」，
+        // 这样清单里没有的格式也还能手动翻出来打开（mpv 认得的多得多）。
         let mut dialog = rfd::FileDialog::new()
-            .add_filter(&label, &[patterns.as_str()])
+            .add_filter(&label, &extensions)
+            .add_filter("视频文件", formats::VIDEO)
+            .add_filter("音频文件", formats::AUDIO)
+            .add_filter("所有文件", &["*"])
             .set_parent(window);
         if let Some(dir) = &self.settings.last_dir {
             dialog = dialog.set_directory(dir);
@@ -693,7 +698,8 @@ impl PlayerApp {
         self.dialog_open = true;
 
         let mut dialog = rfd::FileDialog::new()
-            .add_filter("字幕文件", &["*.srt;*.ass;*.ssa;*.vtt;*.sub;*.smi;*.txt"])
+            .add_filter("字幕文件", formats::SUBTITLE)
+            .add_filter("所有文件", &["*"])
             .set_parent(window);
         if let Some(path) = self.playlist.current() {
             if let Some(dir) = path.parent() {
