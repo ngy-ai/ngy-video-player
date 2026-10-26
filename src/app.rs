@@ -90,6 +90,12 @@ pub struct PlayerApp {
     volume_bounds: Rc<Cell<Bounds<Pixels>>>,
     volume_dragging: bool,
 
+    /// 原生文件选择框是否已经打开。
+    ///
+    /// rfd 的对话框阻塞在后台线程里，主窗口在拿到结果前不会知道自己「正在等对话框」。
+    /// 不挡一下的话，连按 O 会叠出多个对话框，所以这里自己记一笔。
+    dialog_open: bool,
+
     osd: Option<(Vec<String>, Instant)>,
     error: Option<String>,
     show_help: bool,
@@ -140,6 +146,7 @@ impl PlayerApp {
             progress_bounds: Rc::new(Cell::new(Bounds::default())),
             volume_bounds: Rc::new(Cell::new(Bounds::default())),
             volume_dragging: false,
+            dialog_open: false,
             osd: None,
             error: None,
             show_help: false,
@@ -483,9 +490,17 @@ impl PlayerApp {
         }
     }
 
-    fn pick_file(&mut self, cx: &mut Context<Self>) {
+    fn pick_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog_open {
+            return;
+        }
+        self.dialog_open = true;
+
         let (label, patterns) = formats::dialog_filter();
-        let mut dialog = rfd::FileDialog::new().add_filter(&label, &[patterns.as_str()]);
+        // 挂到主窗口上：对话框是模态的，打开期间主窗口不接受输入。
+        let mut dialog = rfd::FileDialog::new()
+            .add_filter(&label, &[patterns.as_str()])
+            .set_parent(window);
         if let Some(dir) = &self.settings.last_dir {
             dialog = dialog.set_directory(dir);
         }
@@ -498,10 +513,11 @@ impl PlayerApp {
 
         cx.spawn(async move |this, cx| {
             let picked = rx.await.ok().flatten().unwrap_or_default();
-            if picked.is_empty() {
-                return;
-            }
             let _ = this.update(cx, |this, cx| {
+                this.dialog_open = false;
+                if picked.is_empty() {
+                    return;
+                }
                 this.open_paths(picked, cx);
                 cx.notify();
             });
@@ -509,9 +525,15 @@ impl PlayerApp {
         .detach();
     }
 
-    fn pick_subtitle(&mut self, cx: &mut Context<Self>) {
+    fn pick_subtitle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog_open {
+            return;
+        }
+        self.dialog_open = true;
+
         let mut dialog = rfd::FileDialog::new()
-            .add_filter("字幕文件", &["*.srt;*.ass;*.ssa;*.vtt;*.sub;*.smi;*.txt"]);
+            .add_filter("字幕文件", &["*.srt;*.ass;*.ssa;*.vtt;*.sub;*.smi;*.txt"])
+            .set_parent(window);
         if let Some(path) = self.playlist.current() {
             if let Some(dir) = path.parent() {
                 dialog = dialog.set_directory(dir);
@@ -525,6 +547,7 @@ impl PlayerApp {
         cx.spawn(async move |this, cx| {
             let picked = rx.await.ok().flatten();
             let _ = this.update(cx, |this, cx| {
+                this.dialog_open = false;
                 if let Some(path) = picked {
                     let url = path.to_string_lossy().to_string();
                     this.send(Command::AddSubtitle(url));
@@ -1122,9 +1145,9 @@ impl PlayerApp {
                             .cursor(CursorStyle::PointingHand)
                             .hover(|style| style.bg(ui::surface_hover()))
                             .child("从文件加载字幕…")
-                            .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                                 this.menu = None;
-                                this.pick_subtitle(cx);
+                                this.pick_subtitle(window, cx);
                             })),
                     )
                 }),
@@ -1403,7 +1426,9 @@ impl Render for PlayerApp {
                 this.poke();
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &OpenFile, _window, cx| this.pick_file(cx)))
+            .on_action(cx.listener(|this, _: &OpenFile, window, cx| {
+                this.pick_file(window, cx);
+            }))
             .on_action(cx.listener(|this, _: &NextFile, _window, cx| this.next_file(cx)))
             .on_action(cx.listener(|this, _: &PreviousFile, _window, cx| this.previous_file(cx)))
             .on_action(cx.listener(|this, _: &SpeedUp, _window, cx| {
