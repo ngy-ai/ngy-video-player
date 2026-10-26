@@ -7,7 +7,7 @@
 use crate::ui::IconName;
 use crate::{
     formats,
-    player::{Command, EndReason, Engine, LoopMode, PlayerEvent, Snapshot},
+    player::{Command, EndReason, Engine, LoopMode, PlayerEvent, Snapshot, TrackKind},
     playlist::{self, Playlist},
     settings::Settings,
     ui::{self, bg, format_time, icon, icon_button, surface, text, text_faint, text_muted},
@@ -56,6 +56,7 @@ const SEEK_STEP: f64 = 5.0;
 const VOLUME_STEP: f64 = 5.0;
 const CONTROLS_IDLE: Duration = Duration::from_millis(2600);
 const OSD_LIFETIME: Duration = Duration::from_millis(900);
+const MENUBAR_HEIGHT: f32 = 32.0;
 
 #[derive(Clone, Debug, Default)]
 pub struct LaunchOptions {
@@ -101,6 +102,8 @@ pub struct PlayerApp {
     show_help: bool,
     /// 悬浮菜单（字幕 / 音轨 / 循环）当前展开的是哪一个。
     menu: Option<Menu>,
+    /// 顶部菜单栏当前展开的是哪一个。
+    menu_bar: Option<BarMenu>,
 
     startup_failure: Option<String>,
 }
@@ -110,6 +113,106 @@ enum Menu {
     Subtitle,
     Audio,
     Speed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BarMenu {
+    File,
+    Playback,
+    Subtitle,
+    Audio,
+    View,
+    Help,
+}
+
+impl BarMenu {
+    const ALL: [BarMenu; 6] = [
+        BarMenu::File,
+        BarMenu::Playback,
+        BarMenu::Subtitle,
+        BarMenu::Audio,
+        BarMenu::View,
+        BarMenu::Help,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            BarMenu::File => "文件",
+            BarMenu::Playback => "播放",
+            BarMenu::Subtitle => "字幕",
+            BarMenu::Audio => "音轨",
+            BarMenu::View => "视图",
+            BarMenu::Help => "帮助",
+        }
+    }
+}
+
+enum BarItem {
+    Separator,
+    Entry(BarEntry),
+}
+
+struct BarEntry {
+    label: String,
+    hint: Option<&'static str>,
+    active: bool,
+    enabled: bool,
+    action: Option<BarAction>,
+}
+
+impl BarEntry {
+    fn new(label: impl Into<String>, action: BarAction) -> Self {
+        Self {
+            label: label.into(),
+            hint: None,
+            active: false,
+            enabled: true,
+            action: Some(action),
+        }
+    }
+
+    fn note(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            hint: None,
+            active: false,
+            enabled: false,
+            action: None,
+        }
+    }
+
+    fn hint(mut self, hint: &'static str) -> Self {
+        self.hint = Some(hint);
+        self
+    }
+
+    fn checked(mut self, active: bool) -> Self {
+        self.active = active;
+        self
+    }
+
+    fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+}
+
+/// 菜单动作必须是 `Clone`：点击回调是 `Fn`，可能被多次调用，不能把动作 move 走。
+#[derive(Clone)]
+enum BarAction {
+    Command(Command),
+    OpenFile,
+    OpenFolder,
+    LoadSubtitle,
+    Previous,
+    Next,
+    Seek(f64),
+    SetLoop(LoopMode),
+    TogglePlaylist,
+    ToggleFullscreen,
+    ToggleHelp,
+    About,
+    Quit,
 }
 
 impl PlayerApp {
@@ -151,6 +254,7 @@ impl PlayerApp {
             error: None,
             show_help: false,
             menu: None,
+            menu_bar: None,
             startup_failure,
         };
 
@@ -268,6 +372,7 @@ impl PlayerApp {
         self.controls_forced
             || self.last_activity.elapsed() < CONTROLS_IDLE
             || self.menu.is_some()
+            || self.menu_bar.is_some()
             || self.dragging.is_some()
             || self.volume_dragging
             || self.show_help
@@ -346,6 +451,8 @@ impl PlayerApp {
     fn exit_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.show_help {
             self.show_help = false;
+        } else if self.menu_bar.is_some() {
+            self.menu_bar = None;
         } else if self.menu.is_some() {
             self.menu = None;
         } else if self.settings.show_playlist {
@@ -525,6 +632,34 @@ impl PlayerApp {
         .detach();
     }
 
+    fn pick_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog_open {
+            return;
+        }
+        self.dialog_open = true;
+
+        let mut dialog = rfd::FileDialog::new().set_parent(window);
+        if let Some(dir) = &self.settings.last_dir {
+            dialog = dialog.set_directory(dir);
+        }
+        let (tx, rx) = futures::channel::oneshot::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(dialog.pick_folder());
+        });
+
+        cx.spawn(async move |this, cx| {
+            let picked = rx.await.ok().flatten();
+            let _ = this.update(cx, |this, cx| {
+                this.dialog_open = false;
+                if let Some(folder) = picked {
+                    this.open_paths(vec![folder], cx);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     fn pick_subtitle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog_open {
             return;
@@ -593,7 +728,13 @@ impl PlayerApp {
         let viewport = window.viewport_size();
         let scale = window.scale_factor();
         let area_width = f32::from(viewport.width) * scale;
-        let area_height = f32::from(viewport.height) * scale;
+        // 窗口模式下菜单栏占掉了顶部一条，渲染目标要扣掉，否则画面会被裁掉一截。
+        let chrome = if window.is_fullscreen() {
+            0.0
+        } else {
+            MENUBAR_HEIGHT
+        };
+        let area_height = (f32::from(viewport.height) - chrome) * scale;
         if area_width < 2.0 || area_height < 2.0 {
             return;
         }
@@ -619,11 +760,12 @@ impl PlayerApp {
 
     // -- 渲染 --------------------------------------------------------------
 
-    fn render_video_area(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_video_area(&self, top: Pixels, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("video-area")
             .absolute()
             .inset_0()
+            .top(top)
             .bg(bg())
             .child(ui::video_surface(self.frame.clone()))
             // 空状态只看「有没有帧」，不看 mpv 上报的宽高：width/height 属性在
@@ -661,8 +803,9 @@ impl PlayerApp {
                 // 双击全屏；单击切换播放。播放器里这是最不容易误触的默认组合。
                 if event.click_count() >= 2 {
                     this.toggle_fullscreen(window);
-                } else if this.menu.is_some() {
+                } else if this.menu.is_some() || this.menu_bar.is_some() {
                     this.menu = None;
+                    this.menu_bar = None;
                 } else {
                     this.toggle_play(cx);
                 }
@@ -956,6 +1099,7 @@ impl PlayerApp {
                         false,
                         cx.listener(|this, _: &ClickEvent, _window, cx| {
                             this.menu = (this.menu != Some(Menu::Speed)).then_some(Menu::Speed);
+                            this.menu_bar = None;
                             this.poke();
                             cx.notify();
                         }),
@@ -968,6 +1112,7 @@ impl PlayerApp {
                         cx.listener(|this, _: &ClickEvent, _window, cx| {
                             this.menu =
                                 (this.menu != Some(Menu::Subtitle)).then_some(Menu::Subtitle);
+                            this.menu_bar = None;
                             this.poke();
                             cx.notify();
                         }),
@@ -979,6 +1124,7 @@ impl PlayerApp {
                         !has_video,
                         cx.listener(|this, _: &ClickEvent, _window, cx| {
                             this.menu = (this.menu != Some(Menu::Audio)).then_some(Menu::Audio);
+                            this.menu_bar = None;
                             this.poke();
                             cx.notify();
                         }),
@@ -1154,12 +1300,374 @@ impl PlayerApp {
         )
     }
 
-    fn render_playlist(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn bar_entries(&self, menu: BarMenu, window: &Window) -> Vec<BarItem> {
+        use BarAction::*;
+
+        let mut items: Vec<BarItem> = Vec::new();
+        match menu {
+            BarMenu::File => {
+                items.push(BarItem::Entry(
+                    BarEntry::new("打开文件…", OpenFile).hint("O"),
+                ));
+                items.push(BarItem::Entry(BarEntry::new("打开文件夹…", OpenFolder)));
+                items.push(BarItem::Separator);
+                items.push(BarItem::Entry(BarEntry::new("退出", Quit)));
+            }
+            BarMenu::Playback => {
+                items.push(BarItem::Entry(
+                    BarEntry::new(
+                        if self.snapshot.paused {
+                            "播放"
+                        } else {
+                            "暂停"
+                        },
+                        Command(crate::player::Command::PlayPause),
+                    )
+                    .hint("空格"),
+                ));
+                items.push(BarItem::Entry(BarEntry::new(
+                    "停止",
+                    Command(crate::player::Command::Stop),
+                )));
+                items.push(BarItem::Separator);
+
+                let navigable = self.playlist.len() > 1;
+                items.push(BarItem::Entry(
+                    BarEntry::new("上一集", Previous)
+                        .hint("N")
+                        .enabled(navigable),
+                ));
+                items.push(BarItem::Entry(
+                    BarEntry::new("下一集", Next).hint("P").enabled(navigable),
+                ));
+                items.push(BarItem::Separator);
+                items.push(BarItem::Entry(
+                    BarEntry::new("快退 5 秒", Seek(-SEEK_STEP)).hint("←"),
+                ));
+                items.push(BarItem::Entry(
+                    BarEntry::new("快进 5 秒", Seek(SEEK_STEP)).hint("→"),
+                ));
+                items.push(BarItem::Separator);
+
+                for mode in [LoopMode::Off, LoopMode::All, LoopMode::One] {
+                    items.push(BarItem::Entry(
+                        BarEntry::new(mode.label(), SetLoop(mode))
+                            .checked(self.settings.loop_mode == mode),
+                    ));
+                }
+            }
+            BarMenu::Subtitle => {
+                items.push(BarItem::Entry(
+                    BarEntry::new(
+                        "关闭字幕",
+                        Command(crate::player::Command::SelectTrack {
+                            kind: TrackKind::Subtitle,
+                            id: -1,
+                        }),
+                    )
+                    .checked(self.snapshot.selected_track(TrackKind::Subtitle).is_none()),
+                ));
+
+                let tracks = self.snapshot.track(TrackKind::Subtitle);
+                if !tracks.is_empty() {
+                    items.push(BarItem::Separator);
+                }
+                for track in tracks {
+                    items.push(BarItem::Entry(
+                        BarEntry::new(
+                            track.display_name(),
+                            Command(crate::player::Command::SelectTrack {
+                                kind: TrackKind::Subtitle,
+                                id: track.id,
+                            }),
+                        )
+                        .checked(track.selected),
+                    ));
+                }
+
+                items.push(BarItem::Separator);
+                items.push(BarItem::Entry(BarEntry::new(
+                    "从文件加载字幕…",
+                    LoadSubtitle,
+                )));
+            }
+            BarMenu::Audio => {
+                let tracks = self.snapshot.track(TrackKind::Audio);
+                if tracks.is_empty() {
+                    items.push(BarItem::Entry(BarEntry::note("没有可切换的音轨")));
+                }
+                for track in tracks {
+                    items.push(BarItem::Entry(
+                        BarEntry::new(
+                            track.display_name(),
+                            Command(crate::player::Command::SelectTrack {
+                                kind: TrackKind::Audio,
+                                id: track.id,
+                            }),
+                        )
+                        .checked(track.selected),
+                    ));
+                }
+            }
+            BarMenu::View => {
+                items.push(BarItem::Entry(
+                    BarEntry::new("播放列表", TogglePlaylist)
+                        .hint("L")
+                        .checked(self.settings.show_playlist),
+                ));
+                items.push(BarItem::Entry(
+                    BarEntry::new("全屏", ToggleFullscreen)
+                        .hint("F")
+                        .checked(window.is_fullscreen()),
+                ));
+            }
+            BarMenu::Help => {
+                items.push(BarItem::Entry(
+                    BarEntry::new("键盘快捷键", ToggleHelp)
+                        .hint("?")
+                        .checked(self.show_help),
+                ));
+                items.push(BarItem::Separator);
+                items.push(BarItem::Entry(BarEntry::new(
+                    "关于 ngy-video-player",
+                    About,
+                )));
+            }
+        }
+
+        items
+    }
+
+    fn run_bar_action(&mut self, action: BarAction, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu_bar = None;
+        match action {
+            BarAction::Command(command) => self.send(command),
+            BarAction::OpenFile => self.pick_file(window, cx),
+            BarAction::OpenFolder => self.pick_folder(window, cx),
+            BarAction::LoadSubtitle => self.pick_subtitle(window, cx),
+            BarAction::Previous => self.previous_file(cx),
+            BarAction::Next => self.next_file(cx),
+            BarAction::Seek(delta) => self.seek_by(delta, cx),
+            BarAction::SetLoop(mode) => {
+                self.settings.loop_mode = mode;
+                self.flash(mode.label());
+            }
+            BarAction::TogglePlaylist => {
+                self.settings.show_playlist = !self.settings.show_playlist;
+            }
+            BarAction::ToggleFullscreen => self.toggle_fullscreen(window),
+            BarAction::ToggleHelp => self.show_help = !self.show_help,
+            BarAction::About => {
+                self.flash(format!(
+                    "ngy-video-player {}\nGPUI + libmpv",
+                    env!("CARGO_PKG_VERSION")
+                ));
+            }
+            BarAction::Quit => {
+                cx.quit();
+                return;
+            }
+        }
+        self.poke();
+        cx.notify();
+    }
+
+    fn render_menu_bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("menu-bar")
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .h(px(MENUBAR_HEIGHT))
+            .flex()
+            .items_center()
+            .px(px(8.0))
+            .bg(surface())
+            .border_b_1()
+            .border_color(gpui_kit::rgb(0x26262e))
+            .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
+                cx.stop_propagation();
+            }))
+            .children(
+                BarMenu::ALL
+                    .iter()
+                    .map(|menu| self.render_bar_menu(*menu, window, cx).into_any_element()),
+            )
+    }
+
+    fn render_bar_menu(
+        &self,
+        menu: BarMenu,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let open = self.menu_bar == Some(menu);
+        div()
+            .relative()
+            .child(
+                div()
+                    .id(gpui_kit::ElementId::Name(
+                        format!("bar-menu-{menu:?}").into(),
+                    ))
+                    .h(px(26.0))
+                    .px(px(10.0))
+                    .flex()
+                    .items_center()
+                    .rounded(px(6.0))
+                    .text_size(px(13.0))
+                    .cursor(CursorStyle::PointingHand)
+                    .text_color(if open { ui::accent() } else { text_muted() })
+                    .when(open, |this| this.bg(ui::surface_hover()))
+                    .when(!open, |this| {
+                        this.hover(|style| style.bg(ui::surface_hover()))
+                    })
+                    .child(menu.label())
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                        cx.stop_propagation();
+                        this.menu_bar = (this.menu_bar != Some(menu)).then_some(menu);
+                        if this.menu_bar.is_some() {
+                            this.menu = None;
+                        }
+                        this.poke();
+                        cx.notify();
+                    }))
+                    // 已经展开一个菜单时，移过其它标题直接切换，符合桌面菜单习惯。
+                    .on_hover(cx.listener(move |this, hovered: &bool, _window, cx| {
+                        if *hovered && this.menu_bar.is_some() && this.menu_bar != Some(menu) {
+                            this.menu_bar = Some(menu);
+                            this.poke();
+                            cx.notify();
+                        }
+                    })),
+            )
+            .when(open, |this| {
+                this.child(self.render_bar_dropdown(menu, window, cx))
+            })
+    }
+
+    fn render_bar_dropdown(
+        &self,
+        menu: BarMenu,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let available = f32::from(window.viewport_size().height) - MENUBAR_HEIGHT - 16.0;
+        div()
+            .id(gpui_kit::ElementId::Name(
+                format!("bar-dropdown-{menu:?}").into(),
+            ))
+            .absolute()
+            .left(px(-4.0))
+            .top(px(28.0))
+            .w(px(250.0))
+            .max_h(px(available.clamp(160.0, 420.0)))
+            .overflow_y_scroll()
+            .py(px(5.0))
+            .rounded(px(10.0))
+            .bg(surface())
+            .border_1()
+            .border_color(gpui_kit::rgb(0x2c2c34))
+            .shadow_lg()
+            .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
+                cx.stop_propagation();
+            }))
+            .children(self.bar_entries(menu, window).into_iter().enumerate().map(
+                |(index, item)| {
+                    match item {
+                        BarItem::Separator => div()
+                            .h(px(1.0))
+                            .mx(px(8.0))
+                            .my(px(4.0))
+                            .bg(gpui_kit::rgb(0x2c2c34))
+                            .into_any_element(),
+                        BarItem::Entry(entry) => self
+                            .render_bar_entry(menu, index, entry, cx)
+                            .into_any_element(),
+                    }
+                },
+            ))
+    }
+
+    fn render_bar_entry(
+        &self,
+        menu: BarMenu,
+        index: usize,
+        entry: BarEntry,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let BarEntry {
+            label,
+            hint,
+            active,
+            enabled,
+            action,
+        } = entry;
+        let action = action.filter(|_| enabled);
+        let color = if !enabled {
+            text_faint()
+        } else if active {
+            ui::accent()
+        } else {
+            text()
+        };
+
+        div()
+            .id(gpui_kit::ElementId::Name(
+                format!("bar-item-{menu:?}-{index}").into(),
+            ))
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .h(px(30.0))
+            .mx(px(4.0))
+            .px(px(10.0))
+            .rounded(px(6.0))
+            .text_size(px(13.0))
+            .text_color(color)
+            .when(enabled, |this| {
+                this.cursor(CursorStyle::PointingHand)
+                    .hover(|style| style.bg(ui::surface_hover()))
+            })
+            .child(
+                div()
+                    .w(px(14.0))
+                    .flex()
+                    .justify_center()
+                    .when(active, |this| {
+                        this.child(icon(IconName::Check, 14.0, ui::accent()))
+                    }),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(label),
+            )
+            .when_some(hint, |this, hint| {
+                this.child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(text_faint())
+                        .child(hint),
+                )
+            })
+            .when_some(action, |this, action| {
+                this.on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.run_bar_action(action.clone(), window, cx);
+                }))
+            })
+    }
+
+    fn render_playlist(&self, top: Pixels, cx: &mut Context<Self>) -> impl IntoElement {
         let current = self.playlist.index();
         div()
             .id("playlist")
             .absolute()
-            .top_0()
+            .top(top)
             .right_0()
             .bottom_0()
             .w(px(300.0))
@@ -1169,8 +1677,12 @@ impl PlayerApp {
             .border_l_1()
             .border_color(gpui_kit::rgb(0x26262e))
             // 面板上的点击（选条目、点关闭）不该漏到画面去。
-            .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
+            .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
                 cx.stop_propagation();
+                if this.menu_bar.is_some() {
+                    this.menu_bar = None;
+                    cx.notify();
+                }
             }))
             .child(
                 div()
@@ -1253,14 +1765,14 @@ impl PlayerApp {
             )
     }
 
-    fn render_osd(&self) -> Option<impl IntoElement> {
+    fn render_osd(&self, top: Pixels) -> Option<impl IntoElement> {
         let (lines, _) = self.osd.as_ref()?;
         Some(
             div()
                 .absolute()
                 .left(px(0.0))
                 .right(px(0.0))
-                .top(px(28.0))
+                .top(top)
                 .flex()
                 .justify_center()
                 .child(
@@ -1394,6 +1906,20 @@ impl Render for PlayerApp {
         };
         window.set_window_title(&title);
 
+        let fullscreen = window.is_fullscreen();
+        // 全屏时把菜单栏让给鼠标：和底栏一起出现、一起消失，避免画面永久缩水。
+        let bar_visible = !fullscreen || self.controls_visible();
+        let video_top = if fullscreen {
+            px(0.0)
+        } else {
+            px(MENUBAR_HEIGHT)
+        };
+        let osd_top = if fullscreen {
+            px(28.0)
+        } else {
+            px(MENUBAR_HEIGHT + 16.0)
+        };
+
         div()
             .id("root")
             .relative()
@@ -1498,15 +2024,18 @@ impl Render for PlayerApp {
                 this.poke();
                 cx.notify();
             }))
-            .child(self.render_video_area(cx))
+            .child(self.render_video_area(video_top, cx))
             .when(self.settings.show_playlist, |this| {
-                this.child(self.render_playlist(cx))
+                this.child(self.render_playlist(video_top, cx))
             })
             .when(self.controls_visible(), |this| {
                 this.child(self.render_controls(cx))
             })
             .children(self.render_menu(cx))
-            .children(self.render_osd())
+            .children(self.render_osd(osd_top))
+            .when(bar_visible, |this| {
+                this.child(self.render_menu_bar(window, cx))
+            })
             .children(self.render_error(cx))
             .children(self.render_help(cx))
     }
