@@ -135,6 +135,45 @@ pub fn icon_button(
         .into_any_element()
 }
 
+/// 带文字的图标按钮：给「当前值本身要让人看见」的开关用（倍速、播放模式）。
+///
+/// 纯图标按钮在这些功能上不够用——用户看不到「现在是不是 1.5 倍速」「现在是列表
+/// 循环还是单集循环」，就会以为播放器根本没有这些功能。
+pub fn pill_button(
+    id: impl Into<ElementId>,
+    icon_name: IconName,
+    label: impl Into<SharedString>,
+    active: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    let color = if active { accent() } else { text() };
+
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap(px(4.0))
+        .h(px(28.0))
+        .px(px(7.0))
+        .rounded(px(8.0))
+        .cursor(CursorStyle::PointingHand)
+        .hover(|style| style.bg(surface_hover()).rounded(px(8.0)))
+        .child(icon(icon_name, 15.0, color))
+        .child(
+            div()
+                .text_size(px(11.0))
+                .text_color(color)
+                .child(label.into()),
+        )
+        .on_click(
+            move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
+                cx.stop_propagation();
+                on_click(event, window, cx);
+            },
+        )
+        .into_any_element()
+}
+
 // ---------------------------------------------------------------------------
 // 时间
 // ---------------------------------------------------------------------------

@@ -112,19 +112,20 @@ pub enum LoopMode {
 }
 
 impl LoopMode {
-    pub fn cycle(self) -> Self {
-        match self {
-            LoopMode::Off => LoopMode::All,
-            LoopMode::All => LoopMode::One,
-            LoopMode::One => LoopMode::Off,
-        }
-    }
-
     pub fn label(self) -> &'static str {
         match self {
             LoopMode::Off => "顺序播放",
             LoopMode::All => "列表循环",
-            LoopMode::One => "单个循环",
+            LoopMode::One => "单集循环",
+        }
+    }
+
+    /// 控制条上的两字短标签，用来让当前模式一眼可见。
+    pub fn short_label(self) -> &'static str {
+        match self {
+            LoopMode::Off => "顺序",
+            LoopMode::All => "列表",
+            LoopMode::One => "单集",
         }
     }
 }
@@ -400,9 +401,14 @@ impl Engine {
             // 但播放进度正常推进。`libmpv` 这个 VO 才会把帧交给 render context。
             opt(api, handle, "vo", "libmpv");
             //
-            // 音频仍然交给 mpv：三大平台各自挑最优后端（wasapi / coreaudio /
-            // pipewire→pulse→alsa），音视频同步也由它负责，我们不用自己对齐时钟。
-            opt(api, handle, "ao", "auto");
+            // 音频仍然交给 mpv：音视频同步由它负责，我们不用自己对齐时钟。
+            //
+            // 但**不要**去设置 `ao`：`ao` 接受的是驱动名列表（wasapi、coreaudio、
+            // pipewire/pulse/alsa……），并没有一个叫 `auto` 的驱动。写成 `ao=auto`
+            // 时 mpv 会报 `Audio output auto not found!`，然后按
+            // `audio-fallback-to-null` 退到 null 输出——画面正常、进度正常，就是没有
+            // 声音。留空才是「按平台优先级自动挑」,这里刻意不写。
+            //
             // 没有可用声卡时（远程桌面、容器、拔掉的 USB 声卡）继续放画面，
             // 而不是让整个播放因为音频后端起不来而失败。
             opt(api, handle, "audio-fallback-to-null", "yes");
@@ -799,6 +805,12 @@ fn refresh_metadata(api: &Arc<MpvApi>, handle: *mut ffi::MpvHandle, shared: &Arc
     let width = api.property_i64(handle, "width").unwrap_or(0);
     let height = api.property_i64(handle, "height").unwrap_or(0);
 
+    // 实际选中的音频输出。`null` 就是「画面在放、就是没声音」，
+    // 原因通常是没声卡 / 音频后端起不来；这条日志是唯一能事后排查的线索。
+    let audio_output = api
+        .property_string(handle, "current-ao")
+        .unwrap_or_default();
+
     let mut state = shared.state();
     state.tracks = tracks;
     state.chapters = chapters;
@@ -811,6 +823,17 @@ fn refresh_metadata(api: &Arc<MpvApi>, handle: *mut ffi::MpvHandle, shared: &Arc
     } else {
         state.video_width = 0;
         state.video_height = 0;
+    }
+    if !audio_output.is_empty() && state.audio_device != audio_output {
+        if audio_output == "null" {
+            log_warn!(
+                "音频输出退化为 null，当前文件不会有声音：\
+                 检查系统默认播放设备，或把系统声音输出切回本机扬声器"
+            );
+        } else {
+            log_info!("音频输出: {audio_output}");
+        }
+        state.audio_device = audio_output;
     }
     drop(state);
 

@@ -4045,6 +4045,7 @@ dependencies = [
  "image",
  "libloading",
  "rfd",
+ "rust-embed",
  "serde",
  "serde_json",
  "winresource",

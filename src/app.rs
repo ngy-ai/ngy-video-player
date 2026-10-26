@@ -10,7 +10,10 @@ use crate::{
     player::{Command, EndReason, Engine, LoopMode, PlayerEvent, Snapshot, TrackKind},
     playlist::{self, Playlist},
     settings::Settings,
-    ui::{self, bg, format_time, icon, icon_button, surface, text, text_faint, text_muted},
+    ui::{
+        self, bg, format_time, icon, icon_button, pill_button, surface, text, text_faint,
+        text_muted,
+    },
 };
 use anyhow::Result;
 use futures::{StreamExt as _, channel::mpsc::UnboundedReceiver};
@@ -51,6 +54,18 @@ actions!(
         ExitOverlay,
     ]
 );
+
+/// 控制条上的倍速文字：`1` → `1×`，`1.25` → `1.25×`。
+fn format_speed(speed: f64) -> String {
+    let mut text = format!("{speed:.2}");
+    while text.ends_with('0') {
+        text.pop();
+    }
+    if text.ends_with('.') {
+        text.pop();
+    }
+    format!("{text}×")
+}
 
 const SEEK_STEP: f64 = 5.0;
 const VOLUME_STEP: f64 = 5.0;
@@ -113,6 +128,14 @@ enum Menu {
     Subtitle,
     Audio,
     Speed,
+    Loop,
+}
+
+/// 悬浮菜单里的一项点击后要做什么。
+#[derive(Clone)]
+enum MenuAction {
+    Command(Command),
+    Loop(LoopMode),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -371,6 +394,9 @@ impl PlayerApp {
     fn controls_visible(&self) -> bool {
         self.controls_forced
             || self.last_activity.elapsed() < CONTROLS_IDLE
+            // 暂停时一直留着：播放器停下的时候，用户的第一反应就是去找「播放」按钮，
+            // 这时候把控制条藏起来等于让人以为界面上什么都没有。
+            || self.snapshot.paused
             || self.menu.is_some()
             || self.menu_bar.is_some()
             || self.dragging.is_some()
@@ -437,9 +463,9 @@ impl PlayerApp {
         cx.notify();
     }
 
-    fn cycle_loop(&mut self, cx: &mut Context<Self>) {
-        self.settings.loop_mode = self.settings.loop_mode.cycle();
-        self.flash(self.settings.loop_mode.label());
+    fn set_loop(&mut self, mode: LoopMode, cx: &mut Context<Self>) {
+        self.settings.loop_mode = mode;
+        self.flash(mode.label());
         cx.notify();
     }
 
@@ -1092,11 +1118,11 @@ impl PlayerApp {
                     )
                     .child(div().flex_1())
                     // 右：功能开关
-                    .child(icon_button(
+                    .child(pill_button(
                         "speed",
                         IconName::Gauge,
-                        self.menu == Some(Menu::Speed),
-                        false,
+                        format_speed(snapshot.speed),
+                        self.menu == Some(Menu::Speed) || (snapshot.speed - 1.0).abs() > 0.001,
                         cx.listener(|this, _: &ClickEvent, _window, cx| {
                             this.menu = (this.menu != Some(Menu::Speed)).then_some(Menu::Speed);
                             this.menu_bar = None;
@@ -1129,16 +1155,20 @@ impl PlayerApp {
                             cx.notify();
                         }),
                     ))
-                    .child(icon_button(
+                    .child(pill_button(
                         "loop",
                         match self.settings.loop_mode {
-                            LoopMode::Off => IconName::Repeat,
-                            LoopMode::All => IconName::Repeat,
+                            LoopMode::Off | LoopMode::All => IconName::Repeat,
                             LoopMode::One => IconName::Repeat1,
                         },
-                        self.settings.loop_mode != LoopMode::Off,
-                        false,
-                        cx.listener(|this, _: &ClickEvent, _window, cx| this.cycle_loop(cx)),
+                        self.settings.loop_mode.short_label(),
+                        self.menu == Some(Menu::Loop) || self.settings.loop_mode != LoopMode::Off,
+                        cx.listener(|this, _: &ClickEvent, _window, cx| {
+                            this.menu = (this.menu != Some(Menu::Loop)).then_some(Menu::Loop);
+                            this.menu_bar = None;
+                            this.poke();
+                            cx.notify();
+                        }),
                     ))
                     .child(icon_button(
                         "playlist-toggle",
@@ -1166,15 +1196,24 @@ impl PlayerApp {
 
     fn render_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let menu = self.menu?;
-        let mut entries: Vec<(String, bool, Option<Command>)> = Vec::new();
+        let mut entries: Vec<(String, bool, Option<MenuAction>)> = Vec::new();
 
         match menu {
             Menu::Speed => {
                 for speed in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0] {
                     entries.push((
-                        format!("{speed:.2}×"),
+                        format_speed(speed),
                         (self.snapshot.speed - speed).abs() < 0.001,
-                        Some(Command::SetSpeed(speed)),
+                        Some(MenuAction::Command(Command::SetSpeed(speed))),
+                    ));
+                }
+            }
+            Menu::Loop => {
+                for mode in [LoopMode::Off, LoopMode::All, LoopMode::One] {
+                    entries.push((
+                        mode.label().to_string(),
+                        self.settings.loop_mode == mode,
+                        Some(MenuAction::Loop(mode)),
                     ));
                 }
             }
@@ -1184,19 +1223,19 @@ impl PlayerApp {
                     self.snapshot
                         .selected_track(crate::player::TrackKind::Subtitle)
                         .is_none(),
-                    Some(Command::SelectTrack {
+                    Some(MenuAction::Command(Command::SelectTrack {
                         kind: crate::player::TrackKind::Subtitle,
                         id: -1,
-                    }),
+                    })),
                 ));
                 for track in self.snapshot.track(crate::player::TrackKind::Subtitle) {
                     entries.push((
                         track.display_name(),
                         track.selected,
-                        Some(Command::SelectTrack {
+                        Some(MenuAction::Command(Command::SelectTrack {
                             kind: crate::player::TrackKind::Subtitle,
                             id: track.id,
-                        }),
+                        })),
                     ));
                 }
             }
@@ -1205,10 +1244,10 @@ impl PlayerApp {
                     entries.push((
                         track.display_name(),
                         track.selected,
-                        Some(Command::SelectTrack {
+                        Some(MenuAction::Command(Command::SelectTrack {
                             kind: crate::player::TrackKind::Audio,
                             id: track.id,
-                        }),
+                        })),
                     ));
                 }
                 if entries.is_empty() {
@@ -1236,9 +1275,9 @@ impl PlayerApp {
                     cx.stop_propagation();
                 }))
                 .children(entries.into_iter().enumerate().map(
-                    |(index, (label, active, command))| {
+                    |(index, (label, active, action))| {
                         let id = gpui_kit::ElementId::Name(format!("menu-{index}").into());
-                        let enabled = command.is_some();
+                        let enabled = action.is_some();
                         div()
                             .id(id)
                             .px(px(10.0))
@@ -1258,10 +1297,13 @@ impl PlayerApp {
                                     .hover(|style| style.bg(ui::surface_hover()))
                             })
                             .child(label)
-                            .when_some(command, |this, command| {
+                            .when_some(action, |this, action| {
                                 this.on_click(cx.listener(
                                     move |this, _: &ClickEvent, _window, cx| {
-                                        this.send(command.clone());
+                                        match action.clone() {
+                                            MenuAction::Command(command) => this.send(command),
+                                            MenuAction::Loop(mode) => this.set_loop(mode, cx),
+                                        }
                                         this.menu = None;
                                         this.poke();
                                         cx.notify();
@@ -1448,10 +1490,7 @@ impl PlayerApp {
             BarAction::Previous => self.previous_file(cx),
             BarAction::Next => self.next_file(cx),
             BarAction::Seek(delta) => self.seek_by(delta, cx),
-            BarAction::SetLoop(mode) => {
-                self.settings.loop_mode = mode;
-                self.flash(mode.label());
-            }
+            BarAction::SetLoop(mode) => self.set_loop(mode, cx),
             BarAction::TogglePlaylist => {
                 self.settings.show_playlist = !self.settings.show_playlist;
             }

@@ -24,6 +24,14 @@ anyhow = "1.0"
 # 而不是让二进制直接起不来。
 libloading = "0.8"
 
+# 这里不起任何作用，只为打开 rust-embed 的 `debug-embed` 特性：
+# gpui-kit-assets 用 rust-embed 内嵌图标，而 rust-embed 在 debug 构建下默认
+# 「运行时从磁盘读」——它算出的目录前缀与运行期路径对不上，导致 `get()` 全部返回
+# None，debug 版里所有图标（播放/暂停/上一集/倍速/循环……）都是隐形的按钮。
+# 特性在整个依赖图里是合并的，所以只要这里声明一次，gpui-kit-assets 的图标表
+# 在 debug 下也会走内嵌路径，行为与 release 一致。
+rust-embed = { version = "8.13", default-features = false, features = ["debug-embed"] }
+
 # 打开文件 / 选择字幕的原生对话框。注意它是**阻塞**的，必须放后台线程。
 rfd = "0.17"
 
