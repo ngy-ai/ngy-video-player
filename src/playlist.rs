@@ -3,11 +3,16 @@
 //! 刻意不把列表交给 mpv 的 `playlist-*` 命令：那套状态在切歌、拖放、手动重排时
 //! 会和界面各记一份，两边一旦不同步就很难查。这里 UI 是唯一事实来源，mpv 每次只
 //! 负责「放这一个文件」。
+//!
+//! 面板上可以有多个列表（一页一个），整组列表连同各自的位置一起存盘，
+//! 下次启动原样恢复——「记住上次在听哪张专辑」比记住窗口大小更贴近使用习惯。
 
 use crate::formats;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Playlist {
     items: Vec<PathBuf>,
     index: Option<usize>,
@@ -162,6 +167,197 @@ impl Playlist {
     pub fn clear(&mut self) {
         self.items.clear();
         self.index = None;
+    }
+
+    /// 从存档读回来之后校正：索引可能指向已经不存在的项。
+    fn sanitize(&mut self) {
+        self.index = self.index.filter(|index| *index < self.items.len());
+    }
+}
+
+/// 面板上的一页：一个名字 + 一份列表。
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PlaylistTab {
+    pub name: String,
+    pub playlist: Playlist,
+}
+
+/// 全部列表 + 当前显示的是哪一页。
+///
+/// 不变量：至少有一页。删到最后一页时不再允许删，保证界面永远有个落脚点。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PlaylistSet {
+    tabs: Vec<PlaylistTab>,
+    active: usize,
+}
+
+/// `active_playlist()` 在极端情况下（空集合）要能返回一个只读的占位。
+static EMPTY_PLAYLIST: Playlist = Playlist {
+    items: Vec::new(),
+    index: None,
+};
+
+impl Default for PlaylistSet {
+    fn default() -> Self {
+        Self {
+            tabs: vec![PlaylistTab {
+                name: "列表 1".to_string(),
+                playlist: Playlist::default(),
+            }],
+            active: 0,
+        }
+    }
+}
+
+impl PlaylistSet {
+    pub fn tabs(&self) -> &[PlaylistTab] {
+        &self.tabs
+    }
+
+    pub fn len(&self) -> usize {
+        self.tabs.len()
+    }
+
+    /// 一页都没有。正常路径下不会出现（至少保留一页），留给调用方做防御。
+    pub fn is_empty(&self) -> bool {
+        self.tabs.is_empty()
+    }
+
+    pub fn active(&self) -> usize {
+        self.active.min(self.tabs.len().saturating_sub(1))
+    }
+
+    pub fn set_active(&mut self, index: usize) {
+        if index < self.tabs.len() {
+            self.active = index;
+        }
+    }
+
+    pub fn tab(&self, index: usize) -> Option<&Playlist> {
+        self.tabs.get(index).map(|tab| &tab.playlist)
+    }
+
+    pub fn tab_mut(&mut self, index: usize) -> Option<&mut Playlist> {
+        self.tabs.get_mut(index).map(|tab| &mut tab.playlist)
+    }
+
+    pub fn active_playlist(&self) -> &Playlist {
+        self.tabs
+            .get(self.active())
+            .map(|tab| &tab.playlist)
+            .unwrap_or(&EMPTY_PLAYLIST)
+    }
+
+    pub fn active_playlist_mut(&mut self) -> &mut Playlist {
+        if self.tabs.is_empty() {
+            self.tabs.push(PlaylistTab::default());
+        }
+        let index = self.active();
+        &mut self.tabs[index].playlist
+    }
+
+    pub fn rename_active(&mut self, name: impl Into<String>) {
+        let index = self.active();
+        if let Some(tab) = self.tabs.get_mut(index) {
+            tab.name = name.into();
+        }
+    }
+
+    /// 新建一页并切过去，返回新页的下标。
+    pub fn add(&mut self, name: impl Into<String>) -> usize {
+        self.tabs.push(PlaylistTab {
+            name: name.into(),
+            playlist: Playlist::default(),
+        });
+        self.active = self.tabs.len() - 1;
+        self.active
+    }
+
+    /// 关掉一页。只剩一页时拒绝，返回是否真的关了。
+    pub fn remove(&mut self, index: usize) -> bool {
+        if self.tabs.len() <= 1 || index >= self.tabs.len() {
+            return false;
+        }
+        self.tabs.remove(index);
+        if self.active > index {
+            self.active -= 1;
+        } else if self.active == index {
+            // 关掉的是当前页：落到右边那一页，没有右边就落回最后一页。
+            self.active = index.min(self.tabs.len() - 1);
+        }
+        true
+    }
+
+    /// 没用过的名字 `列表 N`，跳过已经被占用的号。
+    pub fn auto_name(&self) -> String {
+        let mut number = self.tabs.len() + 1;
+        loop {
+            let name = format!("列表 {number}");
+            if !self.tabs.iter().any(|tab| tab.name == name) {
+                return name;
+            }
+            number += 1;
+        }
+    }
+
+    /// 解析存档文本。坏数据一律退回默认值——启动路径上不该因为存档坏掉而起不来。
+    pub fn from_json(text: &str) -> Self {
+        match serde_json::from_str::<Self>(text) {
+            Ok(mut set) => {
+                set.sanitize();
+                set
+            }
+            Err(error) => {
+                log_warn!("播放列表存档解析失败，按空列表处理: {error}");
+                Self::default()
+            }
+        }
+    }
+
+    pub fn load() -> Self {
+        let Some(path) = crate::settings::playlists_path() else {
+            return Self::default();
+        };
+        match std::fs::read_to_string(&path) {
+            Ok(text) => Self::from_json(&text),
+            Err(_) => Self::default(),
+        }
+    }
+
+    /// 落盘。写临时文件再改名，崩溃时不会留下半截存档。
+    pub fn save(&self) {
+        let Some(path) = crate::settings::playlists_path() else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let Ok(text) = serde_json::to_string_pretty(self) else {
+            return;
+        };
+        let temp = path.with_extension("json.tmp");
+        if let Err(error) = std::fs::write(&temp, text).and_then(|()| std::fs::rename(&temp, &path))
+        {
+            log_warn!("保存播放列表失败: {error}");
+        }
+    }
+
+    fn sanitize(&mut self) {
+        if self.tabs.is_empty() {
+            self.tabs.push(PlaylistTab {
+                name: "列表 1".to_string(),
+                playlist: Playlist::default(),
+            });
+        }
+        for (index, tab) in self.tabs.iter_mut().enumerate() {
+            if tab.name.trim().is_empty() {
+                tab.name = format!("列表 {}", index + 1);
+            }
+            tab.playlist.sanitize();
+        }
+        self.active = self.active.min(self.tabs.len() - 1);
     }
 }
 

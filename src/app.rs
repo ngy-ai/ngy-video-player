@@ -8,7 +8,7 @@ use crate::ui::IconName;
 use crate::{
     formats, platform,
     player::{Command, EndReason, Engine, LoopMode, PlayerEvent, Snapshot, TrackKind},
-    playlist::{self, Playlist},
+    playlist::{self, Playlist, PlaylistSet},
     settings::Settings,
     ui::{
         self, bg, format_time, icon, icon_button, pill_button, surface, text, text_faint,
@@ -68,6 +68,22 @@ fn format_speed(speed: f64) -> String {
     format!("{text}×")
 }
 
+/// 给新列表起名字：文件夹名 / m3u 文件名 / 文件所在目录名。
+///
+/// 名字是列表在面板上唯一的身份，叫「列表 3」的话开三个页就分不清谁是谁了。
+fn tab_name_for(paths: &[PathBuf]) -> Option<String> {
+    let first = paths.first()?;
+    let name = if first.is_dir() {
+        first.file_name()
+    } else if formats::is_playlist(first) {
+        first.file_stem()
+    } else {
+        first.parent().and_then(|parent| parent.file_name())
+    }?;
+    let name = name.to_string_lossy().trim().to_string();
+    (!name.is_empty()).then_some(name)
+}
+
 /// 当前 exe 是不是 `cargo build` 的产物。
 ///
 /// 关联里存的是绝对路径，`target` 目录会被 `cargo clean` 抹掉、被新构建顶替，
@@ -121,6 +137,12 @@ const VOLUME_STEP: f64 = 5.0;
 const CONTROLS_IDLE: Duration = Duration::from_millis(2600);
 const OSD_LIFETIME: Duration = Duration::from_millis(900);
 const MENUBAR_HEIGHT: f32 = 32.0;
+/// 播放列表面板拖动时的宽度边界。视频那边至少留 480px：再窄控制条上的
+/// 倍速/循环/全屏就挤成一团，拖到头也不该出现这种布局。
+const PLAYLIST_MIN_WIDTH: f32 = 220.0;
+const PLAYLIST_MAX_WIDTH: f32 = 760.0;
+const VIDEO_MIN_WIDTH: f32 = 480.0;
+const PLAYLIST_RESIZER_WIDTH: f32 = 6.0;
 
 #[derive(Clone, Debug, Default)]
 pub struct LaunchOptions {
@@ -157,11 +179,16 @@ pub struct PlayerApp {
     /// GPU 队列里被采样，留一点余量可以彻底避免「偶尔闪一下」。
     retired: VecDeque<Arc<RenderImage>>,
 
-    playlist: Playlist,
-    /// 列表里被选中的行。索引只对当前这一版列表有效，任何增删都要清空。
+    /// 面板上的全部列表。播放、删除、清空都只作用于当前页。
+    playlists: PlaylistSet,
+    /// 正在播的那一页。切页不打断播放，所以它未必等于当前显示页。
+    playing_tab: Option<usize>,
+    /// 列表里被选中的行。索引只对当前这一页有效，任何增删、切页都要清空。
     selection: BTreeSet<usize>,
     /// Shift 连选的起点（最后一次普通点击或叠加点击的位置）。
     selection_anchor: Option<usize>,
+    /// 正在拖播放列表的左边界。
+    playlist_dragging: bool,
     settings: Settings,
     focus: FocusHandle,
 
@@ -344,9 +371,11 @@ impl PlayerApp {
             frame: None,
             incoming: None,
             retired: VecDeque::new(),
-            playlist: Playlist::default(),
+            playlists: PlaylistSet::load(),
+            playing_tab: None,
             selection: BTreeSet::new(),
             selection_anchor: None,
+            playlist_dragging: false,
             settings,
             focus,
             last_activity: Instant::now(),
@@ -386,7 +415,9 @@ impl PlayerApp {
         app.start_idle_watchdog(cx);
         app.auto_maintain_associations();
 
-        if !options.paths.is_empty() {
+        if options.paths.is_empty() {
+            app.restore_session();
+        } else {
             app.open_paths(options.paths, cx);
         }
         if options.fullscreen {
@@ -403,6 +434,36 @@ impl PlayerApp {
         if let Some(engine) = &self.engine {
             engine.send(command);
         }
+    }
+
+    // -- 列表访问 ----------------------------------------------------------
+
+    /// 当前显示页的列表。读操作一律走这里。
+    fn playlist(&self) -> &Playlist {
+        self.playlists.active_playlist()
+    }
+
+    fn playlist_mut(&mut self) -> &mut Playlist {
+        self.playlists.active_playlist_mut()
+    }
+
+    /// 正在播的那一页。没有播放目标时退回当前显示页，总得有个可操作对象。
+    fn playback_tab(&self) -> usize {
+        self.playing_tab.unwrap_or_else(|| self.playlists.active())
+    }
+
+    /// 面板宽度：跟着窗口收，避免窗口缩小后面板把画面整块吃掉。
+    fn playlist_width(&self, window: &Window) -> f32 {
+        let available = f32::from(window.viewport_size().width);
+        let max = (available - VIDEO_MIN_WIDTH).clamp(PLAYLIST_MIN_WIDTH, PLAYLIST_MAX_WIDTH);
+        self.settings.playlist_width.clamp(PLAYLIST_MIN_WIDTH, max)
+    }
+
+    /// 拖动面板左边界。面板贴右边，所以宽度就是「窗口宽 - 鼠标 x」。
+    fn drag_playlist_width(&mut self, x: Pixels, window: &Window) {
+        let available = f32::from(window.viewport_size().width);
+        let max = (available - VIDEO_MIN_WIDTH).clamp(PLAYLIST_MIN_WIDTH, PLAYLIST_MAX_WIDTH);
+        self.settings.playlist_width = (available - f32::from(x)).clamp(PLAYLIST_MIN_WIDTH, max);
     }
 
     fn consume_events(&self, mut receiver: UnboundedReceiver<PlayerEvent>, cx: &mut Context<Self>) {
@@ -422,7 +483,7 @@ impl PlayerApp {
                         }
                         // 列表被清空后引擎可能还在收尾推最后一帧；画面已经按空列表
                         // 清掉了，这一帧再贴上去就成了一层擦不掉的「上一部片子」。
-                        if this.playlist.is_empty() {
+                        if this.playlist().is_empty() {
                             return;
                         }
                         this.incoming = Some(image);
@@ -492,7 +553,7 @@ impl PlayerApp {
             || self.dragging.is_some()
             || self.volume_dragging
             || self.show_help
-            || self.playlist.is_empty()
+            || self.playlist().is_empty()
     }
 
     fn poke(&mut self) {
@@ -608,23 +669,26 @@ impl PlayerApp {
             cx.notify();
             return;
         }
+        // 自动续播跟着「正在播的那一页」走，不跟当前显示页：否则在列表 B 里
+        // 翻看时，A 里的片子放完了会跳到 B 的队列里。
+        let tab = self.playback_tab();
         match self.settings.loop_mode {
             LoopMode::One => {
-                if let Some(path) = self.playlist.current().cloned() {
+                if let Some(path) = self.playlists.tab(tab).and_then(|p| p.current()).cloned() {
                     self.load_file(&path);
                 }
             }
             LoopMode::All => {
-                if let Some(next) = self.playlist.next_index(true) {
-                    self.play_index(next);
+                if let Some(next) = self.playlists.tab(tab).and_then(|p| p.next_index(true)) {
+                    self.play_tab_index(tab, next);
                 } else {
                     self.controls_forced = true;
                     cx.notify();
                 }
             }
             LoopMode::Off => {
-                if let Some(next) = self.playlist.next_index(false) {
-                    self.play_index(next);
+                if let Some(next) = self.playlists.tab(tab).and_then(|p| p.next_index(false)) {
+                    self.play_tab_index(tab, next);
                 } else {
                     self.controls_forced = true;
                     cx.notify();
@@ -638,6 +702,10 @@ impl PlayerApp {
     fn open_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         let mut files: Vec<PathBuf> = Vec::new();
         let mut focus: Option<PathBuf> = None;
+        // 单独打开一个 .m3u/.pls 时新开一页：它本来就是一份独立列表，
+        // 直接覆盖当前页会把用户正在看的那一页顶掉。
+        let as_new_tab = paths.len() == 1 && formats::is_playlist(&paths[0]);
+        let label = tab_name_for(&paths);
 
         for path in paths {
             if path.is_dir() {
@@ -691,17 +759,59 @@ impl PlayerApp {
             self.settings.last_dir = path.parent().map(|p| p.to_path_buf());
         }
 
-        self.playlist.replace(files, start);
+        // 当前页本来就是空的就别再新开一页，否则启动时那个空页会一直留着。
+        let reuse_empty = self.playlist().is_empty();
+        if as_new_tab && !reuse_empty {
+            let name = label.unwrap_or_else(|| self.playlists.auto_name());
+            self.playlists.add(name);
+        } else if reuse_empty {
+            // 空页借这次打开的文件起个名字，省得列表全叫「列表 N」。
+            if let Some(name) = label {
+                self.playlists.rename_active(name);
+            }
+        }
+        self.playlist_mut().replace(files, start);
         self.selection.clear();
         self.selection_anchor = None;
         self.play_index(start);
     }
 
+    /// 播放**当前显示页**里的第 `index` 项。
     fn play_index(&mut self, index: usize) {
-        self.playlist.set_index(index);
-        if let Some(path) = self.playlist.get(index).cloned() {
+        let tab = self.playlists.active();
+        self.play_tab_index(tab, index);
+    }
+
+    /// 播放某一页里的第 `index` 项：页内位置、播放归属、引擎三者一起对齐。
+    fn play_tab_index(&mut self, tab: usize, index: usize) {
+        {
+            let Some(playlist) = self.playlists.tab_mut(tab) else {
+                return;
+            };
+            playlist.set_index(index);
+        }
+        self.playing_tab = Some(tab);
+        if let Some(path) = self.playlists.tab(tab).and_then(|p| p.get(index)).cloned() {
             self.load_file(&path);
         }
+        self.playlists.save();
+    }
+
+    /// 启动时恢复上次的列表。
+    ///
+    /// 装载当前项但先按下暂停：用户可能只是顺手点开了播放器，不该一上来就出声。
+    fn restore_session(&mut self) {
+        let Some(path) = self.playlist().current().cloned() else {
+            return;
+        };
+        if !path.exists() {
+            // 文件可能在被拔掉的移动硬盘上：列表留着，但不在启动时糊一条错误横幅。
+            log_warn!("上次的播放项已不存在，跳过自动装载: {}", path.display());
+            return;
+        }
+        self.playing_tab = Some(self.playlists.active());
+        self.load_file(&path);
+        self.send(Command::SetPaused(true));
     }
 
     fn load_file(&mut self, path: &std::path::Path) {
@@ -715,17 +825,29 @@ impl PlayerApp {
     }
 
     fn next_file(&mut self, cx: &mut Context<Self>) {
-        let wrap = self.settings.loop_mode != LoopMode::Off || self.playlist.len() > 1;
-        if let Some(index) = self.playlist.next_index(wrap) {
-            self.play_index(index);
+        let tab = self.playback_tab();
+        let wrap = self.settings.loop_mode != LoopMode::Off
+            || self.playlists.tab(tab).is_some_and(|list| list.len() > 1);
+        if let Some(index) = self
+            .playlists
+            .tab(tab)
+            .and_then(|list| list.next_index(wrap))
+        {
+            self.play_tab_index(tab, index);
             cx.notify();
         }
     }
 
     fn previous_file(&mut self, cx: &mut Context<Self>) {
-        let wrap = self.settings.loop_mode != LoopMode::Off || self.playlist.len() > 1;
-        if let Some(index) = self.playlist.previous_index(wrap) {
-            self.play_index(index);
+        let tab = self.playback_tab();
+        let wrap = self.settings.loop_mode != LoopMode::Off
+            || self.playlists.tab(tab).is_some_and(|list| list.len() > 1);
+        if let Some(index) = self
+            .playlists
+            .tab(tab)
+            .and_then(|list| list.previous_index(wrap))
+        {
+            self.play_tab_index(tab, index);
             cx.notify();
         }
     }
@@ -771,21 +893,31 @@ impl PlayerApp {
         cx.notify();
     }
 
-    /// 删除若干项。删到正在播的那一项才动引擎，其余只影响列表。
+    /// 删除当前页里的若干项。只有删的是正在播的那一页、又删到了当前项，才动引擎。
     fn remove_items(&mut self, indexes: &[usize], window: &mut Window, cx: &mut Context<Self>) {
-        let removal = self.playlist.remove_many(indexes);
+        let tab = self.playlists.active();
+        let removal = {
+            let Some(list) = self.playlists.tab_mut(tab) else {
+                return;
+            };
+            list.remove_many(indexes)
+        };
         if removal.removed == 0 {
             return;
         }
         self.selection.clear();
         self.selection_anchor = None;
 
-        if removal.current_removed {
+        if removal.current_removed && self.playing_tab == Some(tab) {
             match removal.current {
-                Some(index) => self.play_index(index),
-                None => self.stop_playback(window),
+                Some(index) => self.play_tab_index(tab, index),
+                None => {
+                    self.playing_tab = None;
+                    self.stop_playback(window);
+                }
             }
         }
+        self.playlists.save();
         self.flash(format!("已移除 {} 个文件", removal.removed));
         self.poke();
         cx.notify();
@@ -800,16 +932,72 @@ impl PlayerApp {
     }
 
     fn clear_playlist(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let count = self.playlist.len();
+        let tab = self.playlists.active();
+        let count = self.playlist().len();
         if count == 0 {
             return;
         }
         // 只清列表，磁盘上的文件一动不动，所以不做二次确认——重新拖进来就行。
-        self.playlist.clear();
+        if let Some(list) = self.playlists.tab_mut(tab) {
+            list.clear();
+        }
         self.selection.clear();
         self.selection_anchor = None;
-        self.stop_playback(window);
+        if self.playing_tab == Some(tab) {
+            self.playing_tab = None;
+            self.stop_playback(window);
+        }
+        self.playlists.save();
         self.flash(format!("已清空播放列表（{count} 个文件仍在磁盘上）"));
+        cx.notify();
+    }
+
+    // -- 多列表 ------------------------------------------------------------
+
+    fn add_tab(&mut self, cx: &mut Context<Self>) {
+        let name = self.playlists.auto_name();
+        self.playlists.add(name);
+        self.selection.clear();
+        self.selection_anchor = None;
+        self.playlists.save();
+        self.poke();
+        cx.notify();
+    }
+
+    /// 切页不动播放：面板同时兼任「浏览」的职责，切过去就换歌太打扰。
+    fn select_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.playlists.set_active(index);
+        self.selection.clear();
+        self.selection_anchor = None;
+        self.playlists.save();
+        self.poke();
+        cx.notify();
+    }
+
+    fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let name = self
+            .playlists
+            .tabs()
+            .get(index)
+            .map(|tab| tab.name.clone())
+            .unwrap_or_default();
+        if !self.playlists.remove(index) {
+            return;
+        }
+        // 正在播的那一页被关掉，队列就没了：停下来比继续放一个「不存在的列表」更诚实。
+        if self.playing_tab == Some(index) {
+            self.playing_tab = None;
+            self.stop_playback(window);
+        } else if let Some(playing) = self.playing_tab
+            && playing > index
+        {
+            self.playing_tab = Some(playing - 1);
+        }
+        self.selection.clear();
+        self.selection_anchor = None;
+        self.playlists.save();
+        self.flash(format!("已关闭列表「{name}」"));
+        self.poke();
         cx.notify();
     }
 
@@ -917,7 +1105,7 @@ impl PlayerApp {
             .add_filter("字幕文件", formats::SUBTITLE)
             .add_filter("所有文件", &["*"])
             .set_parent(window);
-        if let Some(path) = self.playlist.current() {
+        if let Some(path) = self.playlist().current() {
             if let Some(dir) = path.parent() {
                 dialog = dialog.set_directory(dir);
             }
@@ -975,7 +1163,13 @@ impl PlayerApp {
         };
         let viewport = window.viewport_size();
         let scale = window.scale_factor();
-        let area_width = f32::from(viewport.width) * scale;
+        // 面板占掉的那一条不算视频区域，否则缩画面时会被拉伸。
+        let panel = if self.settings.show_playlist {
+            self.playlist_width(window)
+        } else {
+            0.0
+        };
+        let area_width = (f32::from(viewport.width) - panel).max(2.0) * scale;
         // 窗口模式下菜单栏占掉了顶部一条，渲染目标要扣掉，否则画面会被裁掉一截。
         let chrome = if window.is_fullscreen() {
             0.0
@@ -1008,12 +1202,19 @@ impl PlayerApp {
 
     // -- 渲染 --------------------------------------------------------------
 
-    fn render_video_area(&self, top: Pixels, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_video_area(
+        &self,
+        top: Pixels,
+        panel: f32,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         div()
             .id("video-area")
             .absolute()
             .inset_0()
             .top(top)
+            // 面板是真正的侧边栏：画面让出它那一条，而不是被盖住。
+            .when(panel > 0.0, |this| this.right(px(panel)))
             .bg(bg())
             .child(ui::video_surface(self.frame.clone()))
             // 空状态只看「有没有帧」，不看 mpv 上报的宽高：width/height 属性在
@@ -1030,7 +1231,7 @@ impl PlayerApp {
                         .gap(px(14.0))
                         .child(icon(IconName::Film, 56.0, text_faint()))
                         .child(div().text_size(px(15.0)).text_color(text_muted()).child(
-                            if self.playlist.is_empty() {
+                            if self.playlist().is_empty() {
                                 "拖入视频文件，或按 O 打开"
                             } else {
                                 "正在加载…"
@@ -1250,7 +1451,7 @@ impl PlayerApp {
         self.set_volume(volume);
     }
 
-    fn render_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_controls(&self, panel: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let snapshot = &self.snapshot;
         let playing = !snapshot.paused;
         let position = self.progress_value();
@@ -1271,7 +1472,7 @@ impl PlayerApp {
             .id("controls")
             .absolute()
             .left_0()
-            .right_0()
+            .right(px(panel))
             .bottom_0()
             .flex()
             .flex_col()
@@ -1305,7 +1506,7 @@ impl PlayerApp {
                         "prev",
                         IconName::SkipBack,
                         false,
-                        self.playlist.len() <= 1,
+                        self.playlist().len() <= 1,
                         cx.listener(|this, _: &ClickEvent, _window, cx| this.previous_file(cx)),
                     ))
                     .child(icon_button(
@@ -1323,7 +1524,7 @@ impl PlayerApp {
                         "next",
                         IconName::SkipForward,
                         false,
-                        self.playlist.len() <= 1,
+                        self.playlist().len() <= 1,
                         cx.listener(|this, _: &ClickEvent, _window, cx| this.next_file(cx)),
                     ))
                     .child(div().w(px(6.0)))
@@ -1416,7 +1617,7 @@ impl PlayerApp {
             )
     }
 
-    fn render_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    fn render_menu(&self, panel: f32, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let menu = self.menu?;
         let mut entries: Vec<(String, bool, Option<MenuAction>)> = Vec::new();
 
@@ -1482,7 +1683,8 @@ impl PlayerApp {
             div()
                 .id("menu")
                 .absolute()
-                .right(px(18.0))
+                // 跟着控制条一起让开面板，否则弹出菜单会飘到侧边栏上。
+                .right(px(18.0 + panel))
                 .bottom(px(74.0))
                 .w(px(220.0))
                 .py(px(6.0))
@@ -1595,7 +1797,7 @@ impl PlayerApp {
                 )));
                 items.push(BarItem::Separator);
 
-                let navigable = self.playlist.len() > 1;
+                let navigable = self.playlist().len() > 1;
                 items.push(BarItem::Entry(
                     BarEntry::new("上一集", Previous)
                         .hint("N")
@@ -2097,9 +2299,121 @@ impl PlayerApp {
             })
     }
 
-    fn render_playlist(&self, top: Pixels, cx: &mut Context<Self>) -> impl IntoElement {
-        let current = self.playlist.index();
-        let len = self.playlist.len();
+    /// 面板顶部的页签条：多份列表并排，`+` 新建，`×` 关闭（只剩一页时不显示）。
+    fn render_playlist_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let active = self.playlists.active();
+        let closable = self.playlists.len() > 1;
+
+        div()
+            .flex()
+            .items_center()
+            .gap(px(2.0))
+            .px(px(8.0))
+            .pb(px(6.0))
+            .child(
+                div()
+                    .id("playlist-tabs")
+                    .flex()
+                    .items_center()
+                    .gap(px(2.0))
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_x_scroll()
+                    .children(
+                        self.playlists
+                            .tabs()
+                            .iter()
+                            .enumerate()
+                            .map(|(index, tab)| {
+                                let group = format!("playlist-tab-{index}");
+                                let is_active = index == active;
+                                div()
+                                    .id(gpui_kit::ElementId::Name(
+                                        format!("playlist-tab-{index}").into(),
+                                    ))
+                                    .group(group.clone())
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(4.0))
+                                    .h(px(24.0))
+                                    .px(px(8.0))
+                                    .rounded(px(6.0))
+                                    .text_size(px(12.0))
+                                    .cursor(CursorStyle::PointingHand)
+                                    .text_color(if is_active {
+                                        ui::accent()
+                                    } else {
+                                        text_muted()
+                                    })
+                                    .when(is_active, |this| this.bg(gpui_kit::rgb(0x232330)))
+                                    .when(!is_active, |this| {
+                                        this.hover(|style| style.bg(ui::surface_hover()))
+                                    })
+                                    // 切页不打断播放，所以「正在出声的是哪一页」得单独标出来。
+                                    .when(self.playing_tab == Some(index), |this| {
+                                        this.child(icon(IconName::Play, 8.0, ui::accent()))
+                                    })
+                                    .child(
+                                        div()
+                                            .max_w(px(140.0))
+                                            .overflow_hidden()
+                                            .whitespace_nowrap()
+                                            .text_ellipsis()
+                                            .child(tab.name.clone()),
+                                    )
+                                    .when(closable, |this| {
+                                        this.child(
+                                            div()
+                                                .id(gpui_kit::ElementId::Name(
+                                                    format!("playlist-tab-close-{index}").into(),
+                                                ))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .size(px(14.0))
+                                                .rounded(px(4.0))
+                                                // 和行尾的删除按钮一样：指到这一页才露出来。
+                                                .opacity(0.0)
+                                                .group_hover(group, |style| style.opacity(1.0))
+                                                .hover(|style| style.bg(ui::surface_active()))
+                                                .child(icon(IconName::X, 10.0, text_faint()))
+                                                .on_click(cx.listener(
+                                                    move |this, _: &ClickEvent, window, cx| {
+                                                        // 不截断的话这一下还会落到页签的「切换」上。
+                                                        cx.stop_propagation();
+                                                        this.close_tab(index, window, cx);
+                                                    },
+                                                )),
+                                        )
+                                    })
+                                    .on_click(cx.listener(
+                                        move |this, _: &ClickEvent, _window, cx| {
+                                            this.select_tab(index, cx);
+                                        },
+                                    ))
+                            }),
+                    ),
+            )
+            .child(
+                div()
+                    .id("playlist-add-tab")
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(px(22.0))
+                    .rounded(px(6.0))
+                    .text_size(px(14.0))
+                    .text_color(text_muted())
+                    .cursor(CursorStyle::PointingHand)
+                    .hover(|style| style.bg(ui::surface_hover()).text_color(text()))
+                    .child("+")
+                    .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| this.add_tab(cx))),
+            )
+    }
+
+    fn render_playlist(&self, top: Pixels, width: f32, cx: &mut Context<Self>) -> impl IntoElement {
+        let current = self.playlist().index();
+        let len = self.playlist().len();
         let selected = self.selection.len();
         let multi_hint = if cfg!(target_os = "macos") {
             "⌘ 点击多选 · Shift 连选 · Delete 删除"
@@ -2113,7 +2427,7 @@ impl PlayerApp {
             .top(top)
             .right_0()
             .bottom_0()
-            .w(px(300.0))
+            .w(px(width))
             .flex()
             .flex_col()
             .bg(gpui_kit::rgba(0x131317e6))
@@ -2127,6 +2441,27 @@ impl PlayerApp {
                     cx.notify();
                 }
             }))
+            // 跨在面板左边界上的拖动条：往左拖更宽，往右拖更窄。
+            .child(
+                div()
+                    .id("playlist-resizer")
+                    .absolute()
+                    .left(px(-PLAYLIST_RESIZER_WIDTH / 2.0))
+                    .top_0()
+                    .bottom_0()
+                    .w(px(PLAYLIST_RESIZER_WIDTH))
+                    .cursor(CursorStyle::ResizeLeftRight)
+                    .when(self.playlist_dragging, |this| this.bg(ui::accent()))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.playlist_dragging = true;
+                            this.drag_playlist_width(event.position.x, window);
+                            cx.notify();
+                        }),
+                    ),
+            )
             .child(
                 div()
                     .flex()
@@ -2182,6 +2517,7 @@ impl PlayerApp {
                             )),
                     ),
             )
+            .child(self.render_playlist_tabs(cx))
             // 有选择时才出现的一小条：把「删多少、删哪些」摆在手上。
             .when(selected > 0, |this| {
                 this.child(
@@ -2275,15 +2611,9 @@ impl PlayerApp {
                         .overflow_y_scroll()
                         .flex()
                         .flex_col()
-                        .children(
-                            self.playlist
-                                .items()
-                                .iter()
-                                .enumerate()
-                                .map(|(index, path)| {
-                                    self.render_playlist_row(index, path, current, cx)
-                                }),
-                        ),
+                        .children(self.playlist().items().iter().enumerate().map(
+                            |(index, path)| self.render_playlist_row(index, path, current, cx),
+                        )),
                 )
                 .child(
                     div()
@@ -2388,13 +2718,14 @@ impl PlayerApp {
             .into_any_element()
     }
 
-    fn render_osd(&self, top: Pixels) -> Option<impl IntoElement> {
+    fn render_osd(&self, top: Pixels, panel: f32) -> Option<impl IntoElement> {
         let (lines, _) = self.osd.as_ref()?;
         Some(
             div()
                 .absolute()
                 .left(px(0.0))
-                .right(px(0.0))
+                // 提示条在画面上居中，别压到侧边栏上。
+                .right(px(panel))
                 .top(top)
                 .flex()
                 .justify_center()
@@ -2418,7 +2749,7 @@ impl PlayerApp {
         )
     }
 
-    fn render_error(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    fn render_error(&self, panel: f32, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let (title, message) = match (&self.error, &self.startup_failure) {
             (Some(banner), _) => (banner.title, banner.body.clone()),
             (None, Some(failure)) => ("播放出错", failure.clone()),
@@ -2429,7 +2760,7 @@ impl PlayerApp {
                 .id("error")
                 .absolute()
                 .left(px(24.0))
-                .right(px(24.0))
+                .right(px(24.0 + panel))
                 .bottom(px(96.0))
                 .p(px(14.0))
                 .rounded(px(10.0))
@@ -2546,6 +2877,12 @@ impl Render for PlayerApp {
         } else {
             px(MENUBAR_HEIGHT + 16.0)
         };
+        // 面板宽度只算一次：画面、控制条、面板本身都按同一个数让位。
+        let panel_width = if self.settings.show_playlist {
+            self.playlist_width(window)
+        } else {
+            0.0
+        };
 
         div()
             .id("root")
@@ -2612,13 +2949,16 @@ impl Render for PlayerApp {
                     this.toggle_help(cx);
                 }
             }))
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 this.poke();
                 if this.dragging.is_some() {
                     this.update_progress_drag(event.position.x);
                 }
                 if this.volume_dragging {
                     this.set_volume_from_x(event.position.x);
+                }
+                if this.playlist_dragging {
+                    this.drag_playlist_width(event.position.x, window);
                 }
                 cx.notify();
             }))
@@ -2631,6 +2971,11 @@ impl Render for PlayerApp {
                     if this.volume_dragging {
                         this.volume_dragging = false;
                         this.settings.volume = this.snapshot.volume;
+                    }
+                    if this.playlist_dragging {
+                        // 宽度只在松手时落盘：拖动过程里每移动一像素写一次太浪费。
+                        this.playlist_dragging = false;
+                        this.settings.save();
                     }
                 }),
             )
@@ -2657,19 +3002,19 @@ impl Render for PlayerApp {
                 this.poke();
                 cx.notify();
             }))
-            .child(self.render_video_area(video_top, cx))
+            .child(self.render_video_area(video_top, panel_width, cx))
             .when(self.settings.show_playlist, |this| {
-                this.child(self.render_playlist(video_top, cx))
+                this.child(self.render_playlist(video_top, panel_width, cx))
             })
             .when(self.controls_visible(), |this| {
-                this.child(self.render_controls(cx))
+                this.child(self.render_controls(panel_width, cx))
             })
-            .children(self.render_menu(cx))
-            .children(self.render_osd(osd_top))
+            .children(self.render_menu(panel_width, cx))
+            .children(self.render_osd(osd_top, panel_width))
             .when(bar_visible, |this| {
                 this.child(self.render_menu_bar(window, cx))
             })
-            .children(self.render_error(cx))
+            .children(self.render_error(panel_width, cx))
             .children(self.render_help(cx))
     }
 }
@@ -2681,6 +3026,8 @@ impl Drop for PlayerApp {
             engine.shutdown();
         }
         self.settings.save();
+        // 列表本来就随改动落过盘，这里再存一次是兜住「拖入后一次都没点过」的情形。
+        self.playlists.save();
     }
 }
 pub fn key_bindings() -> Vec<KeyBinding> {

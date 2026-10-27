@@ -21,6 +21,12 @@ pub struct Settings {
     pub last_dir: Option<PathBuf>,
     pub window_width: f32,
     pub window_height: f32,
+    /// 播放列表面板的宽度。用户拖过一次之后按这个值还原。
+    ///
+    /// 字段级默认值：旧配置文件里没有这一项时按 300 起算，而不是 f32 的 0
+    /// （0 虽然会被界面夹到最小宽度，但那是应急，不该当成默认布局）。
+    #[serde(default = "default_playlist_width")]
+    pub playlist_width: f32,
     pub fullscreen: bool,
     /// 硬件解码：`auto-safe` / `no` / `auto-copy`。
     pub hwdec: String,
@@ -43,11 +49,16 @@ impl Default for Settings {
             last_dir: None,
             window_width: 1120.0,
             window_height: 680.0,
+            playlist_width: 300.0,
             fullscreen: false,
             hwdec: "no".to_string(),
             maintain_associations: true,
         }
     }
+}
+
+fn default_playlist_width() -> f32 {
+    300.0
 }
 
 impl Settings {
@@ -124,6 +135,14 @@ pub fn config_path() -> Option<PathBuf> {
             })?;
         Some(base.join("ngy-video-player").join("settings.json"))
     }
+}
+
+/// 播放列表存档的位置：和设置文件放同一个目录，但分开存。
+///
+/// 列表可能一天改十几次，设置基本不动；分开写能避免每次切歌都重写一遍偏好，
+/// 出问题时也更容易判断是哪一份文件坏了。
+pub fn playlists_path() -> Option<PathBuf> {
+    config_path().map(|path| path.with_file_name("playlists.json"))
 }
 
 impl Serialize for LoopMode {

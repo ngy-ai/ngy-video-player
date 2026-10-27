@@ -1,6 +1,6 @@
 //! 播放列表的确定性行为：目录展开、自然序、m3u 解析、循环推进。
 
-use ngy_video_player::playlist::{Playlist, collect_dir, parse_playlist};
+use ngy_video_player::playlist::{Playlist, PlaylistSet, collect_dir, parse_playlist};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -197,6 +197,84 @@ fn 清空列表不留下当前项() {
     assert_eq!(playlist.current(), None);
     assert_eq!(playlist.next_index(true), None);
     assert_eq!(playlist.previous_index(true), None);
+}
+
+#[test]
+fn 多个列表各有各的内容和位置() {
+    let mut set = PlaylistSet::default();
+    assert_eq!(set.len(), 1, "面板至少有一页落脚");
+    set.active_playlist_mut()
+        .replace(vec![PathBuf::from("a.mp4"), PathBuf::from("b.mp4")], 0);
+
+    let second = set.add("第二份");
+    assert_eq!(second, 1);
+    assert_eq!(set.active(), 1, "新建之后切到新页");
+    assert!(set.active_playlist().is_empty());
+
+    set.active_playlist_mut()
+        .replace(vec![PathBuf::from("c.mp4")], 0);
+    set.set_active(0);
+    assert_eq!(set.active_playlist().len(), 2);
+    assert_eq!(set.active_playlist().index(), Some(0), "切页不丢页内位置");
+    assert_eq!(set.tab(0).unwrap().len(), 2);
+}
+
+#[test]
+fn 关闭列表后页码仍然有效() {
+    let mut set = PlaylistSet::default();
+    set.add("B");
+    set.add("C");
+    assert_eq!(set.active(), 2);
+
+    assert!(set.remove(0));
+    assert_eq!(set.len(), 2);
+    assert_eq!(set.active(), 1, "当前页跟着左移，仍指向 C");
+    assert_eq!(set.tabs()[1].name, "C");
+}
+
+#[test]
+fn 只剩一页时不允许关闭() {
+    let mut set = PlaylistSet::default();
+    assert!(!set.remove(0));
+    assert_eq!(set.len(), 1);
+    assert!(!set.remove(5), "越界下标也不动状态");
+}
+
+#[test]
+fn 存档往返保留内容与页码() {
+    let mut set = PlaylistSet::default();
+    set.rename_active("剧集");
+    set.active_playlist_mut()
+        .replace(vec![PathBuf::from("a.mp4"), PathBuf::from("b.mp4")], 1);
+    set.add("电影");
+
+    let text = serde_json::to_string(&set).expect("序列化播放列表");
+    let back = PlaylistSet::from_json(&text);
+
+    assert_eq!(back.len(), 2);
+    assert_eq!(back.active(), 1);
+    assert_eq!(back.tabs()[0].name, "剧集");
+    assert_eq!(back.tabs()[0].playlist.items().len(), 2);
+    assert_eq!(back.tabs()[0].playlist.index(), Some(1));
+    assert_eq!(back.tabs()[1].name, "电影");
+}
+
+#[test]
+fn 存档里的越界索引与空名字被校正() {
+    let text = r#"{"tabs":[{"name":"  ","playlist":{"items":["a.mp4"],"index":7}}],"active":9}"#;
+    let set = PlaylistSet::from_json(text);
+
+    assert_eq!(set.len(), 1);
+    assert_eq!(set.active(), 0);
+    assert_eq!(set.tabs()[0].name, "列表 1");
+    assert_eq!(set.tabs()[0].playlist.index(), None, "越界索引应被丢掉");
+}
+
+#[test]
+fn 坏存档退回默认列表() {
+    let set = PlaylistSet::from_json("这不是 json");
+    assert_eq!(set.len(), 1);
+    assert!(set.active_playlist().is_empty());
 }
 
 #[test]
