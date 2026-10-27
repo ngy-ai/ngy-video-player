@@ -3091,11 +3091,6 @@ impl PlayerApp {
                         .hint("F")
                         .checked(window.is_fullscreen()),
                 ));
-                items.push(BarItem::Entry(
-                    BarEntry::new("画面设置…", TogglePicture)
-                        .hint("A")
-                        .checked(self.show_picture),
-                ));
                 items.push(BarItem::Separator);
                 // 置顶要拿原生窗口句柄：Wayland 没给普通窗口留这个能力，只能置灰并说明。
                 let on_top = platform::topmost::supported(window);
@@ -3114,6 +3109,12 @@ impl PlayerApp {
                 let supported = platform::associations::supported();
                 let status = &self.association_status;
 
+                items.push(BarItem::Entry(
+                    BarEntry::new("画面设置…", TogglePicture)
+                        .hint("A")
+                        .checked(self.show_picture),
+                ));
+                items.push(BarItem::Separator);
                 items.push(BarItem::Entry(
                     BarEntry::new("设为默认视频播放器…", SetAsDefaultPlayer).enabled(supported),
                 ));
