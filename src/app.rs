@@ -809,6 +809,20 @@ enum BarAction {
     Quit,
 }
 
+/// 小窗要显示的那点状态。
+///
+/// **由主窗口推过来，而不是小窗在 render 里自己去读 `PlayerApp`**：小窗的第一次
+/// 绘制就发生在主窗口的点击回调里（`open_window` 会立刻画一帧），那一刻
+/// `PlayerApp` 正被可变借用，再去 lease 它就会 panic。
+#[derive(Clone, Default)]
+struct MiniState {
+    title: SharedString,
+    /// 播放进度 0~1。
+    ratio: f32,
+    /// 播放列表是否为空——空的时候画面区提示「没有正在播放的文件」。
+    empty: bool,
+}
+
 /// 小窗：主窗口之外浮着的一个小播放器窗口。
 ///
 /// 为什么不另起一个 mpv 实例：那样要多一份解码开销，音频会同时响两遍，
@@ -817,6 +831,8 @@ enum BarAction {
 struct MiniPlayer {
     /// 主窗口的视图。用弱引用：它关掉之后这里要能察觉到并跟着退出。
     app: WeakEntity<PlayerApp>,
+    /// 标题、进度等由主窗口推送的显示状态。
+    state: MiniState,
     frame: Option<Arc<RenderImage>>,
     incoming: Option<Arc<RenderImage>>,
     /// 已经画过、等待归还给 GPU atlas 的旧帧。规则与主窗口一致（留两帧余量），
@@ -835,9 +851,10 @@ struct MiniPlayer {
 }
 
 impl MiniPlayer {
-    fn new(app: WeakEntity<PlayerApp>, cx: &mut Context<Self>) -> Self {
+    fn new(app: WeakEntity<PlayerApp>, state: MiniState, cx: &mut Context<Self>) -> Self {
         Self {
             app,
+            state,
             frame: None,
             incoming: None,
             retired: VecDeque::new(),
@@ -891,13 +908,21 @@ impl MiniPlayer {
     }
 
     /// 尺寸变了就记进偏好，下次开小窗按用户拖过的宽度还原。
-    fn remember_width(&mut self, window: &Window, cx: &mut Context<Self>) {
+    ///
+    /// 回写推到 defer 里而不是当场改：这段代码跑在 render 中，小窗的第一次绘制
+    /// 又是从主窗口的回调里发起的，此刻 `PlayerApp` 正被可变借用，直接改它会 panic。
+    fn remember_width(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let width = f32::from(window.viewport_size().width);
         if (width - self.last_width).abs() < 1.0 {
             return;
         }
         self.last_width = width;
-        self.forward(cx, |app, _cx| app.settings.mini_width = width);
+        let Some(app) = self.app.upgrade() else {
+            return;
+        };
+        window.defer(cx, move |_window, cx| {
+            app.update(cx, |app, _cx| app.settings.mini_width = width);
+        });
     }
 
     fn render_bar(&self, title: SharedString, cx: &mut Context<Self>) -> AnyElement {
@@ -950,8 +975,11 @@ impl MiniPlayer {
                 IconName::X,
                 false,
                 false,
-                cx.listener(|this, _: &ClickEvent, _window, cx| {
-                    this.forward(cx, |app, cx| app.close_mini(cx));
+                cx.listener(|_this, _: &ClickEvent, window, cx| {
+                    // 小窗自己关自己时只关窗口，界面侧的引用交给 `on_window_closed` 收尾。
+                    // 不能绕回 `PlayerApp::close_mini`：那会再 lease 一次本视图，而这段
+                    // 回调正跑在本视图的 update 里，直接 panic。
+                    window.remove_window();
                     cx.notify();
                 }),
             ))
@@ -974,15 +1002,11 @@ impl Render for MiniPlayer {
         self.sync_on_top(window, cx);
         self.remember_width(window, cx);
 
-        let view = self.app.upgrade().expect("刚刚检查过");
-        let view = view.read(cx);
-        let title = if view.snapshot.media_title.is_empty() {
-            SharedString::from("小窗")
-        } else {
-            SharedString::from(view.snapshot.media_title.clone())
-        };
-        let ratio = view.progress_ratio();
-        let hint = if view.playlist().is_empty() {
+        // 这里不再去读 `PlayerApp`：小窗的第一次绘制发生在主窗口的回调里，
+        // 那时主窗口正被可变借用。标题和进度都由主窗口推送过来（见 `PlayerApp::sync_mini`）。
+        let title = self.state.title.clone();
+        let ratio = self.state.ratio;
+        let hint = if self.state.empty {
             "没有正在播放的文件"
         } else {
             "正在加载…"
@@ -1063,14 +1087,16 @@ impl Render for MiniPlayer {
                 window.toggle_fullscreen();
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &ToggleMini, _window, cx| {
-                this.forward(cx, |app, cx| app.close_mini(cx));
+            .on_action(cx.listener(|_this, _: &ToggleMini, window, cx| {
+                window.remove_window();
+                cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &ExitOverlay, window, cx| {
+            .on_action(cx.listener(|_this, _: &ExitOverlay, window, cx| {
+                // Esc 在小窗里的含义：先退全屏，已经是普通大小就收回小窗。
                 if window.is_fullscreen() {
                     window.toggle_fullscreen();
                 } else {
-                    this.forward(cx, |app, cx| app.close_mini(cx));
+                    window.remove_window();
                 }
                 cx.notify();
             }))
@@ -1615,6 +1641,9 @@ impl PlayerApp {
             screen.origin.y + screen.size.height - px(height) - px(MINI_BOTTOM_MARGIN),
         );
 
+        // 窗口一建出来就会立刻画第一帧，那时 `self` 还被可变借用着，
+        // 所以初始状态要在这里先算好带进去，而不是让小窗自己去读。
+        let state = self.mini_state();
         let app = cx.weak_entity();
         let mut opened: Option<Entity<MiniPlayer>> = None;
         // 建窗口的回调里要把视图句柄传出来，所以借用而不是 move 进去。
@@ -1637,7 +1666,7 @@ impl PlayerApp {
                 ..Default::default()
             },
             |_window, cx| {
-                let view = cx.new(|cx| MiniPlayer::new(app, cx));
+                let view = cx.new(|cx| MiniPlayer::new(app, state, cx));
                 *slot = Some(view.clone());
                 view
             },
@@ -1660,8 +1689,8 @@ impl PlayerApp {
                         .detach();
                     });
                 }
-                // 用户直接用系统关闭按钮关掉小窗时，界面这边也要知道它没了，
-                // 否则再按一次 T 是去关一个已经关掉的窗口。
+                // 小窗不管是被系统关闭按钮关掉的、还是自己点 X 关的，都会走到这里；
+                // 界面侧的引用统一在这收尾，否则再按一次 T 就是去关一个已经关掉的窗口。
                 let id = handle.window_id();
                 let this = cx.weak_entity();
                 cx.on_window_closed(move |cx, closed| {
@@ -1669,10 +1698,7 @@ impl PlayerApp {
                         return;
                     }
                     if let Some(this) = this.upgrade() {
-                        this.update(cx, |app, _cx| {
-                            app.mini = None;
-                            app.mini_window = None;
-                        });
+                        this.update(cx, |app, _cx| app.mini_closed());
                     }
                 })
                 .detach();
@@ -1685,15 +1711,58 @@ impl PlayerApp {
         }
     }
 
-    /// 关掉小窗。窗口只是被标记待关，真正的销毁由窗口系统在下一帧完成，
-    /// 所以引用一并清掉，避免中间这几帧还在往一个待关的窗口里推帧。
+    /// 关掉小窗。窗口只是被标记待关，真正的销毁由窗口系统在下一帧完成；
+    /// 引用与偏好由 `mini_closed` 在窗口真正关掉时收尾。
+    ///
+    /// 只从主窗口这一侧调用：小窗自己的回调里再回来 lease 本视图会 panic。
     fn close_mini(&mut self, cx: &mut Context<Self>) {
+        // 先松手，免得「按下关 / 立刻再按开」这几帧里 `is_some()` 还成立而走错分支。
         self.mini = None;
         if let Some(handle) = self.mini_window.take() {
             let _ = handle.update(cx, |_mini, window, _cx| window.remove_window());
         }
+    }
+
+    /// 小窗关掉之后的收尾。窗口已经销毁，这里只清界面侧的引用。
+    fn mini_closed(&mut self) {
+        self.mini = None;
+        self.mini_window = None;
         self.settings.save();
         self.flash("小窗：关");
+    }
+
+    /// 小窗要显示的那点状态，见 `MiniState`。
+    fn mini_state(&self) -> MiniState {
+        MiniState {
+            title: if self.snapshot.media_title.is_empty() {
+                SharedString::from("小窗")
+            } else {
+                SharedString::from(self.snapshot.media_title.clone())
+            },
+            ratio: self.progress_ratio(),
+            empty: self.playlist().is_empty(),
+        }
+    }
+
+    /// 把小窗要显示的状态推过去。小窗自己不读 `PlayerApp`，只收推送（原因见 `MiniState`）。
+    ///
+    /// 只在真的变了才 `notify`：主窗口每画一帧都调这里，进度线本来就要跟着走，
+    /// 但标题没变时没必要让小窗再重绘一次。
+    fn sync_mini(&mut self, cx: &mut Context<Self>) {
+        let Some(mini) = &self.mini else {
+            return;
+        };
+        let state = self.mini_state();
+        mini.update(cx, move |mini, cx| {
+            if mini.state.title == state.title
+                && mini.state.empty == state.empty
+                && (mini.state.ratio - state.ratio).abs() < f32::EPSILON
+            {
+                return;
+            }
+            mini.state = state;
+            cx.notify();
+        });
     }
 
     /// 小窗宽度。用户拖过就按拖过的来，但最多占屏幕宽的 40%——
@@ -5328,6 +5397,7 @@ impl Render for PlayerApp {
         self.drop_retired_previews(window);
         self.update_render_target(window);
         self.sync_on_top(window, cx);
+        self.sync_mini(cx);
 
         let title = if self.snapshot.media_title.is_empty() {
             "视频播放器".to_string()
