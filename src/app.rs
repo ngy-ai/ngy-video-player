@@ -7,9 +7,11 @@
 use crate::ui::IconName;
 use crate::{
     formats, platform,
-    player::{Command, EndReason, Engine, LoopMode, PlayerEvent, Snapshot, TrackKind},
+    player::{
+        Command, EndReason, Engine, EngineOptions, LoopMode, PlayerEvent, Snapshot, TrackKind,
+    },
     playlist::{self, Playlist, PlaylistSet},
-    settings::{OnTop, Rotation, Settings, VideoAspect},
+    settings::{DecodeMode, OnTop, RenderMode, Rotation, Settings, VideoAspect},
     ui::{
         self, bg, format_time, icon, icon_button, pill_button, surface, text, text_faint,
         text_muted,
@@ -19,11 +21,11 @@ use anyhow::Result;
 use futures::{StreamExt as _, channel::mpsc::UnboundedReceiver};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, Bounds, ClickEvent, Context, Corners, CursorStyle, ElementId, ExternalPaths,
-    FocusHandle, Hsla, IntoElement, KeyBinding, KeyDownEvent, Modifiers, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, RenderImage, ScrollDelta,
-    ScrollWheelEvent, SharedString, Styled, Window, WindowBounds, WindowOptions, actions, canvas,
-    div, img, point, px, size,
+    AnyElement, App, Bounds, ClickEvent, Context, Corners, CursorStyle, ElementId, Entity,
+    ExternalPaths, FocusHandle, Hsla, IntoElement, KeyBinding, KeyDownEvent, Modifiers,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, RenderImage,
+    ScrollDelta, ScrollWheelEvent, SharedString, Styled, WeakEntity, Window, WindowBounds,
+    WindowHandle, WindowOptions, actions, canvas, div, img, point, px, size,
 };
 use std::{
     cell::Cell,
@@ -44,6 +46,7 @@ actions!(
         VolumeDown,
         ToggleMute,
         ToggleFullscreen,
+        ToggleMini,
         TogglePlaylist,
         OpenFile,
         NextFile,
@@ -170,8 +173,8 @@ fn picture_option(
         .into_any_element()
 }
 
-/// 一组画面设置：小标题 + 若干行。
-fn picture_group(title: &'static str, rows: Vec<AnyElement>) -> AnyElement {
+/// 一组单选设置：小标题 + 若干行。「画面设置」和「视频渲染与解码」共用。
+fn option_group(title: &'static str, rows: Vec<AnyElement>) -> AnyElement {
     div()
         .flex()
         .flex_col()
@@ -184,6 +187,72 @@ fn picture_group(title: &'static str, rows: Vec<AnyElement>) -> AnyElement {
                 .child(title),
         )
         .children(rows)
+        .into_any_element()
+}
+
+/// 「视频渲染与解码」面板里的一行：单选圆点 + 标题 +（可选）说明。
+///
+/// 说明文字是给「不知道该选哪档」的人看的，所以固定成两行结构：有说明的选项比
+/// 没说明的高一点，同一组里保持一致，切换选项时不会让下面的行上下跳。
+fn engine_option(
+    id: impl Into<ElementId>,
+    label: String,
+    detail: Option<&'static str>,
+    selected: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    let indicator = div()
+        .size(px(16.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .border_1()
+        .border_color(if selected { ui::accent() } else { ui::track() })
+        .when(selected, |this| {
+            this.bg(ui::accent())
+                .child(icon(IconName::Check, 11.0, text()))
+        });
+
+    let mut texts = div()
+        .flex_1()
+        .min_w(px(0.0))
+        .flex()
+        .flex_col()
+        .gap(px(3.0))
+        .child(div().text_size(px(13.0)).text_color(text()).child(label));
+    if let Some(detail) = detail {
+        texts = texts.child(
+            div()
+                .text_size(px(11.0))
+                .text_color(text_faint())
+                .child(detail),
+        );
+    }
+
+    div()
+        .id(id)
+        .flex_1()
+        .min_w(px(0.0))
+        .flex()
+        .items_start()
+        .gap(px(10.0))
+        .px(px(8.0))
+        .py(px(6.0))
+        .rounded(px(6.0))
+        .cursor(CursorStyle::PointingHand)
+        .hover(|style| style.bg(ui::surface_hover()))
+        .on_click(
+            move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
+                // 面板底下的视频区域也会收到同位置的点击，不拦住会顺手切换播放/暂停。
+                cx.stop_propagation();
+                on_click(event, window, cx);
+            },
+        )
+        // 圆点和第一行标题对齐，说明多一行也不会把它拽到中间。
+        .child(div().h(px(18.0)).flex().items_center().child(indicator))
+        .child(texts)
         .into_any_element()
 }
 
@@ -421,6 +490,13 @@ const PLAYLIST_RESIZER_WIDTH: f32 = 6.0;
 const ITEM_MENU_WIDTH: f32 = 168.0;
 const ITEM_MENU_HEIGHT: f32 = 118.0;
 
+/// 小窗宽度的上下限：太窄看不清，太宽就失去「小」的意义了。
+const MINI_MIN_WIDTH: f32 = 320.0;
+const MINI_MAX_WIDTH: f32 = 560.0;
+/// 小窗离屏幕边缘的距离。底部额外多留一段，给任务栏 / Dock 让位。
+const MINI_MARGIN: f32 = 24.0;
+const MINI_BOTTOM_MARGIN: f32 = 72.0;
+
 #[derive(Clone, Debug, Default)]
 pub struct LaunchOptions {
     pub paths: Vec<PathBuf>,
@@ -567,15 +643,30 @@ pub struct PlayerApp {
     /// 「画面设置」面板是否展开。比例/旋转/镜像都直接写在 `settings` 里，
     /// 这里只记「面板开着没有」。
     show_picture: bool,
+    /// 「视频渲染与解码」面板是否展开。解码方式和显卡同样直接写在 `settings` 里。
+    show_engine: bool,
     /// 悬浮菜单（字幕 / 音轨 / 循环）当前展开的是哪一个。
     menu: Option<Menu>,
     /// 顶部菜单栏当前展开的是哪一个。
     menu_bar: Option<BarMenu>,
+    /// 小窗（画中画）的视图；`None` 表示当前没开小窗。
+    ///
+    /// 小窗与主窗口共用同一路解码：它只负责把主窗口转发过来的帧画出来，
+    /// 播放状态、播放列表、mpv 句柄都仍然只有主窗口这一份。
+    mini: Option<Entity<MiniPlayer>>,
+    /// 小窗的窗口句柄：退出小窗时要靠它把窗口关掉，而不是只清掉引用。
+    mini_window: Option<WindowHandle<MiniPlayer>>,
     /// 文件关联的落点缓存。
     ///
     /// 查询要逐个读注册表，不能放进每帧都跑的渲染路径里；只在展开「设置」菜单、
     /// 或者刚改过关联时刷新一次。
     association_status: platform::associations::Status,
+    /// 本机显卡列表。
+    ///
+    /// 枚举要走系统 API（Windows 上是 `EnumDisplayDevicesW`），不能塞进每帧都跑的
+    /// 渲染路径，所以建视图时取一次。中途插拔外置显卡不会自动更新——那种场景
+    /// 用户重启一次播放器远比我们做热插拔监听划算。
+    gpu_adapters: Vec<String>,
 
     startup_failure: Option<String>,
 }
@@ -705,8 +796,10 @@ enum BarAction {
     SetOnTop(OnTop),
     TogglePlaylist,
     ToggleFullscreen,
+    ToggleMini,
     ToggleHelp,
     TogglePicture,
+    ToggleEngine,
     TakeScreenshot,
     SetAsDefaultPlayer,
     OpenDefaultApps,
@@ -716,13 +809,288 @@ enum BarAction {
     Quit,
 }
 
+/// 小窗：主窗口之外浮着的一个小播放器窗口。
+///
+/// 为什么不另起一个 mpv 实例：那样要多一份解码开销，音频会同时响两遍，
+/// 两边的进度也会各自漂移。这里只显示主窗口转发过来的同一张帧，
+/// 解码、音频、进度都还是主窗口那一份。
+struct MiniPlayer {
+    /// 主窗口的视图。用弱引用：它关掉之后这里要能察觉到并跟着退出。
+    app: WeakEntity<PlayerApp>,
+    frame: Option<Arc<RenderImage>>,
+    incoming: Option<Arc<RenderImage>>,
+    /// 已经画过、等待归还给 GPU atlas 的旧帧。规则与主窗口一致（留两帧余量），
+    /// 但两窗口的 atlas 是各一份，所以各自还各自的。
+    retired: VecDeque<Arc<RenderImage>>,
+    /// 鼠标是否停在小窗上：只有这时候才浮出标题条，平时不挡画面。
+    hovered: bool,
+    /// 已经下发给窗口系统的置顶状态。
+    on_top_applied: bool,
+    /// 上一次记下的窗口宽度，用来判断用户有没有拖动过边框（变了才回写偏好）。
+    last_width: f32,
+    /// 主窗口已经被释放。真正的关闭要等到下一次 render（那时才拿得到 `Window`），
+    /// 所以这里只记一笔，render 里再执行。
+    app_gone: bool,
+    focus: FocusHandle,
+}
+
+impl MiniPlayer {
+    fn new(app: WeakEntity<PlayerApp>, cx: &mut Context<Self>) -> Self {
+        Self {
+            app,
+            frame: None,
+            incoming: None,
+            retired: VecDeque::new(),
+            hovered: false,
+            on_top_applied: false,
+            last_width: 0.0,
+            app_gone: false,
+            focus: cx.focus_handle(),
+        }
+    }
+
+    /// 换上刚到的那一帧，旧的排队等着还给 atlas。
+    fn swap_frame(&mut self, window: &mut Window) {
+        let Some(incoming) = self.incoming.take() else {
+            return;
+        };
+        if let Some(previous) = self.frame.replace(incoming) {
+            self.retired.push_back(previous);
+            while self.retired.len() > 2 {
+                if let Some(stale) = self.retired.pop_front() {
+                    let _ = window.drop_image(stale);
+                }
+            }
+        }
+    }
+
+    /// 小窗一律置顶——不置顶它就被别的窗口盖住了，弹出来等于没弹。
+    ///
+    /// 与主窗口的 `sync_on_top` 各记各的：这是两个窗口，层级互不相关。
+    fn sync_on_top(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.on_top_applied {
+            return;
+        }
+        self.on_top_applied = true;
+        window.defer(cx, move |window, _cx| {
+            if !platform::topmost::set(window, true) {
+                log_warn!("小窗置顶未生效：当前窗口系统不支持");
+            }
+        });
+    }
+
+    /// 把动作转给主窗口：播放器状态只有一份，小窗自己不持有 mpv 句柄。
+    fn forward(
+        &self,
+        cx: &mut Context<Self>,
+        f: impl FnOnce(&mut PlayerApp, &mut Context<PlayerApp>),
+    ) {
+        if let Some(app) = self.app.upgrade() {
+            app.update(cx, f);
+        }
+    }
+
+    /// 尺寸变了就记进偏好，下次开小窗按用户拖过的宽度还原。
+    fn remember_width(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let width = f32::from(window.viewport_size().width);
+        if (width - self.last_width).abs() < 1.0 {
+            return;
+        }
+        self.last_width = width;
+        self.forward(cx, |app, _cx| app.settings.mini_width = width);
+    }
+
+    fn render_bar(&self, title: SharedString, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .id("mini-bar")
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .h(px(34.0))
+            .flex()
+            .items_center()
+            .justify_between()
+            .px(px(8.0))
+            .bg(ui::scrim())
+            .child(
+                // 拖标题移动窗口：整块画面留给「单击暂停 / 双击全屏」。
+                // 这里必须 stop_propagation，否则松手时会被画面当成一次单击。
+                div()
+                    .id("mini-title")
+                    .flex_1()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .text_size(px(12.0))
+                    .text_color(text())
+                    .cursor(CursorStyle::PointingHand)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_this, _: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            window.start_window_move();
+                        }),
+                    )
+                    .child(title),
+            )
+            .child(icon_button(
+                "mini-fullscreen",
+                IconName::Maximize2,
+                false,
+                false,
+                cx.listener(|this, _: &ClickEvent, window, cx| {
+                    window.toggle_fullscreen();
+                    this.forward(cx, |app, _cx| app.poke());
+                    cx.notify();
+                }),
+            ))
+            .child(icon_button(
+                "mini-close",
+                IconName::X,
+                false,
+                false,
+                cx.listener(|this, _: &ClickEvent, _window, cx| {
+                    this.forward(cx, |app, cx| app.close_mini(cx));
+                    cx.notify();
+                }),
+            ))
+            .into_any_element()
+    }
+}
+
+impl Render for MiniPlayer {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 主窗口关掉之后 PlayerApp 就被释放，这个小窗既没有控件也没有人驱动了，
+        // 跟着一起关，免得留下一个关不掉、也没法操作的空窗口。
+        //
+        // 关闭放在这里而不是 release 回调里：只有 render 拿得到 `&mut Window`。
+        if self.app_gone || self.app.upgrade().is_none() {
+            window.remove_window();
+            return div().size_full().bg(bg()).into_any_element();
+        }
+
+        self.swap_frame(window);
+        self.sync_on_top(window, cx);
+        self.remember_width(window, cx);
+
+        let view = self.app.upgrade().expect("刚刚检查过");
+        let view = view.read(cx);
+        let title = if view.snapshot.media_title.is_empty() {
+            SharedString::from("小窗")
+        } else {
+            SharedString::from(view.snapshot.media_title.clone())
+        };
+        let ratio = view.progress_ratio();
+        let hint = if view.playlist().is_empty() {
+            "没有正在播放的文件"
+        } else {
+            "正在加载…"
+        };
+
+        div()
+            .id("mini-root")
+            .relative()
+            .size_full()
+            .bg(bg())
+            .text_color(text())
+            .track_focus(&self.focus)
+            .child(ui::video_surface(self.frame.clone()))
+            .when(self.frame.is_none(), |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(8.0))
+                        .child(icon(IconName::Film, 34.0, text_faint()))
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .text_color(text_muted())
+                                .child(hint),
+                        ),
+                )
+            })
+            .when(self.hovered, |this| this.child(self.render_bar(title, cx)))
+            .child(
+                div()
+                    .id("mini-progress")
+                    .absolute()
+                    .bottom_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(3.0))
+                    .bg(gpui_kit::rgba(0xffffff20))
+                    .child(div().h_full().w(gpui_kit::relative(ratio)).bg(ui::accent())),
+            )
+            .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
+                this.hovered = *hovered;
+                cx.notify();
+            }))
+            .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
+                if event.click_count() >= 2 {
+                    // 双击把小窗放大到全屏，而不是关掉它：都双击了，
+                    // 意图多半是「想看大一点」，不是「不要这个小窗」。
+                    window.toggle_fullscreen();
+                } else {
+                    this.forward(cx, |app, cx| app.toggle_play(cx));
+                }
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &TogglePlay, _window, cx| {
+                this.forward(cx, |app, cx| app.toggle_play(cx));
+            }))
+            .on_action(cx.listener(|this, _: &ToggleMute, _window, cx| {
+                this.forward(cx, |app, cx| app.toggle_mute(cx));
+            }))
+            .on_action(cx.listener(|this, _: &SeekForward, _window, cx| {
+                this.forward(cx, |app, cx| app.seek_by(SEEK_STEP, cx));
+            }))
+            .on_action(cx.listener(|this, _: &SeekBackward, _window, cx| {
+                this.forward(cx, |app, cx| app.seek_by(-SEEK_STEP, cx));
+            }))
+            .on_action(cx.listener(|this, _: &VolumeUp, _window, cx| {
+                this.forward(cx, |app, cx| app.change_volume(VOLUME_STEP, cx));
+            }))
+            .on_action(cx.listener(|this, _: &VolumeDown, _window, cx| {
+                this.forward(cx, |app, cx| app.change_volume(-VOLUME_STEP, cx));
+            }))
+            .on_action(cx.listener(|_this, _: &ToggleFullscreen, window, cx| {
+                window.toggle_fullscreen();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ToggleMini, _window, cx| {
+                this.forward(cx, |app, cx| app.close_mini(cx));
+            }))
+            .on_action(cx.listener(|this, _: &ExitOverlay, window, cx| {
+                if window.is_fullscreen() {
+                    window.toggle_fullscreen();
+                } else {
+                    this.forward(cx, |app, cx| app.close_mini(cx));
+                }
+                cx.notify();
+            }))
+            .into_any_element()
+    }
+}
+
 impl PlayerApp {
     pub fn new(options: LaunchOptions, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let settings = Settings::load();
         let focus = cx.focus_handle();
 
         let (event_tx, event_rx) = futures::channel::mpsc::unbounded();
-        let (engine, startup_failure) = match Engine::spawn(event_tx) {
+        // 解码方式与显卡走 `initialize` 之前的选项：此刻还没有 VO，
+        // 用运行期的 `set` 命令不一定生效。
+        let engine_options = EngineOptions {
+            hwdec: settings.decode.hwdec().to_string(),
+            d3d11_adapter: settings.gpu.clone(),
+        };
+        let (engine, startup_failure) = match Engine::spawn(event_tx, &engine_options) {
             Ok(engine) => (Some(Arc::new(engine)), None),
             Err(error) => {
                 log_error!("初始化播放引擎失败: {error:#}");
@@ -769,9 +1137,13 @@ impl PlayerApp {
             error: None,
             show_help: false,
             show_picture: false,
+            show_engine: false,
             menu: None,
             menu_bar: None,
+            mini: None,
+            mini_window: None,
             association_status: platform::associations::Status::default(),
+            gpu_adapters: platform::gpu::adapters(),
             startup_failure,
         };
 
@@ -785,11 +1157,7 @@ impl PlayerApp {
             if (speed - 1.0).abs() > f64::EPSILON {
                 app.send(Command::SetSpeed(speed));
             }
-            // 软件渲染下 hwdec 会把帧从显存倒回内存，反而更慢；默认关闭。
-            app.send(Command::SetOption {
-                name: "hwdec".into(),
-                value: app.settings.hwdec.clone(),
-            });
+            // 解码方式与显卡已经在 `Engine::spawn` 里作为选项下发过了。
             app.apply_picture();
         }
 
@@ -865,7 +1233,14 @@ impl PlayerApp {
                             // 告诉取帧线程「这一帧已被取走」，否则它会主动丢帧。
                             engine.frame_consumed();
                         }
-                        this.incoming = Some(image);
+                        this.incoming = Some(image.clone());
+                        // 小窗不自己解码，只是同一张帧的第二个窗口，这里转发一份。
+                        if let Some(mini) = &this.mini {
+                            mini.update(cx, |mini, cx| {
+                                mini.incoming = Some(image);
+                                cx.notify();
+                            });
+                        }
                         cx.notify();
                     }
                     PlayerEvent::Thumbnail { time, image } => {
@@ -958,6 +1333,7 @@ impl PlayerApp {
             || self.volume_dragging
             || self.show_help
             || self.show_picture
+            || self.show_engine
             || self.playlist().is_empty()
     }
 
@@ -1206,6 +1582,154 @@ impl PlayerApp {
         self.on_top_applied = false;
     }
 
+    // -- 小窗 --------------------------------------------------------------
+
+    fn toggle_mini(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_mini_visible(self.mini.is_none(), window, cx);
+        cx.notify();
+    }
+
+    fn set_mini_visible(&mut self, visible: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if visible {
+            self.open_mini(window, cx);
+        } else {
+            self.close_mini(cx);
+        }
+    }
+
+    /// 另开一个置顶小窗口放画面，主窗口原样保留。
+    ///
+    /// 之所以不是「把主窗口缩小」：缩小之后播放列表、控制条、菜单栏全得挤进
+    /// 几百像素里，等于换一种难用。弹一个独立小窗，两边各管各的更省事。
+    fn open_mini(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mini.is_some() {
+            return;
+        }
+
+        let screen = self.screen_bounds(window, cx);
+        let width = self.mini_width(screen);
+        let height = width / self.mini_aspect();
+        let origin = point(
+            screen.origin.x + screen.size.width - px(width) - px(MINI_MARGIN),
+            // 底部多留一段给任务栏 / Dock，否则小窗会压在它上面。
+            screen.origin.y + screen.size.height - px(height) - px(MINI_BOTTOM_MARGIN),
+        );
+
+        let app = cx.weak_entity();
+        let mut opened: Option<Entity<MiniPlayer>> = None;
+        // 建窗口的回调里要把视图句柄传出来，所以借用而不是 move 进去。
+        let slot = &mut opened;
+        let handle = cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    origin,
+                    size(px(width), px(height)),
+                ))),
+                titlebar: Some(gpui_kit::TitlebarOptions {
+                    title: Some(SharedString::from("小窗")),
+                    appears_transparent: false,
+                    traffic_light_position: None,
+                }),
+                // 不抢焦点：弹小窗就是为了继续在主窗口里干别的事。
+                focus: false,
+                is_resizable: true,
+                window_min_size: Some(size(px(MINI_MIN_WIDTH), px(90.0))),
+                ..Default::default()
+            },
+            |_window, cx| {
+                let view = cx.new(|cx| MiniPlayer::new(app, cx));
+                *slot = Some(view.clone());
+                view
+            },
+        );
+
+        match handle {
+            Ok(handle) => {
+                self.mini = opened;
+                self.mini_window = Some(handle);
+                // 主窗口被释放（用户关了主窗口）时，小窗也要跟着关：
+                // 播放器状态只有主窗口那一份，留一个没人驱动的空窗口在屏幕上
+                // 既不能操作，也没有别的办法关掉。
+                let this = cx.entity();
+                if let Some(view) = &self.mini {
+                    view.update(cx, |_mini, cx| {
+                        cx.observe_release_in(&this, window, |mini, _app, _window, cx| {
+                            mini.app_gone = true;
+                            cx.notify();
+                        })
+                        .detach();
+                    });
+                }
+                // 用户直接用系统关闭按钮关掉小窗时，界面这边也要知道它没了，
+                // 否则再按一次 T 是去关一个已经关掉的窗口。
+                let id = handle.window_id();
+                let this = cx.weak_entity();
+                cx.on_window_closed(move |cx, closed| {
+                    if closed != id {
+                        return;
+                    }
+                    if let Some(this) = this.upgrade() {
+                        this.update(cx, |app, _cx| {
+                            app.mini = None;
+                            app.mini_window = None;
+                        });
+                    }
+                })
+                .detach();
+                self.flash("小窗：开");
+            }
+            Err(error) => {
+                log_error!("打开小窗失败: {error:#}");
+                self.flash("打开小窗失败");
+            }
+        }
+    }
+
+    /// 关掉小窗。窗口只是被标记待关，真正的销毁由窗口系统在下一帧完成，
+    /// 所以引用一并清掉，避免中间这几帧还在往一个待关的窗口里推帧。
+    fn close_mini(&mut self, cx: &mut Context<Self>) {
+        self.mini = None;
+        if let Some(handle) = self.mini_window.take() {
+            let _ = handle.update(cx, |_mini, window, _cx| window.remove_window());
+        }
+        self.settings.save();
+        self.flash("小窗：关");
+    }
+
+    /// 小窗宽度。用户拖过就按拖过的来，但最多占屏幕宽的 40%——
+    /// 换到更小的屏幕上时，别让「小窗」变成半个桌面。
+    fn mini_width(&self, screen: Bounds<Pixels>) -> f32 {
+        let limit = (f32::from(screen.size.width) * 0.4).max(MINI_MIN_WIDTH);
+        self.settings
+            .mini_width
+            .clamp(MINI_MIN_WIDTH, MINI_MAX_WIDTH)
+            .min(limit)
+    }
+
+    /// 小窗的高宽比：跟着画面设置走，旋转 90/270 度时长宽互换。
+    fn mini_aspect(&self) -> f32 {
+        let ratio = self
+            .settings
+            .video_aspect
+            .ratio()
+            .unwrap_or_else(|| self.snapshot.aspect());
+        let ratio = if self.settings.video_rotate.swaps_axes() {
+            ratio.recip()
+        } else {
+            ratio
+        };
+        ratio.clamp(0.4, 4.0)
+    }
+
+    /// 新窗口该落在哪块屏幕上：跟着主窗口所在的那块，多屏时不会跑到别处。
+    fn screen_bounds(&self, window: &Window, cx: &App) -> Bounds<Pixels> {
+        window
+            .display(cx)
+            .or_else(|| cx.primary_display())
+            .map(|display| display.bounds())
+            .unwrap_or_else(|| Bounds::new(point(px(0.0), px(0.0)), size(px(1280.0), px(720.0))))
+    }
+
     /// 置顶由「偏好」和「当前播放状态」共同决定。
     fn wants_on_top(&self) -> bool {
         match self.settings.on_top {
@@ -1330,12 +1854,96 @@ impl PlayerApp {
         }
     }
 
+    // -- 视频渲染与解码 ----------------------------------------------------
+
+    /// 面板开合。和「画面设置」一样是模态的，打开时顺手收掉菜单。
+    fn set_engine_visible(&mut self, visible: bool) {
+        self.show_engine = visible;
+        if visible {
+            self.menu = None;
+            self.menu_bar = None;
+        }
+    }
+
+    /// 渲染模式只影响「按多大尺寸渲染」：改动落在渲染目标上，下一次布局就生效。
+    fn set_render_mode(&mut self, mode: RenderMode) {
+        if self.settings.render_mode == mode {
+            return;
+        }
+        self.settings.render_mode = mode;
+        self.settings.save();
+        // 暂停时渲染目标变了也不会立刻出新帧，主动点一下重绘。
+        if let Some(engine) = &self.engine {
+            engine.request_redraw();
+        }
+        self.flash(format!("渲染模式：{}", mode.label()));
+    }
+
+    /// 解码方式要交给 mpv 的 `hwdec`：mpv 会自己重建解码链，不用重开文件。
+    fn set_decode_mode(&mut self, mode: DecodeMode) {
+        if self.settings.decode == mode {
+            return;
+        }
+        self.settings.decode = mode;
+        self.settings.save();
+        self.send(Command::SetOption {
+            name: "hwdec".into(),
+            value: mode.hwdec().to_string(),
+        });
+        self.flash(format!("解码方式：{}", mode.label()));
+    }
+
+    /// 播放显卡：`None` 是智能选择，`Some` 是指定显卡名。
+    fn set_gpu(&mut self, gpu: Option<String>) {
+        if self.settings.gpu == gpu {
+            return;
+        }
+        let label = gpu.clone().unwrap_or_else(|| "智能选择".to_string());
+        self.settings.gpu = gpu.clone();
+        self.settings.save();
+        // 只有 Windows 的 D3D11 后端认这个选项；别的平台照常记住选择，
+        // 不要为了一件没有对应实现的事去发一条注定失败的 mpv 命令。
+        if cfg!(windows) {
+            self.send(Command::SetOption {
+                name: "d3d11-adapter".into(),
+                value: gpu.unwrap_or_else(|| "auto".to_string()),
+            });
+        }
+        self.flash(format!("播放显卡：{label}"));
+    }
+
+    /// 配置里选中的那块显卡是否还在本机列表里。
+    ///
+    /// 换了机器、拔了外置显卡之后配置里会留下一个对不上的名字：这时按「智能选择」
+    /// 处理，但不去改写配置——那块卡插回来的时候选择也就跟着回来了。
+    fn gpu_selected(&self) -> Option<&str> {
+        self.settings
+            .gpu
+            .as_deref()
+            .filter(|name| self.gpu_adapters.iter().any(|adapter| adapter == name))
+    }
+
+    /// 「智能选择」括号里写的当前显卡：没指定（或指定的那块不在了）时
+    /// 按系统枚举到的第一块算。
+    fn current_gpu_label(&self) -> String {
+        match self.gpu_selected() {
+            Some(name) => name.to_string(),
+            None => self
+                .gpu_adapters
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "系统默认显卡".to_string()),
+        }
+    }
+
     /// Esc 的语义：一层一层往回退，而不是直接全关。
     fn exit_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.show_help {
             self.show_help = false;
         } else if self.show_picture {
             self.show_picture = false;
+        } else if self.show_engine {
+            self.show_engine = false;
         } else if self.file_info.is_some() {
             self.file_info = None;
         } else if self.item_menu.is_some() {
@@ -1350,6 +1958,9 @@ impl PlayerApp {
         } else if self.screenshot_card.is_some() {
             // 卡片是最后一个浮上来的东西，Esc 先收它，再考虑关面板、退全屏。
             self.clear_screenshot_card();
+        } else if self.mini.is_some() {
+            // 小窗是「从主窗口分出去」的，Esc 表示收回它。
+            self.close_mini(cx);
         } else if self.settings.show_playlist {
             self.set_playlist_visible(false);
         } else if window.is_fullscreen() {
@@ -1926,7 +2537,7 @@ impl PlayerApp {
     /// 区域、四周补黑边。铺满那两档直接把区域本身当画布，变形或裁剪都交给 mpv。
     ///
     /// 区域比视频原始分辨率大时按原始分辨率渲染：放大不增加细节，只是让每帧
-    /// 多拷几 MB。
+    /// 多拷几 MB。另外还要过一道渲染模式的高度上限（见 `RenderMode::height_cap`）。
     fn update_render_target(&self, window: &mut Window) {
         let Some(engine) = &self.engine else {
             return;
@@ -1971,8 +2582,16 @@ impl PlayerApp {
             1.0
         };
 
-        let width = (canvas_width * fit).round().max(2.0) as u32;
-        let height = (canvas_height * fit).round().max(2.0) as u32;
+        let mut width = (canvas_width * fit).round().max(2.0) as u32;
+        let mut height = (canvas_height * fit).round().max(2.0) as u32;
+        // 性能模式封顶渲染高度：全屏看 4K 时，缩放和每帧回读那几个 MB 的像素
+        // 是耗电的大头，而 720 行在正常观看距离下几乎看不出与全分辨率的差别。
+        if let Some(cap) = self.settings.render_mode.height_cap() {
+            if height > cap {
+                width = ((width as f32 * cap as f32 / height as f32).round() as u32).max(2);
+                height = cap;
+            }
+        }
         engine.set_render_target(width, height, self.settings.video_rotate.degrees());
     }
 
@@ -1999,6 +2618,15 @@ impl PlayerApp {
 
     fn progress_value(&self) -> f64 {
         self.dragging.unwrap_or(self.snapshot.position)
+    }
+
+    /// 播放进度 0~1，给小窗底部那条细线用。时长未知时当 0。
+    fn progress_ratio(&self) -> f32 {
+        let duration = self.snapshot.duration;
+        if duration <= 0.0 {
+            return 0.0;
+        }
+        (self.progress_value() / duration).clamp(0.0, 1.0) as f32
     }
 
     // -- 渲染 --------------------------------------------------------------
@@ -2591,6 +3219,15 @@ impl PlayerApp {
                         }),
                     ))
                     .child(icon_button(
+                        "mini",
+                        IconName::PictureInPicture2,
+                        self.mini.is_some(),
+                        false,
+                        cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.toggle_mini(window, cx);
+                        }),
+                    ))
+                    .child(icon_button(
                         "fullscreen",
                         IconName::Maximize,
                         false,
@@ -3091,6 +3728,11 @@ impl PlayerApp {
                         .hint("F")
                         .checked(window.is_fullscreen()),
                 ));
+                items.push(BarItem::Entry(
+                    BarEntry::new("小窗", ToggleMini)
+                        .hint("T")
+                        .checked(self.mini.is_some()),
+                ));
                 items.push(BarItem::Separator);
                 // 置顶要拿原生窗口句柄：Wayland 没给普通窗口留这个能力，只能置灰并说明。
                 let on_top = platform::topmost::supported(window);
@@ -3109,6 +3751,9 @@ impl PlayerApp {
                 let supported = platform::associations::supported();
                 let status = &self.association_status;
 
+                items.push(BarItem::Entry(
+                    BarEntry::new("视频渲染与解码…", ToggleEngine).checked(self.show_engine),
+                ));
                 items.push(BarItem::Entry(
                     BarEntry::new("画面设置…", TogglePicture)
                         .hint("A")
@@ -3172,8 +3817,10 @@ impl PlayerApp {
                 self.set_playlist_visible(!self.settings.show_playlist);
             }
             BarAction::ToggleFullscreen => self.toggle_fullscreen(window),
+            BarAction::ToggleMini => self.toggle_mini(window, cx),
             BarAction::ToggleHelp => self.show_help = !self.show_help,
             BarAction::TogglePicture => self.set_picture_visible(!self.show_picture),
+            BarAction::ToggleEngine => self.set_engine_visible(!self.show_engine),
             BarAction::TakeScreenshot => self.take_screenshot(cx),
             BarAction::SetAsDefaultPlayer => self.set_default_player(),
             BarAction::OpenDefaultApps => self.open_default_apps(),
@@ -4432,14 +5079,175 @@ impl PlayerApp {
                                     }),
                                 )),
                         )
-                        .child(picture_group("画面比例", aspect_rows))
-                        .child(picture_group("画面旋转", rotation_rows))
-                        .child(picture_group("画面镜像", vec![mirror_row]))
+                        .child(option_group("画面比例", aspect_rows))
+                        .child(option_group("画面旋转", rotation_rows))
+                        .child(option_group("画面镜像", vec![mirror_row]))
                         .child(
                             div()
                                 .text_size(px(11.0))
                                 .text_color(text_faint())
                                 .child("这几项跟着偏好保存，换片和重启都保持"),
+                        ),
+                ),
+        )
+    }
+
+    /// 「视频渲染与解码」面板：渲染模式 / 解码模式 / 播放显卡三组。
+    ///
+    /// 和「画面设置」分成两个面板：那边调的是「同一帧怎么摆」（比例、旋转、镜像），
+    /// 这里换的是「谁来画、谁来解码」。后者更像排障开关，混在一起只会把常用项挤远。
+    fn render_engine(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        if !self.show_engine {
+            return None;
+        }
+
+        let render_rows: Vec<AnyElement> = RenderMode::ALL
+            .into_iter()
+            .enumerate()
+            .map(|(index, mode)| {
+                engine_option(
+                    format!("engine-render-{index}"),
+                    mode.label().to_string(),
+                    Some(mode.detail()),
+                    self.settings.render_mode == mode,
+                    cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                        this.set_render_mode(mode);
+                        cx.notify();
+                    }),
+                )
+            })
+            .collect();
+
+        let decode_rows: Vec<AnyElement> = DecodeMode::ALL
+            .into_iter()
+            .enumerate()
+            .map(|(index, mode)| {
+                engine_option(
+                    format!("engine-decode-{index}"),
+                    mode.label().to_string(),
+                    Some(mode.detail()),
+                    self.settings.decode == mode,
+                    cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                        this.set_decode_mode(mode);
+                        cx.notify();
+                    }),
+                )
+            })
+            .collect();
+
+        // 显卡列表可能是空的（非 Windows）。空表时给一句明确说明，而不是留一组空行。
+        let gpu_rows: Vec<AnyElement> = if self.gpu_adapters.is_empty() {
+            vec![
+                div()
+                    .px(px(8.0))
+                    .py(px(6.0))
+                    .text_size(px(11.0))
+                    .text_color(text_faint())
+                    .child("当前平台不支持列出显卡，将由系统自动选择")
+                    .into_any_element(),
+            ]
+        } else {
+            let chosen = self.gpu_selected().map(str::to_string);
+            let mut rows = vec![engine_option(
+                "engine-gpu-auto",
+                format!("智能选择（当前使用：{}）", self.current_gpu_label()),
+                Some("由系统按运行环境挑选，通常是第一块显示适配器"),
+                chosen.is_none(),
+                cx.listener(|this, _: &ClickEvent, _window, cx| {
+                    this.set_gpu(None);
+                    cx.notify();
+                }),
+            )];
+            for (index, name) in self.gpu_adapters.iter().enumerate() {
+                let label = name.clone();
+                rows.push(engine_option(
+                    format!("engine-gpu-{index}"),
+                    label.clone(),
+                    None,
+                    chosen.as_deref() == Some(name.as_str()),
+                    cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                        this.set_gpu(Some(label.clone()));
+                        cx.notify();
+                    }),
+                ));
+            }
+            rows
+        };
+
+        Some(
+            div()
+                .id("engine-settings")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(gpui_kit::rgba(0x000000b8))
+                // 只拦住鼠标按下，让同位置的视频画面收不到这次点击。
+                // 同样不用 `on_click` 关面板：祖先的 click 会先于里面的选项执行。
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                        cx.stop_propagation();
+                    }),
+                )
+                .child(
+                    div()
+                        .id("engine-settings-card")
+                        .w(px(520.0))
+                        // 显卡多的机器（工作站/笔记本双卡）也不会把面板顶出窗口。
+                        .max_h(px(560.0))
+                        .overflow_y_scroll()
+                        .p(px(20.0))
+                        .rounded(px(14.0))
+                        .bg(surface())
+                        .border_1()
+                        .border_color(gpui_kit::rgb(0x2c2c34))
+                        .flex()
+                        .flex_col()
+                        .gap(px(16.0))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .text_size(px(15.0))
+                                        .text_color(text())
+                                        .child("视频渲染与解码"),
+                                )
+                                .child(icon_button(
+                                    "engine-close",
+                                    IconName::X,
+                                    false,
+                                    false,
+                                    cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                        this.set_engine_visible(false);
+                                        cx.notify();
+                                    }),
+                                )),
+                        )
+                        .child(option_group("视频渲染模式", render_rows))
+                        .child(option_group("视频解码模式", decode_rows))
+                        .child(option_group("播放显卡设置", gpu_rows))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.0))
+                                .text_size(px(11.0))
+                                .text_color(text_faint())
+                                .child("这三项跟着偏好保存，换片和重启都保持")
+                                .child(
+                                    "解码方式与显卡在重新打开文件后一定生效；软件解码时与显卡无关",
+                                ),
                         ),
                 ),
         )
@@ -4466,6 +5274,7 @@ impl PlayerApp {
             ("S", "截图"),
             ("O", "打开文件"),
             ("F / 双击", "全屏"),
+            ("T", "小窗"),
             ("A", "画面设置"),
             ("Esc", "退出全屏 / 关闭浮层"),
             ("?", "显示 / 隐藏本帮助"),
@@ -4573,6 +5382,9 @@ impl Render for PlayerApp {
             .on_action(cx.listener(|this, _: &ToggleFullscreen, window, cx| {
                 this.toggle_fullscreen(window);
                 cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ToggleMini, window, cx| {
+                this.toggle_mini(window, cx);
             }))
             .on_action(cx.listener(|this, _: &TogglePlaylist, _window, cx| {
                 this.set_playlist_visible(!this.settings.show_playlist);
@@ -4734,6 +5546,7 @@ impl Render for PlayerApp {
             .children(self.render_item_menu(cx))
             .children(self.render_help(cx))
             .children(self.render_picture(cx))
+            .children(self.render_engine(cx))
             .children(self.render_file_info(cx))
     }
 }
@@ -4758,6 +5571,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("down", VolumeDown, None),
         KeyBinding::new("m", ToggleMute, None),
         KeyBinding::new("f", ToggleFullscreen, None),
+        KeyBinding::new("t", ToggleMini, None),
         KeyBinding::new("a", TogglePicture, None),
         KeyBinding::new("l", TogglePlaylist, None),
         KeyBinding::new("o", OpenFile, None),

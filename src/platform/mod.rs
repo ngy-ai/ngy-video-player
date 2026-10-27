@@ -7,6 +7,7 @@
 
 pub mod associations;
 pub mod clipboard;
+pub mod gpu;
 pub mod open;
 pub mod reveal;
 pub mod topmost;

@@ -163,6 +163,110 @@ impl Rotation {
     }
 }
 
+/// 视频渲染模式。
+///
+/// 两档走的都是同一条软件渲染路径（`MPV_RENDER_API_TYPE_SW` + 拷帧），区别只在
+/// **内部渲染分辨率**：性能模式把高度封顶在 720，全屏看高清时省下的缩放与回读
+/// 是耗电的大头，而正常观看距离下几乎看不出差别；稳定模式按窗口实际尺寸画。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RenderMode {
+    #[default]
+    Performance,
+    Stable,
+}
+
+impl RenderMode {
+    /// 面板里的全部选项，顺序就是展示顺序。
+    pub const ALL: [RenderMode; 2] = [RenderMode::Performance, RenderMode::Stable];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            RenderMode::Performance => "性能模式（默认）",
+            RenderMode::Stable => "稳定模式",
+        }
+    }
+
+    /// 选项下面的那行说明：讲清楚这一档换来什么、付出什么。
+    pub fn detail(self) -> &'static str {
+        match self {
+            RenderMode::Performance => "性能更佳，耗电更少，可支持 HDR 视频播放",
+            RenderMode::Stable => "按窗口实际尺寸渲染，画面更细腻，更吃 CPU",
+        }
+    }
+
+    /// 内部渲染分辨率的高度上限；`None` 表示不封顶。
+    pub fn height_cap(self) -> Option<u32> {
+        match self {
+            RenderMode::Performance => Some(PERFORMANCE_HEIGHT_CAP),
+            RenderMode::Stable => None,
+        }
+    }
+
+    fn tag(self) -> &'static str {
+        match self {
+            RenderMode::Performance => "performance",
+            RenderMode::Stable => "stable",
+        }
+    }
+}
+
+/// 性能模式的渲染高度上限。720 是「全屏 1080p 也能明显省 CPU」和
+/// 「大屏上不糊」之间的折中；4K 全屏下省得更多。
+const PERFORMANCE_HEIGHT_CAP: u32 = 720;
+
+/// 视频解码模式。三档直接对应 mpv 的 `hwdec` 取值。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DecodeMode {
+    /// 让 mpv 按设备能力挑：有可用的硬解就用，没有就退回软解。
+    Smart,
+    /// 强制硬件解码（拷回内存的那一档，见 `hwdec`）。
+    Hardware,
+    /// 完全软件解码。主画面走软件渲染时它其实是最省事的一档，所以做默认。
+    #[default]
+    Software,
+}
+
+impl DecodeMode {
+    pub const ALL: [DecodeMode; 3] = [
+        DecodeMode::Smart,
+        DecodeMode::Hardware,
+        DecodeMode::Software,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            DecodeMode::Smart => "智能解码",
+            DecodeMode::Hardware => "硬件解码",
+            DecodeMode::Software => "软件解码",
+        }
+    }
+
+    pub fn detail(self) -> &'static str {
+        match self {
+            DecodeMode::Smart => "根据设备情况自动选择最合适的解码方式",
+            DecodeMode::Hardware => "解码速度更快，播放更流畅，适合高清视频",
+            DecodeMode::Software => "兼容性强，适合无法正常播放的视频",
+        }
+    }
+
+    /// 交给 mpv 的 `hwdec` 取值。
+    ///
+    /// 三档都不用零拷贝的变体（`auto` / `d3d11va`）：主画面走的是
+    /// `MPV_RENDER_API_TYPE_SW` 软件渲染，硬件帧接不住，必须让 mpv 把帧拷回内存。
+    pub fn hwdec(self) -> &'static str {
+        match self {
+            DecodeMode::Smart => "auto-safe",
+            DecodeMode::Hardware => "auto-copy",
+            DecodeMode::Software => "no",
+        }
+    }
+
+    /// 配置里存的就是 mpv 的取值，和 `hwdec` 对得上，手改配置也不会看不懂。
+    fn tag(self) -> &'static str {
+        self.hwdec()
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -184,9 +288,21 @@ pub struct Settings {
     /// （0 虽然会被界面夹到最小宽度，但那是应急，不该当成默认布局）。
     #[serde(default = "default_playlist_width")]
     pub playlist_width: f32,
+    /// 小窗宽度。用户拖过一次之后按这个值还原。
+    #[serde(default = "default_mini_width")]
+    pub mini_width: f32,
     pub fullscreen: bool,
-    /// 硬件解码：`auto-safe` / `no` / `auto-copy`。
-    pub hwdec: String,
+    /// 解码模式。早期版本这里存的是 mpv 的 `hwdec` 原始字符串，换成枚举后
+    /// 仍认旧键（`alias = "hwdec"`），否则整份配置会解析失败、被默认值覆盖。
+    #[serde(alias = "hwdec")]
+    pub decode: DecodeMode,
+    /// 视频渲染模式。和窗口大小无关，是「清晰优先还是省电优先」的偏好。
+    pub render_mode: RenderMode,
+    /// 播放显卡：`None` 是智能选择，`Some(名字)` 是用户指定的那块。
+    ///
+    /// 存显卡名而不是序号：换驱动、插拔显示器都会让枚举顺序变化，
+    /// 名字至少还能对上；对不上时 mpv 会自己退回默认适配器。
+    pub gpu: Option<String>,
     /// 画面比例。和「窗口大小」无关，是用户对画质的偏好，所以换片、重启都保留。
     pub video_aspect: VideoAspect,
     /// 画面旋转角度。
@@ -215,8 +331,11 @@ impl Default for Settings {
             window_width: 1120.0,
             window_height: 680.0,
             playlist_width: 300.0,
+            mini_width: 400.0,
             fullscreen: false,
-            hwdec: "no".to_string(),
+            decode: DecodeMode::Software,
+            render_mode: RenderMode::Performance,
+            gpu: None,
             video_aspect: VideoAspect::Source,
             video_rotate: Rotation::None,
             mirror_h: false,
@@ -228,6 +347,10 @@ impl Default for Settings {
 
 fn default_playlist_width() -> f32 {
     300.0
+}
+
+fn default_mini_width() -> f32 {
+    400.0
 }
 
 impl Settings {
@@ -407,5 +530,44 @@ impl<'de> Deserialize<'de> for Rotation {
             .into_iter()
             .find(|rotation| rotation.degrees() == degrees)
             .unwrap_or_default())
+    }
+}
+
+impl Serialize for RenderMode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.tag())
+    }
+}
+
+impl<'de> Deserialize<'de> for RenderMode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // 认不出的名字（手改配置、别的版本写进来的）退回默认档，
+        // 而不是让整份设置作废、连音量一起丢掉。
+        let text = String::deserialize(deserializer)?;
+        Ok(RenderMode::ALL
+            .into_iter()
+            .find(|mode| mode.tag() == text)
+            .unwrap_or_default())
+    }
+}
+
+impl Serialize for DecodeMode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.tag())
+    }
+}
+
+impl<'de> Deserialize<'de> for DecodeMode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Ok(match text.as_str() {
+            // 旧配置直接写 mpv 的取值，其中 `yes` / `auto` 是零拷贝变体，
+            // 对应现在的「硬件解码」（实际下发时会换成能拷回内存的那档）。
+            "auto-safe" | "yes" => DecodeMode::Smart,
+            "auto-copy" | "auto" => DecodeMode::Hardware,
+            "no" => DecodeMode::Software,
+            // 认不出来就退回软解：它对任何片子都放得出画面。
+            _ => DecodeMode::default(),
+        })
     }
 }

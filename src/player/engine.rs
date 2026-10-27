@@ -262,6 +262,28 @@ pub enum Command {
 // 引擎
 // ---------------------------------------------------------------------------
 
+/// 起引擎时要写进 mpv 选项的偏好。
+///
+/// 为什么走「initialize 之前的选项」而不是运行期的 `set`：`hwdec` 和
+/// `d3d11-adapter` 都是 VO / 解码器建立时才读的选项，程序刚起来那一刻还没有 VO，
+/// 用 `set` 可能落空。用户在面板里改的那一次才走 `set`（那时通常已经在放片子）。
+pub struct EngineOptions {
+    /// `hwdec` 的取值，见 `settings::DecodeMode::hwdec`。
+    pub hwdec: String,
+    /// D3D11 用哪块显卡（只有 Windows 的 D3D11 后端认这个选项）。
+    pub d3d11_adapter: Option<String>,
+}
+
+impl Default for EngineOptions {
+    fn default() -> Self {
+        Self {
+            // 软件渲染下硬解要把帧从显存倒回内存，反而更慢，默认关闭。
+            hwdec: "no".to_string(),
+            d3d11_adapter: None,
+        }
+    }
+}
+
 struct Shared {
     state: Mutex<Snapshot>,
     events: UnboundedSender<PlayerEvent>,
@@ -333,7 +355,7 @@ impl std::fmt::Debug for Engine {
 
 impl Engine {
     /// 起引擎。`events` 是界面侧的接收端对应的发送端。
-    pub fn spawn(events: UnboundedSender<PlayerEvent>) -> Result<Self> {
+    pub fn spawn(events: UnboundedSender<PlayerEvent>, options: &EngineOptions) -> Result<Self> {
         let api = MpvApi::load()?;
         let shared = Arc::new(Shared {
             state: Mutex::new(Snapshot::default()),
@@ -354,7 +376,7 @@ impl Engine {
         let handle = SendPtr(handle);
 
         unsafe {
-            Self::configure(&api, handle.get()).context("初始化 libmpv 配置")?;
+            Self::configure(&api, handle.get(), options).context("初始化 libmpv 配置")?;
 
             let rc = (api.initialize)(handle.get());
             if rc < 0 {
@@ -410,7 +432,11 @@ impl Engine {
     ///
     /// 选项被拒绝只记一条 warn：不同 mpv 版本认识的选项不完全一样，
     /// 一个装饰性选项（比如字幕字号）不该让整个播放器起不来。
-    unsafe fn configure(api: &MpvApi, handle: *mut ffi::MpvHandle) -> Result<()> {
+    unsafe fn configure(
+        api: &MpvApi,
+        handle: *mut ffi::MpvHandle,
+        options: &EngineOptions,
+    ) -> Result<()> {
         unsafe fn opt(api: &MpvApi, handle: *mut ffi::MpvHandle, name: &str, value: &str) {
             let Ok(cname) = CString::new(name) else {
                 return;
@@ -442,6 +468,12 @@ impl Engine {
             // 没有可用声卡时（远程桌面、容器、拔掉的 USB 声卡）继续放画面，
             // 而不是让整个播放因为音频后端起不来而失败。
             opt(api, handle, "audio-fallback-to-null", "yes");
+            // 解码方式与用哪块显卡是用户的偏好，必须在 initialize 之前落成选项：
+            // 这两项都在解码器 / VO 建立时才读，运行期 `set` 只能改下一次。
+            opt(api, handle, "hwdec", &options.hwdec);
+            if let Some(adapter) = &options.d3d11_adapter {
+                opt(api, handle, "d3d11-adapter", adapter);
+            }
             // 不建自己的窗口。
             opt(api, handle, "force-window", "no");
             // 起播就绪即可，不要一上来缓冲一大段（本地文件场景纯属拖慢）。

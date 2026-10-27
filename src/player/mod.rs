@@ -11,6 +11,7 @@ pub mod probe;
 pub(crate) mod thumbnail;
 
 pub use engine::{
-    Chapter, Command, EndReason, Engine, LoopMode, PlayerEvent, Snapshot, Track, TrackKind,
+    Chapter, Command, EndReason, Engine, EngineOptions, LoopMode, PlayerEvent, Snapshot, Track,
+    TrackKind,
 };
 pub use probe::{MediaInfo, MediaTrack};
