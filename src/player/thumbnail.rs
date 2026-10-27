@@ -293,7 +293,7 @@ impl Worker {
             self.last = None;
         }
 
-        if self.media.as_deref() != Some(path) && !self.load(path, generation) {
+        if self.media.as_deref() != Some(path) && !self.load(path) {
             return;
         }
 
@@ -324,7 +324,7 @@ impl Worker {
 
     /// 换文件。等 `FILE_LOADED` 再走下一步：`loadfile` 是异步的，
     /// 紧跟其后的 `seek` 会撞上「文件还没打开」而直接失败。
-    fn load(&mut self, path: &Path, generation: u64) -> bool {
+    fn load(&mut self, path: &Path) -> bool {
         let url = path.to_string_lossy().to_string();
         if let Err(error) = self
             .api
@@ -337,23 +337,16 @@ impl Worker {
         self.media = Some(path.to_path_buf());
         self.last = None;
 
+        // 这里刻意**不看**「请求是否过期」：本地文件通常几十毫秒就绪，
+        // 而中途放弃会留下「半加载」的状态——`media` 已经记上了，下一个请求
+        // 便跳过这里直接 seek，撞上的正是「文件还没打开」。等它加载完更稳。
         let deadline = Instant::now() + LOAD_TIMEOUT;
         while Instant::now() < deadline {
-            if self.stale(generation) {
+            if self.signals.shutdown.load(Ordering::SeqCst) {
                 return false;
             }
             match self.next_event(0.02) {
-                Some(event::FILE_LOADED) => {
-                    println!(
-                        "[probe] loaded duration={:?} size={:?}",
-                        self.api.property_f64(self.handle.get(), "duration"),
-                        (
-                            self.api.property_i64(self.handle.get(), "width"),
-                            self.api.property_i64(self.handle.get(), "height")
-                        )
-                    );
-                    return true;
-                }
+                Some(event::FILE_LOADED) => return true,
                 // 打不开（文件不存在、格式不支持）：安静放弃，别把错误横幅
                 // 甩到正在播放的界面上。
                 Some(event::END_FILE) => {
@@ -386,18 +379,9 @@ impl Worker {
         }
 
         let deadline = Instant::now() + SEEK_TIMEOUT;
-        let mut probe = 0;
         while Instant::now() < deadline {
             if self.stale(generation) {
                 return false;
-            }
-            probe += 1;
-            if probe % 100 == 0 {
-                println!(
-                    "[probe] pos={:?} frame={} target={time}",
-                    self.api.property_f64(self.handle.get(), "time-pos"),
-                    self.has_frame()
-                );
             }
             // 位置对上了、并且 mpv 报告有新帧，才可以把这块缓冲当成这一格。
             // 少了位置检查，刚跳转时渲染出来的是上一格的画面——预览会一直
@@ -470,38 +454,6 @@ impl Worker {
             return None;
         }
         Some(unsafe { (*event).event_id })
-    }
-}
-
-#[cfg(test)]
-mod probe_tests {
-    use super::*;
-
-    #[test]
-    fn probe_thumbnail() {
-        let Ok(path) = std::env::var("NGY_TEST_VIDEO") else {
-            return;
-        };
-        let api = MpvApi::load().expect("libmpv");
-        let (tx, mut rx) = futures::channel::mpsc::unbounded();
-        let thumb = Thumbnailer::spawn(api, tx).expect("spawn");
-        for target in [0.05, 0.15, 0.25] {
-            let started = Instant::now();
-            thumb.show(Path::new(&path), target, 180);
-            let deadline = Instant::now() + Duration::from_secs(5);
-            loop {
-                assert!(Instant::now() < deadline, "没等到缩略图 {target}");
-                if let Ok(Some(PlayerEvent::Thumbnail { time, image })) = rx.try_next() {
-                    println!(
-                        "thumbnail time={time} size={:?} 耗时 {:?}",
-                        image.size(0),
-                        started.elapsed()
-                    );
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-        }
     }
 }
 
