@@ -23,7 +23,7 @@ use gpui_kit::{
     Hsla, IntoElement, KeyBinding, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, RenderImage, ScrollDelta,
     ScrollWheelEvent, SharedString, Styled, Window, WindowBounds, WindowOptions, actions, canvas,
-    div, point, px, size,
+    div, img, point, px, size,
 };
 use std::{
     cell::Cell,
@@ -144,6 +144,55 @@ fn item_menu_entry(
         .child(label)
         .on_click(on_click)
         .into_any_element()
+}
+
+/// 截图卡片底部的一个动作：图标 + 文字，三等分卡片宽度。
+fn screenshot_card_action(
+    id: &'static str,
+    icon_name: IconName,
+    label: &'static str,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .flex_1()
+        .h(px(36.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(6.0))
+        .cursor(CursorStyle::PointingHand)
+        .hover(|style| style.bg(ui::surface_hover()))
+        .child(ui::icon(icon_name, 14.0, text_muted()))
+        .child(div().text_size(px(12.0)).text_color(text()).child(label))
+        .on_click(
+            move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
+                // 卡片浮在画面上，动作不截断的话同一次点击还会漏到视频区暂停播放。
+                cx.stop_propagation();
+                on_click(event, window, cx);
+            },
+        )
+}
+
+/// 卡片预览区的占位内容：预览还没解码好、或读不出来时顶上去。
+fn placeholder(message: &'static str) -> AnyElement {
+    div()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .text_size(px(11.0))
+                .text_color(text_faint())
+                .child(message),
+        )
+        .into_any_element()
+}
+
+/// 截图卡片里三个动作之间的竖线。
+fn card_divider() -> impl IntoElement {
+    div().w(px(1.0)).h(px(18.0)).bg(gpui_kit::rgb(0x2c2c34))
 }
 
 /// 「查看格式」的正文：容器、时长、大小，再逐条列轨道。
@@ -288,6 +337,11 @@ const SPEED_STEP: f64 = 0.05;
 const FRAME_SCROLL_PX: f32 = 48.0;
 const CONTROLS_IDLE: Duration = Duration::from_millis(2600);
 const OSD_LIFETIME: Duration = Duration::from_millis(900);
+/// 截图卡片的宽度与预览区高度。
+const SCREENSHOT_CARD_WIDTH: f32 = 280.0;
+const SCREENSHOT_PREVIEW_HEIGHT: f32 = 158.0;
+/// 没人搭理时多久自动收起。鼠标停在卡片上时不计时。
+const SCREENSHOT_CARD_LIFETIME: Duration = Duration::from_secs(10);
 const MENUBAR_HEIGHT: f32 = 32.0;
 /// 播放列表面板拖动时的宽度边界。视频那边至少留 480px：再窄控制条上的
 /// 倍速/循环/全屏就挤成一团，拖到头也不该出现这种布局。
@@ -353,6 +407,25 @@ struct HoverPreview {
     image: Option<Arc<RenderImage>>,
 }
 
+/// 截图卡片里那块预览的三种状态。
+///
+/// 用枚举而不是 `Option`：`None` 分不清「还在解码」和「解码失败」，
+/// 界面只能一直显示「正在读取」，看起来像卡住了。
+enum ScreenshotThumb {
+    Loading,
+    Ready(Arc<RenderImage>),
+    Failed,
+}
+
+/// 截图成功后的操作卡片：预览 + 复制 / 打开 / 定位。
+struct ScreenshotCard {
+    path: PathBuf,
+    thumb: ScreenshotThumb,
+    shown_at: Instant,
+    /// 鼠标停在卡片上。这时候不自动收起——正要点「复制」时卡片消失最气人。
+    hovered: bool,
+}
+
 pub struct PlayerApp {
     engine: Option<Arc<Engine>>,
     snapshot: Snapshot,
@@ -414,6 +487,8 @@ pub struct PlayerApp {
     dialog_open: bool,
 
     osd: Option<(Vec<String>, Instant)>,
+    /// 最近一张截图的操作卡片；`None` 表示没显示。
+    screenshot_card: Option<ScreenshotCard>,
     error: Option<Banner>,
     show_help: bool,
     /// 悬浮菜单（字幕 / 音轨 / 循环）当前展开的是哪一个。
@@ -611,6 +686,7 @@ impl PlayerApp {
             preview_retired: VecDeque::new(),
             dialog_open: false,
             osd: None,
+            screenshot_card: None,
             error: None,
             show_help: false,
             menu: None,
@@ -727,11 +803,8 @@ impl PlayerApp {
                         match result {
                             Ok(path) => {
                                 log_info!("截图已保存: {}", path.display());
-                                let name = path
-                                    .file_name()
-                                    .map(|name| name.to_string_lossy().into_owned())
-                                    .unwrap_or_default();
-                                this.flash(format!("截图已保存 · {name}"));
+                                // 用卡片代替 OSD：这里还要让用户能复制、打开、定位。
+                                this.show_screenshot_card(path, cx);
                             }
                             Err(message) => {
                                 log_warn!("截图失败: {message}");
@@ -769,6 +842,13 @@ impl PlayerApp {
                     }
                     if this.controls_visible() && this.last_activity.elapsed() > CONTROLS_IDLE {
                         this.controls_forced = false;
+                        dirty = true;
+                    }
+                    // 鼠标停在卡片上时不算超时：用户正要点按钮。
+                    if this.screenshot_card.as_ref().is_some_and(|card| {
+                        !card.hovered && card.shown_at.elapsed() > SCREENSHOT_CARD_LIFETIME
+                    }) {
+                        this.clear_screenshot_card();
                         dirty = true;
                     }
                     if dirty {
@@ -944,6 +1024,100 @@ impl PlayerApp {
         cx.notify();
     }
 
+    /// 截图成功后弹出操作卡片，顺手在后台把截图缩成预览图。
+    fn show_screenshot_card(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        // 上一张卡片的缩略图已经进过图集，得走同一条回收路径，不能直接丢。
+        self.clear_screenshot_card();
+        self.screenshot_card = Some(ScreenshotCard {
+            path: path.clone(),
+            thumb: ScreenshotThumb::Loading,
+            shown_at: Instant::now(),
+            hovered: false,
+        });
+
+        // 解码要几十毫秒（4K 截图更久），放在主线程上会明显卡一下。
+        let (tx, rx) = futures::channel::oneshot::channel();
+        let target = path.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::screenshot::thumbnail(
+                &target,
+                crate::screenshot::THUMBNAIL_MAX_WIDTH,
+            ));
+        });
+
+        cx.spawn(async move |this, cx| {
+            let thumb = match rx.await {
+                Ok(Ok(image)) => ScreenshotThumb::Ready(image),
+                Ok(Err(error)) => {
+                    log_warn!("读取截图预览失败: {error:#}");
+                    ScreenshotThumb::Failed
+                }
+                Err(_) => ScreenshotThumb::Failed,
+            };
+            let _ = this.update(cx, |this, cx| {
+                // 解码期间可能又截了一张，或者卡片已经关掉：只认同一份。
+                let Some(card) = this.screenshot_card.as_mut() else {
+                    return;
+                };
+                if card.path != path {
+                    return;
+                }
+                card.thumb = thumb;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// 收起截图卡片。缩略图不能直接丢：它已经进过 GPU 图集，要交给渲染路径归还。
+    fn clear_screenshot_card(&mut self) {
+        if let Some(card) = self.screenshot_card.take()
+            && let ScreenshotThumb::Ready(thumb) = card.thumb
+        {
+            self.preview_retired.push_back(thumb);
+        }
+    }
+
+    fn copy_screenshot(&mut self, cx: &mut Context<Self>) {
+        let Some(card) = &self.screenshot_card else {
+            return;
+        };
+        let path = card.path.clone();
+        match platform::clipboard::item(&path) {
+            Ok(item) => {
+                cx.write_to_clipboard(item);
+                self.flash(platform::clipboard::COPIED_MESSAGE);
+            }
+            Err(error) => self.flash(format!("复制截图失败：{error:#}")),
+        }
+        cx.notify();
+    }
+
+    fn open_screenshot(&mut self, cx: &mut Context<Self>) {
+        let Some(card) = &self.screenshot_card else {
+            return;
+        };
+        let path = card.path.clone();
+        match platform::open::open(&path) {
+            // 默认程序已经把窗口抢走了，卡片留着只会挡在新窗口后面。
+            Ok(()) => self.clear_screenshot_card(),
+            Err(message) => self.flash(message),
+        }
+        cx.notify();
+    }
+
+    fn reveal_screenshot(&mut self, cx: &mut Context<Self>) {
+        let Some(card) = &self.screenshot_card else {
+            return;
+        };
+        let path = card.path.clone();
+        match platform::reveal::reveal(&path) {
+            Ok(()) => self.clear_screenshot_card(),
+            Err(message) => self.flash(message),
+        }
+        cx.notify();
+    }
+
     fn toggle_fullscreen(&mut self, window: &mut Window) {
         window.toggle_fullscreen();
     }
@@ -963,6 +1137,9 @@ impl PlayerApp {
             self.menu = Some(Menu::Speed);
         } else if self.menu.is_some() {
             self.menu = None;
+        } else if self.screenshot_card.is_some() {
+            // 卡片是最后一个浮上来的东西，Esc 先收它，再考虑关面板、退全屏。
+            self.clear_screenshot_card();
         } else if self.settings.show_playlist {
             self.set_playlist_visible(false);
         } else if window.is_fullscreen() {
@@ -3546,6 +3723,110 @@ impl PlayerApp {
         )
     }
 
+    /// 截图卡片：预览 + 复制 / 打开 / 定位。
+    ///
+    /// 放左上角：画面底部是字幕、控件也在那儿，卡片压过去会挡住用户真正在看的东西。
+    fn render_screenshot_card(
+        &self,
+        top: Pixels,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement> {
+        let card = self.screenshot_card.as_ref()?;
+
+        let preview = match &card.thumb {
+            ScreenshotThumb::Ready(thumb) => img(thumb.clone()).size_full().into_any_element(),
+            ScreenshotThumb::Loading => placeholder("正在读取预览…"),
+            ScreenshotThumb::Failed => placeholder("预览不可用"),
+        };
+
+        Some(
+            div()
+                .id("screenshot-card")
+                .absolute()
+                .left(px(24.0))
+                .top(top)
+                .w(px(SCREENSHOT_CARD_WIDTH))
+                .rounded(px(12.0))
+                .bg(surface())
+                .border_1()
+                .border_color(gpui_kit::rgb(0x2c2c34))
+                .shadow_lg()
+                .overflow_hidden()
+                // 卡片浮在画面上：点击和按下都在这里吃掉，否则会漏到底下触发暂停。
+                .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
+                    cx.stop_propagation();
+                }))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                        cx.stop_propagation();
+                    }),
+                )
+                .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
+                    if let Some(card) = this.screenshot_card.as_mut() {
+                        card.hovered = *hovered;
+                    }
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .relative()
+                        .w_full()
+                        .h(px(SCREENSHOT_PREVIEW_HEIGHT))
+                        .bg(gpui_kit::rgb(0x08080a))
+                        .child(preview)
+                        .child(
+                            div()
+                                .absolute()
+                                .top(px(6.0))
+                                .right(px(6.0))
+                                .child(icon_button(
+                                    "screenshot-card-close",
+                                    IconName::X,
+                                    false,
+                                    false,
+                                    cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                        this.clear_screenshot_card();
+                                        cx.notify();
+                                    }),
+                                )),
+                        ),
+                )
+                .child(div().h(px(1.0)).w_full().bg(gpui_kit::rgb(0x2c2c34)))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .child(screenshot_card_action(
+                            "screenshot-card-copy",
+                            IconName::Copy,
+                            platform::clipboard::COPY_LABEL,
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.copy_screenshot(cx)
+                            }),
+                        ))
+                        .child(card_divider())
+                        .child(screenshot_card_action(
+                            "screenshot-card-open",
+                            IconName::ExternalLink,
+                            "打开",
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.open_screenshot(cx)
+                            }),
+                        ))
+                        .child(card_divider())
+                        .child(screenshot_card_action(
+                            "screenshot-card-reveal",
+                            IconName::FolderOpen,
+                            "定位",
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.reveal_screenshot(cx)
+                            }),
+                        )),
+                ),
+        )
+    }
+
     fn render_error(&self, panel: f32, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let (title, message) = match (&self.error, &self.startup_failure) {
             (Some(banner), _) => (banner.title, banner.body.clone()),
@@ -4020,6 +4301,7 @@ impl Render for PlayerApp {
             })
             .children(self.render_menu(panel_width, cx))
             .children(self.render_osd(osd_top, panel_width))
+            .children(self.render_screenshot_card(osd_top, cx))
             .when(bar_visible, |this| {
                 this.child(self.render_menu_bar(window, cx))
             })
