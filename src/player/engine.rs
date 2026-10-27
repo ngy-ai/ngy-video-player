@@ -266,8 +266,8 @@ struct Shared {
     state: Mutex<Snapshot>,
     events: UnboundedSender<PlayerEvent>,
     shutdown: AtomicBool,
-    /// 渲染目标尺寸（物理像素）。界面每次布局确定后写一次。
-    target: Mutex<TargetSize>,
+    /// 渲染目标：画布尺寸（物理像素）+ 拷帧时的旋转。界面每次布局确定后写一次。
+    target: Mutex<RenderTarget>,
     /// 渲染线程每次重绘后自增，界面据此判断画面是否已经更新过。
     frame_serial: AtomicU64,
     /// 是否有界面在等待新帧（没有就跳过渲染，省电）。
@@ -280,21 +280,23 @@ struct Shared {
     frame_pending: AtomicBool,
     /// 视频原始尺寸变化计数器，避免每帧都读两个属性。
     config_serial: AtomicU32,
+    /// 界面要求「就算没有新帧也重画一次」。画面比例、镜像这类设置不改变渲染
+    /// 目标尺寸，暂停时 mpv 也不会主动送帧，只能由界面点一下。
+    redraw: AtomicBool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct TargetSize {
+/// 渲染目标：mpv 往多大的画布上画，以及这帧画完要不要转。
+///
+/// 旋转没走 mpv 的 `video-rotate`：libmpv 的软件渲染路径（`MPV_RENDER_API_TYPE_SW`）
+/// 拿不到 VO 的 ROTATE90 能力位，那个属性只会改源矩形的裁切，像素一个都不转，
+/// 画面反而被裁烂（实测）。所以改成在拷帧时自己转——一次 memcpy 量级的操作，
+/// 换来的是三个平台、软硬解都一样的结果。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RenderTarget {
     width: u32,
     height: u32,
-}
-
-impl Default for TargetSize {
-    fn default() -> Self {
-        Self {
-            width: 0,
-            height: 0,
-        }
-    }
+    /// 顺时针角度，只取 0 / 90 / 180 / 270。
+    rotation: u16,
 }
 
 impl Shared {
@@ -314,7 +316,7 @@ pub struct Engine {
     commands: std::sync::mpsc::Sender<Command>,
     signal: Arc<RenderSignal>,
     threads: Mutex<Vec<JoinHandle<()>>>,
-    render_target: Mutex<TargetSize>,
+    render_target: Mutex<RenderTarget>,
     /// 进度条悬停预览用的第二个 mpv 实例。
     ///
     /// 第一次悬停时才创建：大多数会话根本不会碰进度条，没必要一启动就多开
@@ -337,11 +339,12 @@ impl Engine {
             state: Mutex::new(Snapshot::default()),
             events,
             shutdown: AtomicBool::new(false),
-            target: Mutex::new(TargetSize::default()),
+            target: Mutex::new(RenderTarget::default()),
             frame_serial: AtomicU64::new(0),
             needs_frames: AtomicBool::new(false),
             frame_pending: AtomicBool::new(false),
             config_serial: AtomicU32::new(0),
+            redraw: AtomicBool::new(false),
         });
 
         let handle = unsafe { (api.create)() };
@@ -397,7 +400,7 @@ impl Engine {
             commands,
             signal,
             threads: Mutex::new(vec![engine_thread, render_thread]),
-            render_target: Mutex::new(TargetSize::default()),
+            render_target: Mutex::new(RenderTarget::default()),
             thumbnail: Mutex::new(None),
             thumbnail_failed: AtomicBool::new(false),
         })
@@ -510,19 +513,22 @@ impl Engine {
         self.shared.frame_pending.store(false, Ordering::SeqCst);
     }
 
-    /// 界面在布局确定后调用：告诉取帧线程应该按多大尺寸渲染。
+    /// 界面在布局确定后调用：告诉取帧线程应该按多大尺寸渲染、要不要转。
     ///
-    /// 尺寸的比例**必须与视频区域一致**，mpv 才会在该区域内按视频自身比例
-    /// 排黑边；调用方负责按「不超过视频原始分辨率」等比缩放，这里只做范围夹取。
-    pub fn set_render_target(&self, width: u32, height: u32) {
-        let next = TargetSize {
+    /// 尺寸的比例**必须与画面设置想要的口径一致**，mpv 才会在这个画布里按
+    /// 视频自身比例排黑边；调用方负责按「不超过视频原始分辨率」等比缩放，
+    /// 这里只做范围夹取。
+    pub fn set_render_target(&self, width: u32, height: u32, rotation: u16) {
+        let next = RenderTarget {
             width: width.clamp(2, 7680),
             height: height.clamp(2, 4320),
+            rotation: rotation % 360,
         };
         let mut current = self.render_target.lock().unwrap_or_else(|e| e.into_inner());
         if *current != next {
             *current = next;
             *self.shared.target.lock().unwrap_or_else(|e| e.into_inner()) = next;
+            // 旋转变了但尺寸没变时也必须重画一次，否则暂停中的画面会一直保持旧角度。
             self.signal.wake();
         }
     }
@@ -530,6 +536,15 @@ impl Engine {
     pub fn target_size(&self) -> (u32, u32) {
         let target = *self.render_target.lock().unwrap_or_else(|e| e.into_inner());
         (target.width, target.height)
+    }
+
+    /// 要求取帧线程立刻重画一帧，即使 mpv 没有新画面。
+    ///
+    /// 画面比例、镜像这类设置只改变「同一帧怎么画」，渲染目标的尺寸可以不变；
+    /// 暂停时 mpv 也就不会送新帧，不点这一下界面上看到的还是旧画面。
+    pub fn request_redraw(&self) {
+        self.shared.redraw.store(true, Ordering::SeqCst);
+        self.signal.wake();
     }
 
     pub fn set_needs_frames(&self, needs: bool) {
@@ -1135,7 +1150,7 @@ fn render_loop(
     // 复用缓冲区：尺寸不变时不重新分配。mpv 文档要求 stride 与指针按 64 字节对齐，
     // 否则内部会走「整帧拷贝」的慢路径，所以这里自己做对齐，而不是直接扔一个 Vec。
     let mut buffer = FrameBuffer::default();
-    let mut current = TargetSize::default();
+    let mut current = RenderTarget::default();
     // 「区域尺寸变了，但还没按新尺寸送出一帧」。
     //
     // 暂停时 mpv 不会再产生新帧（`RENDER_UPDATE_FRAME` 始终为假），而界面是把
@@ -1169,10 +1184,13 @@ fn render_loop(
         }
 
         // mpv 告诉我们有帧才渲染；没有就继续等，避免空转。
-        // 但尺寸变了要例外：暂停时这就是唯一能让画面重新适配的机会。
+        // 但两种「界面主动要求」要例外：暂停时这就是唯一能让画面重新适配的机会。
+        //   * 尺寸变了（拖窗口、开关播放列表）
+        //   * 换滤镜/比例这类只改画法、不改尺寸的设置（会走 request_redraw）
+        let forced = shared.redraw.swap(false, Ordering::SeqCst) && rendered_once;
         let flags = unsafe { (api.render_context_update)(context) };
         let fresh = flags & ffi::RENDER_UPDATE_FRAME != 0;
-        if !fresh && !(resized && rendered_once) {
+        if !fresh && !forced && !(resized && rendered_once) {
             continue;
         }
 
@@ -1189,7 +1207,7 @@ fn render_loop(
             continue;
         }
 
-        let image = buffer.to_image();
+        let image = buffer.to_image(current.rotation);
         shared.frame_serial.fetch_add(1, Ordering::SeqCst);
         shared.notify(PlayerEvent::Frame(Arc::new(image)));
         unsafe { (api.render_context_report_swap)(context) };

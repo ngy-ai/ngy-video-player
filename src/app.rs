@@ -9,7 +9,7 @@ use crate::{
     formats, platform,
     player::{Command, EndReason, Engine, LoopMode, PlayerEvent, Snapshot, TrackKind},
     playlist::{self, Playlist, PlaylistSet},
-    settings::{OnTop, Settings},
+    settings::{OnTop, Rotation, Settings, VideoAspect},
     ui::{
         self, bg, format_time, icon, icon_button, pill_button, surface, text, text_faint,
         text_muted,
@@ -19,9 +19,9 @@ use anyhow::Result;
 use futures::{StreamExt as _, channel::mpsc::UnboundedReceiver};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, Bounds, ClickEvent, Context, Corners, CursorStyle, ExternalPaths, FocusHandle,
-    Hsla, IntoElement, KeyBinding, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, RenderImage, ScrollDelta,
+    AnyElement, App, Bounds, ClickEvent, Context, Corners, CursorStyle, ElementId, ExternalPaths,
+    FocusHandle, Hsla, IntoElement, KeyBinding, KeyDownEvent, Modifiers, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, RenderImage, ScrollDelta,
     ScrollWheelEvent, SharedString, Styled, Window, WindowBounds, WindowOptions, actions, canvas,
     div, img, point, px, size,
 };
@@ -53,6 +53,7 @@ actions!(
         SpeedDown,
         StopPlayback,
         ToggleHelp,
+        TogglePicture,
         ExitOverlay,
         DeleteSelected,
     ]
@@ -117,6 +118,73 @@ fn format_size(bytes: u64) -> String {
         unit += 1;
     }
     format!("{value:.1} {}", UNITS[unit])
+}
+
+/// 画面设置里的一行：左边指示器 + 文字，整行可点。
+///
+/// `checkbox` 只决定指示器是圆是方——单选和复选在交互上没区别（都是点一下生效），
+/// 区分形状纯粹是为了让「比例/旋转只能选一个」这件事一眼看得出来。
+fn picture_option(
+    id: impl Into<ElementId>,
+    label: &'static str,
+    selected: bool,
+    checkbox: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    let indicator = div()
+        .size(px(16.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .border_1()
+        .border_color(if selected { ui::accent() } else { ui::track() })
+        .when(checkbox, |this| this.rounded(px(4.0)))
+        .when(!checkbox, |this| this.rounded_full())
+        .when(selected, |this| {
+            this.bg(ui::accent())
+                .child(icon(IconName::Check, 11.0, text()))
+        });
+
+    div()
+        .id(id)
+        .flex_1()
+        .min_w(px(0.0))
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .h(px(30.0))
+        .px(px(8.0))
+        .rounded(px(6.0))
+        .cursor(CursorStyle::PointingHand)
+        .hover(|style| style.bg(ui::surface_hover()))
+        .on_click(
+            move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
+                // 面板底下的视频区域也会收到同位置的点击，不拦住会顺手切换播放/暂停。
+                cx.stop_propagation();
+                on_click(event, window, cx);
+            },
+        )
+        .child(indicator)
+        .child(div().text_size(px(13.0)).text_color(text()).child(label))
+        .into_any_element()
+}
+
+/// 一组画面设置：小标题 + 若干行。
+fn picture_group(title: &'static str, rows: Vec<AnyElement>) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(2.0))
+        .child(
+            div()
+                .pb(px(4.0))
+                .text_size(px(12.0))
+                .text_color(text_muted())
+                .child(title),
+        )
+        .children(rows)
+        .into_any_element()
 }
 
 /// 右键菜单里的一行：图标 + 文字，整行可点。
@@ -496,6 +564,9 @@ pub struct PlayerApp {
     screenshot_card: Option<ScreenshotCard>,
     error: Option<Banner>,
     show_help: bool,
+    /// 「画面设置」面板是否展开。比例/旋转/镜像都直接写在 `settings` 里，
+    /// 这里只记「面板开着没有」。
+    show_picture: bool,
     /// 悬浮菜单（字幕 / 音轨 / 循环）当前展开的是哪一个。
     menu: Option<Menu>,
     /// 顶部菜单栏当前展开的是哪一个。
@@ -635,6 +706,7 @@ enum BarAction {
     TogglePlaylist,
     ToggleFullscreen,
     ToggleHelp,
+    TogglePicture,
     TakeScreenshot,
     SetAsDefaultPlayer,
     OpenDefaultApps,
@@ -696,6 +768,7 @@ impl PlayerApp {
             screenshot_card: None,
             error: None,
             show_help: false,
+            show_picture: false,
             menu: None,
             menu_bar: None,
             association_status: platform::associations::Status::default(),
@@ -717,6 +790,7 @@ impl PlayerApp {
                 name: "hwdec".into(),
                 value: app.settings.hwdec.clone(),
             });
+            app.apply_picture();
         }
 
         app.consume_events(event_rx, cx);
@@ -883,6 +957,7 @@ impl PlayerApp {
             || self.dragging.is_some()
             || self.volume_dragging
             || self.show_help
+            || self.show_picture
             || self.playlist().is_empty()
     }
 
@@ -1168,10 +1243,99 @@ impl PlayerApp {
         self.flash(format!("置顶：{}", mode.label()));
     }
 
+    // -- 画面设置 ----------------------------------------------------------
+
+    /// 面板开合。和帮助面板一样是模态的，所以顺手关掉菜单，免得两者叠在一起。
+    fn set_picture_visible(&mut self, visible: bool) {
+        self.show_picture = visible;
+        if visible {
+            self.menu = None;
+            self.menu_bar = None;
+        }
+    }
+
+    fn set_video_aspect(&mut self, mode: VideoAspect) {
+        if self.settings.video_aspect == mode {
+            return;
+        }
+        self.settings.video_aspect = mode;
+        self.settings.save();
+        self.apply_picture();
+    }
+
+    fn set_rotation(&mut self, rotation: Rotation) {
+        if self.settings.video_rotate == rotation {
+            return;
+        }
+        self.settings.video_rotate = rotation;
+        self.settings.save();
+        // 旋转不动 mpv 的属性，只改取帧时的那次转置；渲染目标一变就会重画一帧。
+        self.apply_picture();
+    }
+
+    fn toggle_mirror(&mut self, horizontal: bool) {
+        if horizontal {
+            self.settings.mirror_h = !self.settings.mirror_h;
+        } else {
+            self.settings.mirror_v = !self.settings.mirror_v;
+        }
+        self.settings.save();
+        self.apply_picture();
+    }
+
+    /// 把画面设置整体推给 mpv。
+    ///
+    /// 每次都全量下发而不是算差量：这几个属性都很便宜，而「算差量」要求界面
+    /// 精确记住 mpv 那侧的现状，一旦有一次命令失败就会长期错位。
+    ///
+    /// 旋转**不在这里**——libmpv 的软件渲染路径不认 `video-rotate`，
+    /// 那一圈是在取帧时自己转的（见 `player::frame`）。
+    fn apply_picture(&self) {
+        let aspect = self.settings.video_aspect;
+        self.send(Command::SetOption {
+            name: "video-aspect-override".into(),
+            value: aspect.override_value().unwrap_or("no").to_string(),
+        });
+        // 拉伸靠关掉等比缩放；裁剪靠 panscan 把放大的那部分裁掉，两者互斥。
+        self.send(Command::SetOption {
+            name: "keepaspect".into(),
+            value: if aspect.stretches() { "no" } else { "yes" }.to_string(),
+        });
+        self.send(Command::SetOption {
+            name: "panscan".into(),
+            value: if aspect.crops() { "1.0" } else { "0.0" }.to_string(),
+        });
+        // 镜像在 mpv 里是滤镜链，不是开关属性：直接写整条 `vf` 才是幂等的，
+        // 用 `hflip` 命令的话连点两次会互相抵消。空串就是「一条滤镜都不挂」。
+        let mut filters = Vec::new();
+        if self.settings.mirror_h {
+            filters.push("hflip");
+        }
+        if self.settings.mirror_v {
+            filters.push("vflip");
+        }
+        self.send(Command::SetOption {
+            name: "vf".into(),
+            value: filters.join(","),
+        });
+        // 旋转由我们自己算，显式清零，防止用户自己的 mpv 配置把它又打开一次。
+        self.send(Command::SetOption {
+            name: "video-rotate".into(),
+            value: "0".to_string(),
+        });
+        // 上面这些都不改渲染目标的尺寸：暂停时 mpv 不会送新帧，
+        // 不主动点一下，面板里选完东西画面纹丝不动。
+        if let Some(engine) = &self.engine {
+            engine.request_redraw();
+        }
+    }
+
     /// Esc 的语义：一层一层往回退，而不是直接全关。
     fn exit_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.show_help {
             self.show_help = false;
+        } else if self.show_picture {
+            self.show_picture = false;
         } else if self.file_info.is_some() {
             self.file_info = None;
         } else if self.item_menu.is_some() {
@@ -1755,11 +1919,11 @@ impl PlayerApp {
         }
     }
 
-    /// 告诉取帧线程应该按多大尺寸渲染。
+    /// 告诉取帧线程应该按多大尺寸、什么角度渲染。
     ///
-    /// 传的是**整个视频区域**的物理像素（不是等比适配后的画面矩形）：mpv 在给定
-    /// 尺寸里自己按视频比例排黑边，我们再把这个结果铺满区域。这样即使某一帧的
-    /// 宽高比信息还没跟上（刚切歌），画面也不会被拉伸，最多黑边宽度短暂不对。
+    /// 传的是「画面在视频区域里该占的那一块」的物理像素，而不是整个区域：
+    /// 选了 4:3 时这块就是 4:3，mpv 在里面按视频比例排好，界面再把它等比贴进
+    /// 区域、四周补黑边。铺满那两档直接把区域本身当画布，变形或裁剪都交给 mpv。
     ///
     /// 区域比视频原始分辨率大时按原始分辨率渲染：放大不增加细节，只是让每帧
     /// 多拷几 MB。
@@ -1787,19 +1951,50 @@ impl PlayerApp {
             return;
         }
 
-        let video_width = self.snapshot.video_width as f32;
-        let video_height = self.snapshot.video_height as f32;
-        let fit = if video_width > 0.0 && video_height > 0.0 {
-            (video_width / area_width)
-                .min(video_height / area_height)
+        let area_aspect = area_width / area_height;
+        let aspect = self.picture_aspect(area_aspect);
+        // 在区域里按目标比例取最大的框；比例一致时就是整个区域。
+        let (canvas_width, canvas_height) = if area_aspect > aspect {
+            (area_height * aspect, area_height)
+        } else {
+            (area_width, area_width / aspect)
+        };
+
+        // 画布是「旋转之前」的朝向，所以这里直接和片源的宽高比，不用换轴。
+        let native_width = self.snapshot.video_width as f32;
+        let native_height = self.snapshot.video_height as f32;
+        let fit = if native_width > 0.0 && native_height > 0.0 {
+            (native_width / canvas_width)
+                .min(native_height / canvas_height)
                 .min(1.0)
         } else {
             1.0
         };
 
-        let width = (area_width * fit).round().max(2.0) as u32;
-        let height = (area_height * fit).round().max(2.0) as u32;
-        engine.set_render_target(width, height);
+        let width = (canvas_width * fit).round().max(2.0) as u32;
+        let height = (canvas_height * fit).round().max(2.0) as u32;
+        engine.set_render_target(width, height, self.settings.video_rotate.degrees());
+    }
+
+    /// 画面该按什么比例排。
+    ///
+    /// 注意这里说的是**旋转之前**的画布：4:3 转 90 度之后在屏幕上是 3:4，
+    /// 那正是「把 4:3 的画面竖起来看」应有的样子。而铺满那两档的诉求是
+    /// 「占满窗口」，所以要按转过之后的结果倒推画布比例。
+    fn picture_aspect(&self, area_aspect: f32) -> f32 {
+        let swapped = self.settings.video_rotate.swaps_axes();
+        let aspect = match self.settings.video_aspect {
+            VideoAspect::Stretch | VideoAspect::Crop => {
+                if swapped {
+                    area_aspect.recip()
+                } else {
+                    area_aspect
+                }
+            }
+            mode => mode.ratio().unwrap_or_else(|| self.snapshot.aspect()),
+        };
+        // 极端值（比如片源报了个错误的宽高比）会让画布退化成一条线，夹一下。
+        aspect.clamp(0.1, 10.0)
     }
 
     fn progress_value(&self) -> f64 {
@@ -2896,6 +3091,11 @@ impl PlayerApp {
                         .hint("F")
                         .checked(window.is_fullscreen()),
                 ));
+                items.push(BarItem::Entry(
+                    BarEntry::new("画面设置…", TogglePicture)
+                        .hint("A")
+                        .checked(self.show_picture),
+                ));
                 items.push(BarItem::Separator);
                 // 置顶要拿原生窗口句柄：Wayland 没给普通窗口留这个能力，只能置灰并说明。
                 let on_top = platform::topmost::supported(window);
@@ -2972,6 +3172,7 @@ impl PlayerApp {
             }
             BarAction::ToggleFullscreen => self.toggle_fullscreen(window),
             BarAction::ToggleHelp => self.show_help = !self.show_help,
+            BarAction::TogglePicture => self.set_picture_visible(!self.show_picture),
             BarAction::TakeScreenshot => self.take_screenshot(cx),
             BarAction::SetAsDefaultPlayer => self.set_default_player(),
             BarAction::OpenDefaultApps => self.open_default_apps(),
@@ -4087,6 +4288,162 @@ impl PlayerApp {
         )
     }
 
+    /// 「画面设置」面板：比例 / 旋转 / 镜像三组。
+    ///
+    /// 用居中模态而不是贴在控制条上方的下拉：三组加起来十几项，挤在控制条上方
+    /// 会把画面压掉一截；而这几项都是「调一次就不动」的，不需要随手可达。
+    fn render_picture(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        if !self.show_picture {
+            return None;
+        }
+
+        let aspect = self.settings.video_aspect;
+        let rotation = self.settings.video_rotate;
+
+        let aspect_rows: Vec<AnyElement> = VideoAspect::ALL
+            .chunks(2)
+            .enumerate()
+            .map(|(row, pair)| {
+                div()
+                    .flex()
+                    .gap(px(4.0))
+                    .children(pair.iter().enumerate().map(|(column, mode)| {
+                        picture_option(
+                            format!("picture-aspect-{row}-{column}"),
+                            mode.label(),
+                            aspect == *mode,
+                            false,
+                            cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                                this.set_video_aspect(*mode);
+                                cx.notify();
+                            }),
+                        )
+                    }))
+                    .into_any_element()
+            })
+            .collect();
+
+        let rotation_rows: Vec<AnyElement> = Rotation::ALL
+            .chunks(2)
+            .enumerate()
+            .map(|(row, pair)| {
+                div()
+                    .flex()
+                    .gap(px(4.0))
+                    .children(pair.iter().enumerate().map(|(column, angle)| {
+                        picture_option(
+                            format!("picture-rotate-{row}-{column}"),
+                            angle.label(),
+                            rotation == *angle,
+                            false,
+                            cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                                this.set_rotation(*angle);
+                                cx.notify();
+                            }),
+                        )
+                    }))
+                    .into_any_element()
+            })
+            .collect();
+
+        let mirror_row = div()
+            .flex()
+            .gap(px(4.0))
+            .child(picture_option(
+                "picture-mirror-h",
+                "水平镜像",
+                self.settings.mirror_h,
+                true,
+                cx.listener(|this, _: &ClickEvent, _window, cx| {
+                    this.toggle_mirror(true);
+                    cx.notify();
+                }),
+            ))
+            .child(picture_option(
+                "picture-mirror-v",
+                "垂直镜像",
+                self.settings.mirror_v,
+                true,
+                cx.listener(|this, _: &ClickEvent, _window, cx| {
+                    this.toggle_mirror(false);
+                    cx.notify();
+                }),
+            ))
+            .into_any_element();
+
+        Some(
+            div()
+                .id("picture-settings")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(gpui_kit::rgba(0x000000b8))
+                // 只拦住鼠标按下，让同位置的视频画面收不到这次点击。
+                //
+                // 这里刻意不用 `on_click` 去关面板：GPUI 里祖先元素的 click 监听
+                // 会先于里面的选项执行，一旦在遮罩层上关面板，点选项就再也不生效了。
+                // 收起面板交给右上角的 X 和 Esc，和「查看格式」面板保持一致。
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                        cx.stop_propagation();
+                    }),
+                )
+                .child(
+                    div()
+                        .id("picture-settings-card")
+                        .w(px(520.0))
+                        .p(px(20.0))
+                        .rounded(px(14.0))
+                        .bg(surface())
+                        .border_1()
+                        .border_color(gpui_kit::rgb(0x2c2c34))
+                        .flex()
+                        .flex_col()
+                        .gap(px(16.0))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .text_size(px(15.0))
+                                        .text_color(text())
+                                        .child("画面设置"),
+                                )
+                                .child(icon_button(
+                                    "picture-close",
+                                    IconName::X,
+                                    false,
+                                    false,
+                                    cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                        this.set_picture_visible(false);
+                                        cx.notify();
+                                    }),
+                                )),
+                        )
+                        .child(picture_group("画面比例", aspect_rows))
+                        .child(picture_group("画面旋转", rotation_rows))
+                        .child(picture_group("画面镜像", vec![mirror_row]))
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(text_faint())
+                                .child("这几项跟着偏好保存，换片和重启都保持"),
+                        ),
+                ),
+        )
+    }
+
     fn render_help(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         if !self.show_help {
             return None;
@@ -4108,6 +4465,7 @@ impl PlayerApp {
             ("S", "截图"),
             ("O", "打开文件"),
             ("F / 双击", "全屏"),
+            ("A", "画面设置"),
             ("Esc", "退出全屏 / 关闭浮层"),
             ("?", "显示 / 隐藏本帮助"),
         ];
@@ -4236,6 +4594,10 @@ impl Render for PlayerApp {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ToggleHelp, _window, cx| this.toggle_help(cx)))
+            .on_action(cx.listener(|this, _: &TogglePicture, _window, cx| {
+                this.set_picture_visible(!this.show_picture);
+                cx.notify();
+            }))
             .on_action(
                 cx.listener(|this, _: &TakeScreenshot, _window, cx| this.take_screenshot(cx)),
             )
@@ -4370,6 +4732,7 @@ impl Render for PlayerApp {
             // 右键菜单在普通浮层之上、模态面板之下。
             .children(self.render_item_menu(cx))
             .children(self.render_help(cx))
+            .children(self.render_picture(cx))
             .children(self.render_file_info(cx))
     }
 }
@@ -4394,6 +4757,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("down", VolumeDown, None),
         KeyBinding::new("m", ToggleMute, None),
         KeyBinding::new("f", ToggleFullscreen, None),
+        KeyBinding::new("a", TogglePicture, None),
         KeyBinding::new("l", TogglePlaylist, None),
         KeyBinding::new("o", OpenFile, None),
         KeyBinding::new("n", NextFile, None),

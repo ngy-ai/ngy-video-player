@@ -426,7 +426,9 @@ impl Worker {
         let rendered = frame::render_sw(&self.api, self.context, width, height, &mut self.buffer);
         unsafe { (self.api.render_context_report_swap)(self.context) };
         match rendered {
-            Ok(()) => Some(self.buffer.to_image()),
+            // 预览图不跟着主画面的旋转走：它只是「这一秒大概长什么样」，
+            // 按原始朝向更好认，也少一次逐像素转置。
+            Ok(()) => Some(self.buffer.to_image(0)),
             Err(error) => {
                 log_debug!("缩略图渲染失败: {error:#}");
                 None

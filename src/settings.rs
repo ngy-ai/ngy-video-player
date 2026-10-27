@@ -35,6 +35,134 @@ impl OnTop {
     }
 }
 
+/// 画面比例。前四档是「按这个比例显示」，后两档是铺满窗口的两种办法。
+///
+/// 注意「铺满」和「比例」是互斥的：选了 4:3 就不可能同时铺满 16:9 的窗口，
+/// 所以用一个枚举而不是「比例 + 铺满开关」两个字段，界面里也就能排成一组单选。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VideoAspect {
+    /// 跟随片源自身的显示比例。
+    #[default]
+    Source,
+    R4x3,
+    R16x9,
+    R21x9,
+    /// 铺满屏幕（拉伸）：不保持比例，直接拉满窗口，会变形。
+    Stretch,
+    /// 铺满屏幕（裁剪）：保持比例放大到铺满，超出的部分裁掉。
+    Crop,
+}
+
+impl VideoAspect {
+    /// 界面里的全部选项，顺序就是展示顺序。
+    pub const ALL: [VideoAspect; 6] = [
+        VideoAspect::Source,
+        VideoAspect::R4x3,
+        VideoAspect::R16x9,
+        VideoAspect::R21x9,
+        VideoAspect::Stretch,
+        VideoAspect::Crop,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            VideoAspect::Source => "原始比例",
+            VideoAspect::R4x3 => "4:3",
+            VideoAspect::R16x9 => "16:9",
+            VideoAspect::R21x9 => "21:9",
+            VideoAspect::Stretch => "铺满屏幕（拉伸）",
+            VideoAspect::Crop => "铺满屏幕（裁剪）",
+        }
+    }
+
+    /// 交给 mpv 的 `video-aspect-override` 取值；`None` 表示跟随片源。
+    ///
+    /// 铺满那两档也不覆盖比例：拉伸由 `keepaspect=no` 完成，裁剪由 `panscan` 完成。
+    pub fn override_value(self) -> Option<&'static str> {
+        match self {
+            VideoAspect::R4x3 => Some("4:3"),
+            VideoAspect::R16x9 => Some("16:9"),
+            VideoAspect::R21x9 => Some("21:9"),
+            VideoAspect::Source | VideoAspect::Stretch | VideoAspect::Crop => None,
+        }
+    }
+
+    /// 画面在窗口里固定占用的宽高比；`None` 表示由视频区域本身决定（铺满）。
+    pub fn ratio(self) -> Option<f32> {
+        match self {
+            VideoAspect::R4x3 => Some(4.0 / 3.0),
+            VideoAspect::R16x9 => Some(16.0 / 9.0),
+            VideoAspect::R21x9 => Some(21.0 / 9.0),
+            VideoAspect::Source | VideoAspect::Stretch | VideoAspect::Crop => None,
+        }
+    }
+
+    /// 是否需要 mpv 关掉等比缩放（拉伸）。
+    pub fn stretches(self) -> bool {
+        self == VideoAspect::Stretch
+    }
+
+    /// 是否需要 mpv 放大并裁掉溢出部分。
+    pub fn crops(self) -> bool {
+        self == VideoAspect::Crop
+    }
+
+    fn tag(self) -> &'static str {
+        match self {
+            VideoAspect::Source => "source",
+            VideoAspect::R4x3 => "4:3",
+            VideoAspect::R16x9 => "16:9",
+            VideoAspect::R21x9 => "21:9",
+            VideoAspect::Stretch => "stretch",
+            VideoAspect::Crop => "crop",
+        }
+    }
+}
+
+/// 画面旋转。只留 90 度的整数档：mpv 的旋转滤镜按 90 度工作，任意角度的需求
+/// 在播放器里几乎不存在，多一档「自定义角度」只是给自己找边界情况。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Rotation {
+    #[default]
+    None,
+    Cw90,
+    Cw180,
+    Cw270,
+}
+
+impl Rotation {
+    pub const ALL: [Rotation; 4] = [
+        Rotation::None,
+        Rotation::Cw90,
+        Rotation::Cw180,
+        Rotation::Cw270,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Rotation::None => "不旋转",
+            Rotation::Cw90 => "90°",
+            Rotation::Cw180 => "180°",
+            Rotation::Cw270 => "270°",
+        }
+    }
+
+    /// 顺时针角度，写进配置，也决定拷帧时怎么转。
+    pub fn degrees(self) -> u16 {
+        match self {
+            Rotation::None => 0,
+            Rotation::Cw90 => 90,
+            Rotation::Cw180 => 180,
+            Rotation::Cw270 => 270,
+        }
+    }
+
+    /// 90/270 度时画面的长宽互换，排版和「不超过原始分辨率」的夹取都要按换过的算。
+    pub fn swaps_axes(self) -> bool {
+        matches!(self, Rotation::Cw90 | Rotation::Cw270)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -59,6 +187,14 @@ pub struct Settings {
     pub fullscreen: bool,
     /// 硬件解码：`auto-safe` / `no` / `auto-copy`。
     pub hwdec: String,
+    /// 画面比例。和「窗口大小」无关，是用户对画质的偏好，所以换片、重启都保留。
+    pub video_aspect: VideoAspect,
+    /// 画面旋转角度。
+    pub video_rotate: Rotation,
+    /// 水平镜像（左右翻转）。
+    pub mirror_h: bool,
+    /// 垂直镜像（上下翻转）。
+    pub mirror_v: bool,
     /// 启动时是否自动维护文件关联（把注册项按当前 exe 路径重写一遍）。
     ///
     /// 记的是**用户意图**，不是「当前有没有注册」——后者每次现场问操作系统，
@@ -81,6 +217,10 @@ impl Default for Settings {
             playlist_width: 300.0,
             fullscreen: false,
             hwdec: "no".to_string(),
+            video_aspect: VideoAspect::Source,
+            video_rotate: Rotation::None,
+            mirror_h: false,
+            mirror_v: false,
             maintain_associations: true,
         }
     }
@@ -230,5 +370,42 @@ impl OnTop {
             OnTop::Playing => "playing",
             OnTop::Always => "always",
         }
+    }
+}
+
+/// 比例按 `"4:3"` 这样的字面量存：配置文件是给人看的，改成数字下标
+/// 以后调整选项顺序就会悄悄改变用户的选择。
+impl Serialize for VideoAspect {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.tag())
+    }
+}
+
+impl<'de> Deserialize<'de> for VideoAspect {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Ok(VideoAspect::ALL
+            .into_iter()
+            .find(|mode| mode.tag() == text)
+            .unwrap_or_default())
+    }
+}
+
+/// 旋转存成角度而不是枚举名：手改配置的人一眼能看懂 `"video_rotate": 90`。
+impl Serialize for Rotation {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u16(self.degrees())
+    }
+}
+
+impl<'de> Deserialize<'de> for Rotation {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // 认不出来的角度（手误、别的版本写进来的）一律当作不旋转，
+        // 而不是让整份配置解析失败。
+        let degrees = u16::deserialize(deserializer)?;
+        Ok(Rotation::ALL
+            .into_iter()
+            .find(|rotation| rotation.degrees() == degrees)
+            .unwrap_or_default())
     }
 }
