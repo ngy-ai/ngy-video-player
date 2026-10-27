@@ -69,6 +69,28 @@ fn format_speed(speed: f64) -> String {
     format!("{text}×")
 }
 
+/// 自定义滑块气泡上的倍速：整数档写成 `1.0×`，更细的档位照实显示 `1.25×`。
+fn format_speed_value(speed: f64) -> String {
+    let rounded = (speed * 100.0).round() / 100.0;
+    if (rounded * 10.0 - (rounded * 10.0).round()).abs() < 0.001 {
+        format!("{rounded:.1}×")
+    } else {
+        format!("{rounded:.2}×")
+    }
+}
+
+/// 滑块两端的量程标签。固定宽度，滑轨不会因为数字长短而左右跳。
+fn speed_edge_label(label: &'static str, width: f32) -> impl IntoElement {
+    div()
+        .w(px(width))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(px(11.0))
+        .text_color(text_faint())
+        .child(label)
+}
+
 /// `8_400_000_000` → `8.4 GB`。文件大小用二进制单位，和资源管理器说的一致。
 fn format_size(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
@@ -242,6 +264,13 @@ fn association_status_line(status: &platform::associations::Status, supported: b
 
 const SEEK_STEP: f64 = 5.0;
 const VOLUME_STEP: f64 = 5.0;
+/// 倍速菜单里的固定档位。自定义滑块的量程比它宽，两边共用同一套显示格式。
+const SPEED_PRESETS: [f64; 9] = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0];
+/// 自定义倍速滑块的量程，与面板上标出的 0.1–5.0 一致。
+const SPEED_MIN: f64 = 0.1;
+const SPEED_MAX: f64 = 5.0;
+/// 滑块的最小步进：这个宽度下拖到 0.01 也选不准，0.05 已经够用且数字好读。
+const SPEED_STEP: f64 = 0.05;
 /// 触控板走的是像素增量，攒够这么远算「一格」，走一帧。
 const FRAME_SCROLL_PX: f32 = 48.0;
 const CONTROLS_IDLE: Duration = Duration::from_millis(2600);
@@ -350,6 +379,9 @@ pub struct PlayerApp {
     progress_bounds: Rc<Cell<Bounds<Pixels>>>,
     volume_bounds: Rc<Cell<Bounds<Pixels>>>,
     volume_dragging: bool,
+    /// 自定义倍速滑块的 bounds，由 canvas 在 prepaint 阶段写回。
+    speed_bounds: Rc<Cell<Bounds<Pixels>>>,
+    speed_dragging: bool,
     /// Ctrl/⌘ + 滚轮的像素余量：触控板一次滑动拆成很多小增量，攒够一格才走一帧。
     frame_scroll: f32,
     /// 进度条悬停预览；`None` 表示鼠标不在进度条上。
@@ -389,7 +421,16 @@ enum Menu {
     Subtitle,
     Audio,
     Speed,
+    /// 倍速菜单里的自定义滑块，是 `Speed` 的第二层。
+    SpeedCustom,
     Loop,
+}
+
+impl Menu {
+    /// 倍速按钮按下时，预设列表和自定义面板算同一个浮层：再点一次一起收起。
+    fn is_speed(self) -> bool {
+        matches!(self, Menu::Speed | Menu::SpeedCustom)
+    }
 }
 
 /// 悬浮菜单里的一项点击后要做什么。
@@ -397,6 +438,8 @@ enum Menu {
 enum MenuAction {
     Command(Command),
     Loop(LoopMode),
+    /// 从预设列表进入自定义倍速面板。
+    SpeedCustom,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -546,6 +589,8 @@ impl PlayerApp {
             progress_bounds: Rc::new(Cell::new(Bounds::default())),
             volume_bounds: Rc::new(Cell::new(Bounds::default())),
             volume_dragging: false,
+            speed_bounds: Rc::new(Cell::new(Bounds::default())),
+            speed_dragging: false,
             frame_scroll: 0.0,
             hover: None,
             preview_request: None,
@@ -809,6 +854,30 @@ impl PlayerApp {
         cx.notify();
     }
 
+    /// 把自定义滑块的横坐标换算成倍速。
+    ///
+    /// 拖动过程里不弹 OSD：数字就在面板的气泡上，再盖一层反而挡住画面。
+    fn set_speed_from_x(&mut self, x: Pixels, cx: &mut Context<Self>) {
+        let bounds = self.speed_bounds.get();
+        let width = f32::from(bounds.size.width) as f64;
+        if width <= 1.0 {
+            return;
+        }
+        let offset = (f32::from(x) - f32::from(bounds.origin.x)) as f64;
+        let ratio = (offset / width).clamp(0.0, 1.0);
+        let steps = (ratio * (SPEED_MAX - SPEED_MIN) / SPEED_STEP).round();
+        let speed = (SPEED_MIN + steps * SPEED_STEP).clamp(SPEED_MIN, SPEED_MAX);
+        let next = (speed * 100.0).round() / 100.0;
+        // 鼠标在同一个像素里抖动时别反复给 mpv 发同一条命令。
+        if (self.snapshot.speed - next).abs() < 0.001 {
+            return;
+        }
+        self.snapshot.speed = next;
+        self.settings.speed = next;
+        self.send(Command::SetSpeed(next));
+        cx.notify();
+    }
+
     fn set_loop(&mut self, mode: LoopMode, cx: &mut Context<Self>) {
         self.settings.loop_mode = mode;
         self.flash(mode.label());
@@ -829,6 +898,9 @@ impl PlayerApp {
             self.item_menu = None;
         } else if self.menu_bar.is_some() {
             self.menu_bar = None;
+        } else if self.menu == Some(Menu::SpeedCustom) {
+            // 自定义面板是倍速菜单的第二层，Esc 先退回预设列表。
+            self.menu = Some(Menu::Speed);
         } else if self.menu.is_some() {
             self.menu = None;
         } else if self.settings.show_playlist {
@@ -1975,9 +2047,15 @@ impl PlayerApp {
                         "speed",
                         IconName::Gauge,
                         format_speed(snapshot.speed),
-                        self.menu == Some(Menu::Speed) || (snapshot.speed - 1.0).abs() > 0.001,
+                        self.menu.is_some_and(Menu::is_speed)
+                            || (snapshot.speed - 1.0).abs() > 0.001,
                         cx.listener(|this, _: &ClickEvent, _window, cx| {
-                            this.menu = (this.menu != Some(Menu::Speed)).then_some(Menu::Speed);
+                            // 预设列表和自定义面板是同一层，展开状态下再点一次直接收起。
+                            this.menu = if this.menu.is_some_and(Menu::is_speed) {
+                                None
+                            } else {
+                                Some(Menu::Speed)
+                            };
                             this.menu_bar = None;
                             this.poke();
                             cx.notify();
@@ -2047,20 +2125,40 @@ impl PlayerApp {
             )
     }
 
-    fn render_menu(&self, panel: f32, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    fn render_menu(&self, panel: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
         let menu = self.menu?;
+        // 自定义倍速是一块独立面板（标题栏 + 滑块），不套列表布局。
+        if menu == Menu::SpeedCustom {
+            return Some(self.render_speed_panel(panel, cx));
+        }
         let mut entries: Vec<(String, bool, Option<MenuAction>)> = Vec::new();
 
         match menu {
             Menu::Speed => {
-                for speed in [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0] {
+                for speed in SPEED_PRESETS {
                     entries.push((
                         format_speed(speed),
                         (self.snapshot.speed - speed).abs() < 0.001,
                         Some(MenuAction::Command(Command::SetSpeed(speed))),
                     ));
                 }
+                // 用键盘调出来的档位（如 1.15×）不在预设里，直接在这一行标出来，
+                // 否则打开菜单看到的是一排都没选中的数字。
+                let custom = !SPEED_PRESETS
+                    .iter()
+                    .any(|preset| (self.snapshot.speed - preset).abs() < 0.001);
+                entries.push((
+                    if custom {
+                        format!("自定义倍数 · {}", format_speed_value(self.snapshot.speed))
+                    } else {
+                        "自定义倍数…".to_string()
+                    },
+                    custom,
+                    Some(MenuAction::SpeedCustom),
+                ));
             }
+            // 上面已经单独返回，这里不需要内容。
+            Menu::SpeedCustom => {}
             Menu::Loop => {
                 for mode in [LoopMode::Off, LoopMode::All, LoopMode::One] {
                     entries.push((
@@ -2155,10 +2253,19 @@ impl PlayerApp {
                                 this.on_click(cx.listener(
                                     move |this, _: &ClickEvent, _window, cx| {
                                         match action.clone() {
-                                            MenuAction::Command(command) => this.send(command),
-                                            MenuAction::Loop(mode) => this.set_loop(mode, cx),
+                                            MenuAction::Command(command) => {
+                                                this.send(command);
+                                                this.menu = None;
+                                            }
+                                            MenuAction::Loop(mode) => {
+                                                this.set_loop(mode, cx);
+                                                this.menu = None;
+                                            }
+                                            // 自定义面板是倍速菜单的第二层，不关菜单只换内容。
+                                            MenuAction::SpeedCustom => {
+                                                this.menu = Some(Menu::SpeedCustom);
+                                            }
                                         }
-                                        this.menu = None;
                                         this.poke();
                                         cx.notify();
                                     },
@@ -2192,8 +2299,191 @@ impl PlayerApp {
                                 this.pick_subtitle(window, cx);
                             })),
                     )
-                }),
+                })
+                .into_any_element(),
         )
+    }
+
+    /// 自定义倍速面板：标题栏 + 跟随滑块的气泡 + 0.1–5.0 的滑杆。
+    ///
+    /// 气泡和滑块头的位置都用固定宽度算，而不是读 canvas 回填的 bounds：bounds
+    /// 要到 prepaint 之后才有值，拿它排版会让气泡慢一帧。canvas 那份只负责把
+    /// 真实命中区域写回 `speed_bounds`，供拖动时换算坐标。
+    fn render_speed_panel(&self, panel: f32, cx: &mut Context<Self>) -> AnyElement {
+        const WIDTH: f32 = 264.0;
+        const PAD: f32 = 14.0;
+        const LABEL: f32 = 22.0;
+        const GAP: f32 = 8.0;
+        const BUBBLE: f32 = 56.0;
+        const TRACK: f32 = WIDTH - PAD * 2.0 - (LABEL + GAP) * 2.0;
+
+        let speed = self.snapshot.speed.clamp(SPEED_MIN, SPEED_MAX);
+        let ratio = ((speed - SPEED_MIN) / (SPEED_MAX - SPEED_MIN)).clamp(0.0, 1.0) as f32;
+        let dragging = self.speed_dragging;
+        // 气泡中心跟着滑块头走，靠近两端时收在面板内。
+        let bubble_left =
+            (PAD + LABEL + GAP + ratio * TRACK - BUBBLE / 2.0).clamp(PAD, WIDTH - PAD - BUBBLE);
+        let knob = if dragging { 14.0 } else { 12.0 };
+        let slot = self.speed_bounds.clone();
+
+        div()
+            .id("speed-menu")
+            .absolute()
+            .right(px(18.0 + panel))
+            .bottom(px(74.0))
+            .w(px(WIDTH))
+            .py(px(6.0))
+            .rounded(px(10.0))
+            .bg(surface())
+            .border_1()
+            .border_color(gpui_kit::rgb(0x2c2c34))
+            .shadow_lg()
+            // 和列表菜单一样挡住点击，否则点面板空白处会穿透到画面切一次播放。
+            .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
+                cx.stop_propagation();
+            }))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .px(px(10.0))
+                    .py(px(4.0))
+                    .child(
+                        div()
+                            .id("speed-back")
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(24.0))
+                            .rounded(px(6.0))
+                            .cursor(CursorStyle::PointingHand)
+                            .hover(|style| style.bg(ui::surface_hover()))
+                            .child(icon(IconName::ChevronLeft, 16.0, text()))
+                            .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.menu = Some(Menu::Speed);
+                                this.poke();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(13.0))
+                            .text_color(text())
+                            .child("自定义倍数"),
+                    ),
+            )
+            .child(
+                div()
+                    .h(px(1.0))
+                    .mx(px(10.0))
+                    .my(px(4.0))
+                    .bg(gpui_kit::rgb(0x2c2c34)),
+            )
+            .child(
+                div().relative().h(px(30.0)).w_full().child(
+                    div()
+                        .absolute()
+                        .left(px(bubble_left))
+                        .top(px(2.0))
+                        .w(px(BUBBLE))
+                        .h(px(24.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(6.0))
+                        .bg(ui::surface_hover())
+                        .text_size(px(12.0))
+                        .text_color(text())
+                        .child(format_speed_value(speed)),
+                ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(GAP))
+                    .px(px(PAD))
+                    .pb(px(8.0))
+                    .child(speed_edge_label("0.1", LABEL))
+                    .child(
+                        div()
+                            .id("speed-slider")
+                            .relative()
+                            .flex_1()
+                            .h(px(20.0))
+                            .flex()
+                            .items_center()
+                            .cursor(CursorStyle::PointingHand)
+                            .child(
+                                canvas(
+                                    move |bounds, _window, _cx| slot.set(bounds),
+                                    |_bounds, (), _window, _cx| {},
+                                )
+                                .absolute()
+                                .inset_0(),
+                            )
+                            .child(
+                                div()
+                                    .relative()
+                                    .h(px(3.0))
+                                    .w_full()
+                                    .rounded(px(2.0))
+                                    .bg(ui::track())
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .left_0()
+                                            .top_0()
+                                            .bottom_0()
+                                            .w(gpui_kit::relative(ratio))
+                                            .rounded(px(2.0))
+                                            .bg(text())
+                                            .child(
+                                                div()
+                                                    .absolute()
+                                                    .right(px(-knob / 2.0))
+                                                    .top(px(-(knob - 3.0) / 2.0))
+                                                    .size(px(knob))
+                                                    .rounded_full()
+                                                    .bg(text()),
+                                            ),
+                                    ),
+                            )
+                            // 刻度只标整数档：全量程铺满反而看不清滑块在哪一档。
+                            .children((1..=4).map(|tick| {
+                                let at = (f64::from(tick) - SPEED_MIN) / (SPEED_MAX - SPEED_MIN);
+                                div()
+                                    .absolute()
+                                    .left(gpui_kit::relative(at as f32))
+                                    .top(px(8.0))
+                                    .w(px(1.0))
+                                    .h(px(4.0))
+                                    .bg(text_faint())
+                            }))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                                    cx.stop_propagation();
+                                    this.speed_dragging = true;
+                                    this.set_speed_from_x(event.position.x, cx);
+                                    // 按下时即使数值没变也要重画：滑块头要放大一圈。
+                                    cx.notify();
+                                }),
+                            )
+                            .on_mouse_up(
+                                MouseButton::Left,
+                                cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                                    this.speed_dragging = false;
+                                    // 松手才落盘：拖动途中每移动一像素写一次太浪费。
+                                    this.settings.save();
+                                    cx.notify();
+                                }),
+                            ),
+                    )
+                    .child(speed_edge_label("5.0", LABEL)),
+            )
+            .into_any_element()
     }
 
     fn bar_entries(&self, menu: BarMenu, window: &Window) -> Vec<BarItem> {
@@ -3578,6 +3868,9 @@ impl Render for PlayerApp {
                 if this.volume_dragging {
                     this.set_volume_from_x(event.position.x);
                 }
+                if this.speed_dragging {
+                    this.set_speed_from_x(event.position.x, cx);
+                }
                 if this.playlist_dragging {
                     this.drag_playlist_width(event.position.x, window);
                 }
@@ -3592,6 +3885,10 @@ impl Render for PlayerApp {
                     if this.volume_dragging {
                         this.volume_dragging = false;
                         this.settings.volume = this.snapshot.volume;
+                    }
+                    if this.speed_dragging {
+                        this.speed_dragging = false;
+                        this.settings.save();
                     }
                     if this.playlist_dragging {
                         // 宽度只在松手时落盘：拖动过程里每移动一像素写一次太浪费。
