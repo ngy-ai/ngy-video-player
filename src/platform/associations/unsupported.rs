@@ -24,3 +24,7 @@ pub fn status() -> Result<Status> {
 pub fn open_system_settings() -> Result<()> {
     bail!("当前平台没有统一的默认应用设置页")
 }
+
+pub fn guidance() -> &'static str {
+    "当前平台还不支持自动关联，需要在系统设置里手动指定。"
+}

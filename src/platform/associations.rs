@@ -13,10 +13,27 @@ mod windows;
 #[cfg(windows)]
 use windows as imp;
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+use linux as imp;
+
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+use macos as imp;
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 mod unsupported;
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 use unsupported as imp;
+
+// 平台无关的纯逻辑：在任何平台上都编译并跑单元测试，这样 Linux/macOS 的实现
+// 至少有一半能在开发机上被验证。
+#[cfg(any(target_os = "linux", test))]
+mod mimeapps;
+#[cfg(any(target_os = "macos", test))]
+mod plist;
 
 /// 关联在系统里的落点。
 #[derive(Clone, Debug, Default)]
@@ -56,9 +73,15 @@ pub fn status() -> Status {
 }
 
 /// 打开系统的「默认应用」界面。用户必须在那里亲手选定——这不是实现偷懒，
-/// 而是 Windows 8 之后唯一的合法路径。
+/// 而是 Windows 8 之后唯一的合法路径。Linux/macOS 上注册即生效，这里是空操作。
 pub fn open_system_settings() -> Result<()> {
     imp::open_system_settings()
+}
+
+/// 注册成功之后还需要用户做什么。Windows 上要用户去设置页点一下，
+/// 另外两个平台不需要——这句话由平台自己说，界面层不要硬编码。
+pub fn guidance() -> &'static str {
+    imp::guidance()
 }
 
 /// 期望注册的扩展名个数。

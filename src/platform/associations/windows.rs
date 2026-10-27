@@ -358,6 +358,11 @@ pub fn status() -> Result<Status> {
     Ok(Status { registered, target })
 }
 
+/// Windows 只能把用户送到设置页，最后那一下必须由用户亲手点（`docs/adr/0002`）。
+pub fn guidance() -> &'static str {
+    "请在打开的「默认应用」里选择 ngy-video-player。"
+}
+
 pub fn open_system_settings() -> Result<()> {
     // Win11 22H2 之后认 `registeredAppUser`，能直接把设置页滚到本程序那一行；
     // 旧系统会忽略查询串，停在「默认应用」首页，不会失败。

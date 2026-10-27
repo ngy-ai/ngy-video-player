@@ -99,8 +99,19 @@ ngy-video-player [选项] [文件或目录...]
 ### 设为默认视频播放器
 
 菜单「设置 → 设为默认视频播放器…」会把本程序登记为 60 个格式（54 个视频容器 + 6 个
-播放列表格式）的候选。**Windows 上这一步没法静默完成**：`UserChoice` 带哈希校验，程序
-只能把入口放进「默认应用」列表，再由用户在打开的设置页里选定（见 `docs/adr/0002`）。
+播放列表格式）的候选。三个平台的机制完全不同：
+
+| 平台 | 落点 | 用户还要做什么 |
+| --- | --- | --- |
+| Windows | `HKCU\Software\Classes` + `Capabilities` + `RegisteredApplications` | 要。在打开的「默认应用」里选一下本程序 |
+| Linux | `~/.local/share/applications/*.desktop` + `~/.config/mimeapps.list` | 不用，注册即生效 |
+| macOS | `.app` 的 `Info.plist` + LaunchServices | 不用，注册即生效 |
+
+**Windows 上这一步没法静默完成**：`UserChoice` 带哈希校验，程序只能把入口放进「默认
+应用」列表，剩下那一下必须由用户亲手点（见 `docs/adr/0002`）。
+
+**macOS 必须先打包**：`bash scripts/bundle-macos.sh` 生成 `dist/ngy-video-player.app`，
+再从包里启动。裸二进制在 LaunchServices 眼里没有身份，注册会直接报错并给出这条指引。
 
 同一个菜单里还有「移除本程序的文件关联」用于撤销，「启动时自动维护关联」控制每次启动
 是否按当前可执行文件的路径重写一遍——关掉之后，默认播放器被别的软件拿走也不会再改回来。
@@ -132,7 +143,12 @@ src/
 ├─ settings.rs      偏好持久化
 ├─ logging.rs       终端 + 滚动日志文件
 ├─ platform/        系统集成
-│  └─ associations.rs  文件关联：注册 / 撤销 / 状态（按平台分文件）
+│  └─ associations.rs  文件关联：注册 / 撤销 / 状态
+│     ├─ windows.rs    注册表 + Capabilities
+│     ├─ linux.rs      .desktop + mimeapps.list
+│     ├─ macos.rs      LaunchServices
+│     ├─ mimeapps.rs   Linux 的纯逻辑（跨平台可测）
+│     └─ plist.rs      macOS 的 Info.plist 生成（跨平台可测）
 └─ player/
    ├─ ffi.rs        libmpv 的运行时绑定（dlopen，不用头文件）
    ├─ engine.rs     引擎线程 + 取帧线程 + 状态快照
@@ -154,3 +170,13 @@ src/
 - HDR（PQ/HLG）目前按 SDR 输出，颜色会偏；需要显式 tone-mapping 才能正确显示。
 - 硬件解码默认关闭（`hwdec=no`）：软件渲染下 hwdec 要把帧从显存倒回内存，通常更慢。
   可在 `settings.json` 里改成 `auto-safe` 试。
+
+文件关联相关的限制：
+
+- **不会自动抢默认**：Linux/macOS 上注册即生效，Windows 上只能把本程序送进「默认应用」
+  列表，最后一步由用户点。
+- **macOS 的「移除关联」只撤声明**：系统没有「把默认还回去」的接口，已经选定的默认要
+  用户自己在 Finder 的「显示简介 → 打开方式」里改。
+- **macOS 没有应用图标**：`.icns` 还没生成，Dock 里是通用图标。
+- **Linux 依赖 shared-mime-info**：系统里没有 `/usr/share/mime/globs2` 时只认内置表里的
+  二十来个常见格式，其余扩展名会被跳过而不是猜一个 MIME 蒙上去。

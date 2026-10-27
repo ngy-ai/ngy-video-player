@@ -45,8 +45,10 @@ serde_json = "1"
 futures = "0.3"
 
 # GPUI 的 RenderImage 用 image::Frame 承载像素，必须与 gpui 依赖的 image 同版本，
-# 否则类型对不上。这里只要 Frame/ImageBuffer，不需要任何编解码器。
-image = { version = "0.25", default-features = false }
+# 否则类型对不上。渲染路径上只要 Frame/ImageBuffer，但 Linux 注册文件关联时要把
+# assets/icon.ico 转成桌面环境认识的 PNG，所以额外打开 ico/png 两个编解码器；
+# 其余解码器仍然不要。
+image = { version = "0.25", default-features = false, features = ["ico", "png"] }
 
 [target.'cfg(windows)'.build-dependencies]
 # 把 assets/icon.ico 嵌进 exe 资源段。

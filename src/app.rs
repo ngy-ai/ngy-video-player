@@ -84,6 +84,17 @@ fn is_development_build(exe: &std::path::Path) -> bool {
     under_target && matches!(profile, Some("debug" | "release"))
 }
 
+/// 注册项指向的路径是否覆盖当前可执行文件。
+///
+/// Windows/Linux 上存的就是 exe 本身；macOS 上存的是 `.app` 目录，exe 在它里面，
+/// 所以不能直接比相等。
+fn association_target_matches(target: &std::path::Path) -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    exe == target || exe.starts_with(target)
+}
+
 /// 「设置」菜单里那行只读状态。
 fn association_status_line(status: &platform::associations::Status, supported: bool) -> String {
     if !supported {
@@ -95,7 +106,7 @@ fn association_status_line(status: &platform::associations::Status, supported: b
     let stale = status
         .target
         .as_ref()
-        .is_some_and(|target| std::env::current_exe().ok().as_ref() != Some(target));
+        .is_some_and(|target| !association_target_matches(target));
     if stale {
         format!("已注册关联：{} 个格式（路径已过期）", status.registered)
     } else {
@@ -1640,11 +1651,9 @@ impl PlayerApp {
                 }
                 lines.push(format!("已登记 {} 个格式。", status.registered));
 
-                // Windows 上这一步只能由用户在系统设置里点，所以顺手把页面打开。
+                // Windows 上还得用户去设置页点一下；另两个平台注册即生效。
                 match platform::associations::open_system_settings() {
-                    Ok(()) => {
-                        lines.push("请在打开的「默认应用」里选择 ngy-video-player。".to_string())
-                    }
+                    Ok(()) => lines.push(platform::associations::guidance().to_string()),
                     Err(_) => lines.push("请打开 设置 > 应用 > 默认应用 选择本程序。".to_string()),
                 }
                 if !self.settings.maintain_associations {
@@ -1726,8 +1735,10 @@ impl PlayerApp {
         std::thread::spawn(|| {
             let status = platform::associations::status();
             let up_to_date = status.registered == platform::associations::count()
-                && status.target.is_some()
-                && status.target == std::env::current_exe().ok();
+                && status
+                    .target
+                    .as_ref()
+                    .is_some_and(|target| association_target_matches(target));
             if up_to_date {
                 return;
             }
