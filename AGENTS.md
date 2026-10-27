@@ -29,6 +29,7 @@ src/app.rs       主视图：窗口、快捷键、控制条、播放列表、OSD
 src/ui.rs        配色、图标按钮、时间格式、等比画面
 src/formats.rs   扩展名清单（文件过滤器 + 拖入判断）
 src/playlist.rs  播放列表、m3u/pls 解析、目录展开、自然序
+src/screenshot.rs 截图落点与文件名
 src/settings.rs  偏好持久化
 src/logging.rs   终端 + 滚动日志文件
 src/platform/    associations.rs（文件关联：注册/撤销/状态，按平台实现）

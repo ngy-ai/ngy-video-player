@@ -225,6 +225,8 @@ pub enum PlayerEvent {
     Ended(EndReason),
     /// 出错了，界面应该显示出来。
     Error(String),
+    /// 截图结果：成功是落盘路径，失败是给用户看的原因。
+    Screenshot(std::result::Result<PathBuf, String>),
 }
 
 #[derive(Clone, Debug)]
@@ -932,10 +934,7 @@ fn dispatch(
     // 哪些命令失败该让用户看见：只有「用户明确要求的动作没做成」才算。
     // seek/选轨/设置这类失败在边界状态下很常见（片头片尾、流不可跳转），
     // 它们只写日志——否则只是按了一下方向键，界面上就弹一条「播放出错」。
-    let report_failure = matches!(
-        command,
-        Command::Load { .. } | Command::AddSubtitle(_) | Command::Screenshot(_)
-    );
+    let report_failure = matches!(command, Command::Load { .. } | Command::AddSubtitle(_));
     let result = (|| -> Result<()> {
         match command {
             Command::Load { url, start } => {
@@ -1038,7 +1037,13 @@ fn dispatch(
                 api.run_command(handle, &["set", &name, &value])?;
             }
             Command::Screenshot(path) => {
-                api.run_command(handle, &["screenshot-to-file", &path, "video"])?;
+                // 截图失败不影响播放，别走「播放出错」横幅：结果连同原因单独回给界面。
+                match api.run_command(handle, &["screenshot-to-file", &path, "video"]) {
+                    Ok(()) => shared.notify(PlayerEvent::Screenshot(Ok(PathBuf::from(path)))),
+                    Err(error) => {
+                        shared.notify(PlayerEvent::Screenshot(Err(format!("{error:#}"))));
+                    }
+                }
             }
         }
         Ok(())

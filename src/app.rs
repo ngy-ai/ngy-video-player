@@ -48,6 +48,7 @@ actions!(
         OpenFile,
         NextFile,
         PreviousFile,
+        TakeScreenshot,
         SpeedUp,
         SpeedDown,
         StopPlayback,
@@ -76,6 +77,18 @@ fn format_speed_value(speed: f64) -> String {
         format!("{rounded:.1}×")
     } else {
         format!("{rounded:.2}×")
+    }
+}
+
+/// 从 mpv 的完整命令错误里取出最后一段（真正的失败原因），放进 OSD 不至于撑满窗口。
+fn error_reason(message: &str) -> String {
+    let reason = message.rsplit(": ").next().unwrap_or(message).trim();
+    let mut chars = reason.chars();
+    let short: String = chars.by_ref().take(48).collect();
+    if chars.next().is_some() {
+        format!("{short}…")
+    } else {
+        short
     }
 }
 
@@ -541,6 +554,7 @@ enum BarAction {
     TogglePlaylist,
     ToggleFullscreen,
     ToggleHelp,
+    TakeScreenshot,
     SetAsDefaultPlayer,
     OpenDefaultApps,
     RemoveAssociations,
@@ -707,6 +721,23 @@ impl PlayerApp {
                     PlayerEvent::Error(message) => {
                         log_warn!("播放器错误: {message}");
                         this.error = Some(Banner::new("播放出错", message));
+                        cx.notify();
+                    }
+                    PlayerEvent::Screenshot(result) => {
+                        match result {
+                            Ok(path) => {
+                                log_info!("截图已保存: {}", path.display());
+                                let name = path
+                                    .file_name()
+                                    .map(|name| name.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                                this.flash(format!("截图已保存 · {name}"));
+                            }
+                            Err(message) => {
+                                log_warn!("截图失败: {message}");
+                                this.flash(format!("截图失败：{}", error_reason(&message)));
+                            }
+                        }
                         cx.notify();
                     }
                 });
@@ -881,6 +912,35 @@ impl PlayerApp {
     fn set_loop(&mut self, mode: LoopMode, cx: &mut Context<Self>) {
         self.settings.loop_mode = mode;
         self.flash(mode.label());
+        cx.notify();
+    }
+
+    /// 让 mpv 抓当前画面存成 PNG。
+    ///
+    /// 不用界面里那一帧：它是按窗口尺寸缩过的，存档要的是原始分辨率。
+    fn take_screenshot(&mut self, cx: &mut Context<Self>) {
+        if self.engine.is_none() {
+            self.flash("截图不可用：播放引擎没有加载");
+            cx.notify();
+            return;
+        }
+        if !self.snapshot.has_video() {
+            self.flash("没有可截图的画面");
+            cx.notify();
+            return;
+        }
+
+        let video = self.snapshot.path.clone();
+        let target = match crate::screenshot::target(video.as_deref(), self.snapshot.position) {
+            Ok(path) => path,
+            Err(error) => {
+                log_warn!("准备截图失败: {error:#}");
+                self.flash(format!("截图失败：{error}"));
+                cx.notify();
+                return;
+            }
+        };
+        self.send(Command::Screenshot(target.to_string_lossy().into_owned()));
         cx.notify();
     }
 
@@ -2541,6 +2601,13 @@ impl PlayerApp {
                             .checked(self.settings.loop_mode == mode),
                     ));
                 }
+
+                items.push(BarItem::Separator);
+                items.push(BarItem::Entry(
+                    BarEntry::new("截图", TakeScreenshot)
+                        .hint("S")
+                        .enabled(self.snapshot.has_video()),
+                ));
             }
             BarMenu::Subtitle => {
                 items.push(BarItem::Entry(
@@ -2668,6 +2735,7 @@ impl PlayerApp {
             }
             BarAction::ToggleFullscreen => self.toggle_fullscreen(window),
             BarAction::ToggleHelp => self.show_help = !self.show_help,
+            BarAction::TakeScreenshot => self.take_screenshot(cx),
             BarAction::SetAsDefaultPlayer => self.set_default_player(),
             BarAction::OpenDefaultApps => self.open_default_apps(),
             BarAction::RemoveAssociations => self.remove_associations(window, cx),
@@ -3696,6 +3764,7 @@ impl PlayerApp {
             ("右键列表项", "删除 / 定位文件 / 查看格式"),
             ("Delete", "删除所选项"),
             ("M", "静音"),
+            ("S", "截图"),
             ("O", "打开文件"),
             ("F / 双击", "全屏"),
             ("Esc", "退出全屏 / 关闭浮层"),
@@ -3825,6 +3894,9 @@ impl Render for PlayerApp {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ToggleHelp, _window, cx| this.toggle_help(cx)))
+            .on_action(
+                cx.listener(|this, _: &TakeScreenshot, _window, cx| this.take_screenshot(cx)),
+            )
             .on_action(cx.listener(|this, _: &DeleteSelected, _window, cx| {
                 // 面板关着的时候选择是看不见的，这时候删等于盲删，直接忽略。
                 if this.settings.show_playlist {
@@ -3985,6 +4057,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("p", PreviousFile, None),
         KeyBinding::new("[", SpeedDown, None),
         KeyBinding::new("]", SpeedUp, None),
+        KeyBinding::new("s", TakeScreenshot, None),
         KeyBinding::new("escape", ExitOverlay, None),
         KeyBinding::new("delete", DeleteSelected, None),
         // `?` 不在这里绑定：键位串按键帽字符匹配，`?` 得写成 `shift-/`，
