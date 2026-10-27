@@ -24,6 +24,11 @@ pub struct Settings {
     pub fullscreen: bool,
     /// 硬件解码：`auto-safe` / `no` / `auto-copy`。
     pub hwdec: String,
+    /// 启动时是否自动维护文件关联（把注册项按当前 exe 路径重写一遍）。
+    ///
+    /// 记的是**用户意图**，不是「当前有没有注册」——后者每次现场问操作系统，
+    /// 本地缓存一份只会漂移。
+    pub maintain_associations: bool,
 }
 
 impl Default for Settings {
@@ -40,6 +45,7 @@ impl Default for Settings {
             window_height: 680.0,
             fullscreen: false,
             hwdec: "no".to_string(),
+            maintain_associations: true,
         }
     }
 }

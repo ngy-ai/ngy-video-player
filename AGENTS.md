@@ -31,6 +31,7 @@ src/formats.rs   扩展名清单（文件过滤器 + 拖入判断）
 src/playlist.rs  播放列表、m3u/pls 解析、目录展开、自然序
 src/settings.rs  偏好持久化
 src/logging.rs   终端 + 滚动日志文件
+src/platform/    associations.rs（文件关联：注册/撤销/状态，按平台实现）
 src/player/      ffi.rs（运行时绑定）、engine.rs（引擎/取帧线程）
 ```
 

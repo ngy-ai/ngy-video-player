@@ -111,3 +111,17 @@ pub fn dialog_filter() -> (String, Vec<&'static str>) {
 pub fn supported_extension_count() -> usize {
     VIDEO.len() + AUDIO.len() + IMAGE.len() + DISC.len()
 }
+
+/// 可以向操作系统申请默认处理权的扩展名：视频容器 + 清单格式。
+///
+/// 和 [`dialog_extensions`] 刻意不同。那张表宽到图像和光盘镜像，因为它们能从对话框
+/// 里打开；这张表只回答「谁该当播放器」——把 `.jpg` 或 `.iso` 抢过来会得罪图片查看器
+/// 和虚拟光驱，注册 `.srt` 更是毫无意义。清单格式要算进来：`.m3u` 自身不含媒体，
+/// 它的唯一用途就是交给播放器解释，让它跳到别的软件手里说不过去。
+pub fn associable_extensions() -> Vec<&'static str> {
+    let mut all: Vec<&'static str> = VIDEO.iter().chain(PLAYLIST).copied().collect();
+    // 排序只为让注册表写入顺序稳定、便于比对；顺带把将来可能出现的重复项去掉。
+    all.sort_unstable();
+    all.dedup();
+    all
+}

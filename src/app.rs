@@ -6,7 +6,7 @@
 
 use crate::ui::IconName;
 use crate::{
-    formats,
+    formats, platform,
     player::{Command, EndReason, Engine, LoopMode, PlayerEvent, Snapshot, TrackKind},
     playlist::{self, Playlist},
     settings::Settings,
@@ -67,6 +67,43 @@ fn format_speed(speed: f64) -> String {
     format!("{text}×")
 }
 
+/// 当前 exe 是不是 `cargo build` 的产物。
+///
+/// 关联里存的是绝对路径，`target` 目录会被 `cargo clean` 抹掉、被新构建顶替，
+/// 所以在用户点下按钮的那一刻值得提一句。
+fn is_development_build(exe: &std::path::Path) -> bool {
+    let Some(directory) = exe.parent() else {
+        return false;
+    };
+    let under_target = directory
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+        == Some("target");
+    let profile = directory.file_name().and_then(|name| name.to_str());
+    under_target && matches!(profile, Some("debug" | "release"))
+}
+
+/// 「设置」菜单里那行只读状态。
+fn association_status_line(status: &platform::associations::Status, supported: bool) -> String {
+    if !supported {
+        return "已注册关联：当前平台尚未支持".to_string();
+    }
+    if !status.is_registered() {
+        return "已注册关联：未注册".to_string();
+    }
+    let stale = status
+        .target
+        .as_ref()
+        .is_some_and(|target| std::env::current_exe().ok().as_ref() != Some(target));
+    if stale {
+        format!("已注册关联：{} 个格式（路径已过期）", status.registered)
+    } else {
+        let total = platform::associations::count();
+        format!("已注册关联：{}/{} 个格式", status.registered, total)
+    }
+}
+
 const SEEK_STEP: f64 = 5.0;
 const VOLUME_STEP: f64 = 5.0;
 const CONTROLS_IDLE: Duration = Duration::from_millis(2600);
@@ -77,6 +114,22 @@ const MENUBAR_HEIGHT: f32 = 32.0;
 pub struct LaunchOptions {
     pub paths: Vec<PathBuf>,
     pub fullscreen: bool,
+}
+
+/// 底部红色横幅。播放出错和文件关联失败共用同一块位置，只是标题不同。
+#[derive(Clone, Debug)]
+struct Banner {
+    title: &'static str,
+    body: String,
+}
+
+impl Banner {
+    fn new(title: &'static str, body: impl Into<String>) -> Self {
+        Self {
+            title,
+            body: body.into(),
+        }
+    }
 }
 
 pub struct PlayerApp {
@@ -113,12 +166,17 @@ pub struct PlayerApp {
     dialog_open: bool,
 
     osd: Option<(Vec<String>, Instant)>,
-    error: Option<String>,
+    error: Option<Banner>,
     show_help: bool,
     /// 悬浮菜单（字幕 / 音轨 / 循环）当前展开的是哪一个。
     menu: Option<Menu>,
     /// 顶部菜单栏当前展开的是哪一个。
     menu_bar: Option<BarMenu>,
+    /// 文件关联的落点缓存。
+    ///
+    /// 查询要逐个读注册表，不能放进每帧都跑的渲染路径里；只在展开「设置」菜单、
+    /// 或者刚改过关联时刷新一次。
+    association_status: platform::associations::Status,
 
     startup_failure: Option<String>,
 }
@@ -145,16 +203,18 @@ enum BarMenu {
     Subtitle,
     Audio,
     View,
+    Settings,
     Help,
 }
 
 impl BarMenu {
-    const ALL: [BarMenu; 6] = [
+    const ALL: [BarMenu; 7] = [
         BarMenu::File,
         BarMenu::Playback,
         BarMenu::Subtitle,
         BarMenu::Audio,
         BarMenu::View,
+        BarMenu::Settings,
         BarMenu::Help,
     ];
 
@@ -165,6 +225,7 @@ impl BarMenu {
             BarMenu::Subtitle => "字幕",
             BarMenu::Audio => "音轨",
             BarMenu::View => "视图",
+            BarMenu::Settings => "设置",
             BarMenu::Help => "帮助",
         }
     }
@@ -234,6 +295,10 @@ enum BarAction {
     TogglePlaylist,
     ToggleFullscreen,
     ToggleHelp,
+    SetAsDefaultPlayer,
+    OpenDefaultApps,
+    RemoveAssociations,
+    ToggleMaintainAssociations,
     About,
     Quit,
 }
@@ -278,6 +343,7 @@ impl PlayerApp {
             show_help: false,
             menu: None,
             menu_bar: None,
+            association_status: platform::associations::Status::default(),
             startup_failure,
         };
 
@@ -300,6 +366,7 @@ impl PlayerApp {
 
         app.consume_events(event_rx, cx);
         app.start_idle_watchdog(cx);
+        app.auto_maintain_associations();
 
         if !options.paths.is_empty() {
             app.open_paths(options.paths, cx);
@@ -343,7 +410,7 @@ impl PlayerApp {
                     }
                     PlayerEvent::Error(message) => {
                         log_warn!("播放器错误: {message}");
-                        this.error = Some(message);
+                        this.error = Some(Banner::new("播放出错", message));
                         cx.notify();
                     }
                 });
@@ -1469,6 +1536,34 @@ impl PlayerApp {
                         .checked(window.is_fullscreen()),
                 ));
             }
+            BarMenu::Settings => {
+                let supported = platform::associations::supported();
+                let status = &self.association_status;
+
+                items.push(BarItem::Entry(
+                    BarEntry::new("设为默认视频播放器…", SetAsDefaultPlayer).enabled(supported),
+                ));
+                if cfg!(windows) {
+                    items.push(BarItem::Entry(
+                        BarEntry::new("打开系统默认应用设置", OpenDefaultApps).enabled(supported),
+                    ));
+                }
+                items.push(BarItem::Separator);
+                items.push(BarItem::Entry(
+                    BarEntry::new("移除本程序的文件关联", RemoveAssociations)
+                        .enabled(status.is_registered()),
+                ));
+                items.push(BarItem::Separator);
+                items.push(BarItem::Entry(
+                    BarEntry::new("启动时自动维护关联", ToggleMaintainAssociations)
+                        .checked(self.settings.maintain_associations)
+                        .enabled(supported),
+                ));
+                items.push(BarItem::Separator);
+                items.push(BarItem::Entry(BarEntry::note(association_status_line(
+                    status, supported,
+                ))));
+            }
             BarMenu::Help => {
                 items.push(BarItem::Entry(
                     BarEntry::new("键盘快捷键", ToggleHelp)
@@ -1502,6 +1597,10 @@ impl PlayerApp {
             }
             BarAction::ToggleFullscreen => self.toggle_fullscreen(window),
             BarAction::ToggleHelp => self.show_help = !self.show_help,
+            BarAction::SetAsDefaultPlayer => self.set_default_player(),
+            BarAction::OpenDefaultApps => self.open_default_apps(),
+            BarAction::RemoveAssociations => self.remove_associations(window, cx),
+            BarAction::ToggleMaintainAssociations => self.toggle_maintain_associations(),
             BarAction::About => {
                 self.flash(format!(
                     "ngy-video-player {}\nGPUI + libmpv",
@@ -1515,6 +1614,142 @@ impl PlayerApp {
         }
         self.poke();
         cx.notify();
+    }
+
+    // -- 文件关联 ----------------------------------------------------------
+
+    /// 用户主动点了「设为默认」，所以成败都要说清楚——和启动时的静默自愈不同。
+    fn set_default_player(&mut self) {
+        if !platform::associations::supported() {
+            self.flash(format!(
+                "{} 上还没有实现自动关联，请手动在系统设置里指定默认播放器",
+                std::env::consts::OS
+            ));
+            return;
+        }
+
+        match platform::associations::register() {
+            Ok(status) => {
+                self.refresh_association_status();
+                let mut lines = Vec::new();
+                if let Ok(exe) = std::env::current_exe()
+                    && is_development_build(&exe)
+                {
+                    lines.push(format!("注意：这是开发构建，关联指向 {}", exe.display()));
+                    lines.push("cargo clean 之后关联会失效。".to_string());
+                }
+                lines.push(format!("已登记 {} 个格式。", status.registered));
+
+                // Windows 上这一步只能由用户在系统设置里点，所以顺手把页面打开。
+                match platform::associations::open_system_settings() {
+                    Ok(()) => {
+                        lines.push("请在打开的「默认应用」里选择 ngy-video-player。".to_string())
+                    }
+                    Err(_) => lines.push("请打开 设置 > 应用 > 默认应用 选择本程序。".to_string()),
+                }
+                if !self.settings.maintain_associations {
+                    lines.push("自动维护已关闭，本次只注册一次。".to_string());
+                }
+                self.flash(lines.join("\n"));
+            }
+            Err(error) => self.report_association_failure("注册文件关联失败", &error),
+        }
+    }
+
+    fn open_default_apps(&mut self) {
+        match platform::associations::open_system_settings() {
+            Ok(()) => self.flash("已打开系统的「默认应用」设置"),
+            Err(error) => self.report_association_failure("打开系统设置失败", &error),
+        }
+    }
+
+    fn toggle_maintain_associations(&mut self) {
+        self.settings.maintain_associations = !self.settings.maintain_associations;
+        // 这个开关决定的是「下次启动」的行为，等到窗口关闭再落盘可能就等不到了。
+        self.settings.save();
+        if self.settings.maintain_associations {
+            self.flash("已开启：每次启动重新登记文件关联");
+        } else {
+            self.flash("已关闭：启动时不再改动文件关联");
+        }
+    }
+
+    fn remove_associations(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog_open {
+            return;
+        }
+        self.dialog_open = true;
+
+        let description = format!(
+            "将删除本程序向系统登记的全部文件关联（{} 个格式）。\n\n\
+             系统里已经选定的默认播放器不受影响——要改回来，请到 设置 > 应用 > 默认应用 手动调整。",
+            platform::associations::count()
+        );
+        let dialog = rfd::MessageDialog::new()
+            .set_parent(window)
+            .set_title("移除文件关联")
+            .set_description(description)
+            .set_buttons(rfd::MessageButtons::YesNo);
+
+        let (tx, rx) = futures::channel::oneshot::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(dialog.show() == rfd::MessageDialogResult::Yes);
+        });
+
+        cx.spawn(async move |this, cx| {
+            let confirmed = rx.await.unwrap_or(false);
+            let _ = this.update(cx, |this, cx| {
+                this.dialog_open = false;
+                if confirmed {
+                    match platform::associations::remove() {
+                        Ok(()) => {
+                            this.refresh_association_status();
+                            this.flash("已移除本程序的文件关联");
+                        }
+                        Err(error) => this.report_association_failure("移除文件关联失败", &error),
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// 自动维护：把注册项按当前 exe 的路径重写一遍。
+    ///
+    /// 只在开关打开、平台支持、并且注册项确实过期时才动手——已经指对了就什么都不做。
+    /// 放后台线程：启动路径上不该花时间等注册表。
+    fn auto_maintain_associations(&self) {
+        if !self.settings.maintain_associations || !platform::associations::supported() {
+            return;
+        }
+        std::thread::spawn(|| {
+            let status = platform::associations::status();
+            let up_to_date = status.registered == platform::associations::count()
+                && status.target.is_some()
+                && status.target == std::env::current_exe().ok();
+            if up_to_date {
+                return;
+            }
+            // 启动时的失败不打扰用户：注册表被策略锁死时每次开机糊一脸错更烦人。
+            if let Err(error) = platform::associations::register() {
+                log_warn!("自动维护文件关联失败: {error:#}");
+            }
+        });
+    }
+
+    fn refresh_association_status(&mut self) {
+        self.association_status = platform::associations::status();
+    }
+
+    /// 关联失败统一走红色横幅：里面的手动操作路径一行字放不下。
+    fn report_association_failure(&mut self, title: &'static str, error: &anyhow::Error) {
+        log_warn!("{title}: {error:#}");
+        self.flash(title);
+        self.error = Some(Banner::new(
+            title,
+            format!("{error:#}\n\n也可以在系统设置里手动指定默认播放器。"),
+        ));
     }
 
     fn render_menu_bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1574,6 +1809,9 @@ impl PlayerApp {
                         if this.menu_bar.is_some() {
                             this.menu = None;
                         }
+                        if this.menu_bar == Some(BarMenu::Settings) {
+                            this.refresh_association_status();
+                        }
                         this.poke();
                         cx.notify();
                     }))
@@ -1581,6 +1819,9 @@ impl PlayerApp {
                     .on_hover(cx.listener(move |this, hovered: &bool, _window, cx| {
                         if *hovered && this.menu_bar.is_some() && this.menu_bar != Some(menu) {
                             this.menu_bar = Some(menu);
+                            if menu == BarMenu::Settings {
+                                this.refresh_association_status();
+                            }
                             this.poke();
                             cx.notify();
                         }
@@ -1841,10 +2082,11 @@ impl PlayerApp {
     }
 
     fn render_error(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let message = self
-            .error
-            .clone()
-            .or_else(|| self.startup_failure.clone())?;
+        let (title, message) = match (&self.error, &self.startup_failure) {
+            (Some(banner), _) => (banner.title, banner.body.clone()),
+            (None, Some(failure)) => ("播放出错", failure.clone()),
+            (None, None) => return None,
+        };
         Some(
             div()
                 .id("error")
@@ -1868,7 +2110,7 @@ impl PlayerApp {
                     div()
                         .text_size(px(13.0))
                         .text_color(ui::danger())
-                        .child("播放出错"),
+                        .child(title),
                 )
                 .child(
                     div()

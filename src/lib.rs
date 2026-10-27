@@ -6,6 +6,7 @@ pub mod logging;
 
 pub mod app;
 pub mod formats;
+pub mod platform;
 pub mod player;
 pub mod playlist;
 pub mod settings;

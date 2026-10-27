@@ -55,6 +55,36 @@ fn 字幕与播放列表判定() {
 }
 
 #[test]
+fn 可关联格式只含视频与清单() {
+    let extensions = formats::associable_extensions();
+
+    // 视频 54 个 + 清单 6 个，两组互不重叠。
+    assert_eq!(
+        extensions.len(),
+        formats::VIDEO.len() + formats::PLAYLIST.len()
+    );
+
+    for extension in &extensions {
+        assert!(
+            !extension.contains('*') && !extension.contains('.'),
+            "注册用的扩展名必须是裸的：{extension}"
+        );
+        assert!(
+            formats::VIDEO.contains(extension) || formats::PLAYLIST.contains(extension),
+            "不该混进非视频格式：{extension}"
+        );
+    }
+
+    assert!(extensions.contains(&"mp4"));
+    assert!(extensions.contains(&"m3u"));
+    // 抢图片查看器、虚拟光驱和字幕的默认地位不属于播放器的职责。
+    assert!(!extensions.contains(&"jpg"));
+    assert!(!extensions.contains(&"iso"));
+    assert!(!extensions.contains(&"srt"));
+    assert!(!extensions.contains(&"mp3"));
+}
+
+#[test]
 fn 对话框过滤器覆盖全部扩展名() {
     let (label, extensions) = formats::dialog_filter();
     assert!(!label.is_empty());
