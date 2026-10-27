@@ -223,19 +223,30 @@ pub enum PlayerEvent {
 
 #[derive(Clone, Debug)]
 pub enum Command {
-    Load { url: String, start: Option<f64> },
+    Load {
+        url: String,
+        start: Option<f64>,
+    },
     Stop,
     PlayPause,
     SetPaused(bool),
     SeekAbsolute(f64),
     SeekRelative(f64),
+    /// 逐帧步进：正数向前、负数向后（每次只走一帧）。
+    StepFrame(i32),
     SetVolume(f64),
     SetMuted(bool),
     SetSpeed(f64),
-    SelectTrack { kind: TrackKind, id: i64 },
+    SelectTrack {
+        kind: TrackKind,
+        id: i64,
+    },
     AddSubtitle(String),
     Cycle(&'static str),
-    SetOption { name: String, value: String },
+    SetOption {
+        name: String,
+        value: String,
+    },
     Screenshot(String),
 }
 
@@ -431,6 +442,10 @@ impl Engine {
             // 保持画面比例由我们自己的布局负责，不要 mpv 再缩放一次。
             opt(api, handle, "video-zoom", "0");
             opt(api, handle, "keepaspect-window", "no");
+            // 逐帧后退（frame-back-step）要求精确 seek：`hr-seek` 默认只在部分
+            // 场景下精确，留着默认值会让「后退一帧」按下去画面不动。本地文件
+            // 解码够快，全程精确的代价可以接受。
+            opt(api, handle, "hr-seek", "yes");
             // 播放结束不要把文件卸掉：mpv 默认在 EOF 后清空播放列表，之后再按
             // 方向键 seek 会直接失败（"error running command"），画面也变成
             // 空窗。保留最后一帧更接近用户对播放器的预期。
@@ -906,6 +921,19 @@ fn dispatch(
                 api.run_command(handle, &["seek", &delta.to_string(), "relative", "exact"])?;
                 if ended {
                     api.set_flag(handle, "pause", false)?;
+                }
+            }
+            Command::StepFrame(steps) => {
+                // mpv 只有「走一帧」的命令，没有「走 N 帧」；滚轮一格算一帧，
+                // 触控板攒出来的多帧就按次数重复执行。`frame-step` 自带暂停，
+                // 但界面已经先发了 SetPaused，这里不再重复设置。
+                let command = if steps >= 0 {
+                    "frame-step"
+                } else {
+                    "frame-back-step"
+                };
+                for _ in 0..steps.unsigned_abs() {
+                    api.run_command(handle, &[command])?;
                 }
             }
             Command::SetVolume(volume) => {

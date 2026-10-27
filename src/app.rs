@@ -134,6 +134,8 @@ fn association_status_line(status: &platform::associations::Status, supported: b
 
 const SEEK_STEP: f64 = 5.0;
 const VOLUME_STEP: f64 = 5.0;
+/// 触控板走的是像素增量，攒够这么远算「一格」，走一帧。
+const FRAME_SCROLL_PX: f32 = 48.0;
 const CONTROLS_IDLE: Duration = Duration::from_millis(2600);
 const OSD_LIFETIME: Duration = Duration::from_millis(900);
 const MENUBAR_HEIGHT: f32 = 32.0;
@@ -201,6 +203,8 @@ pub struct PlayerApp {
     progress_bounds: Rc<Cell<Bounds<Pixels>>>,
     volume_bounds: Rc<Cell<Bounds<Pixels>>>,
     volume_dragging: bool,
+    /// Ctrl/⌘ + 滚轮的像素余量：触控板一次滑动拆成很多小增量，攒够一格才走一帧。
+    frame_scroll: f32,
 
     /// 原生文件选择框是否已经打开。
     ///
@@ -384,6 +388,7 @@ impl PlayerApp {
             progress_bounds: Rc::new(Cell::new(Bounds::default())),
             volume_bounds: Rc::new(Cell::new(Bounds::default())),
             volume_dragging: false,
+            frame_scroll: 0.0,
             dialog_open: false,
             osd: None,
             error: None,
@@ -595,6 +600,24 @@ impl PlayerApp {
         }
         self.send(Command::SetVolume(next));
         self.flash(format!("音量 {next:.0}%"));
+        cx.notify();
+    }
+
+    /// 逐帧步进。`steps` 正数向前、负数向后。
+    ///
+    /// 看单帧时用户要的是「停在这一帧」，所以第一次滚轮就顺手暂停；本来就
+    /// 暂停着则保持，不做 toggle，免得滚一下来回切。
+    fn step_frame(&mut self, steps: i32, cx: &mut Context<Self>) {
+        if self.engine.is_none() || self.snapshot.idle {
+            return;
+        }
+        if !self.snapshot.paused {
+            self.snapshot.paused = true;
+            self.send(Command::SetPaused(true));
+        }
+        self.send(Command::StepFrame(steps));
+        let arrow = if steps > 0 { "⏭" } else { "⏮" };
+        self.flash(format!("{arrow} 逐帧"));
         cx.notify();
     }
 
@@ -2762,6 +2785,8 @@ impl PlayerApp {
             ("空格", "播放 / 暂停"),
             ("← →", "快退 / 快进 5 秒"),
             ("↑ ↓", "音量"),
+            ("滚轮", "音量"),
+            ("Ctrl/⌘ 滚轮", "逐帧前进 / 后退"),
             ("N / P", "下一个 / 上一个"),
             ("[ ]", "减速 / 加速"),
             ("L", "播放列表"),
@@ -2952,6 +2977,25 @@ impl Render for PlayerApp {
                 if delta.abs() < 0.01 {
                     return;
                 }
+                // Ctrl/⌘ + 滚轮逐帧查看。滚轮按「事件」算，一格走一帧；触控板给的是
+                // 像素增量，攒够一格才走，否则一次轻滑就是几十帧。
+                if event.modifiers.secondary() {
+                    let steps = match event.delta {
+                        ScrollDelta::Lines(delta) => delta.y.signum() as i32,
+                        ScrollDelta::Pixels(delta) => {
+                            let accumulated = this.frame_scroll + f32::from(delta.y);
+                            let steps = (accumulated / FRAME_SCROLL_PX).trunc();
+                            // 只保留不足一格的余量，换方向时不会先欠着上一次的账。
+                            this.frame_scroll = accumulated - steps * FRAME_SCROLL_PX;
+                            steps as i32
+                        }
+                    };
+                    if steps != 0 {
+                        this.step_frame(steps, cx);
+                    }
+                    return;
+                }
+                this.frame_scroll = 0.0;
                 this.change_volume(
                     if delta > 0.0 {
                         VOLUME_STEP
