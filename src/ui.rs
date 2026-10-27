@@ -229,10 +229,17 @@ pub fn video_surface(frame: Option<Arc<RenderImage>>) -> AnyElement {
     canvas(
         |bounds, _window, _cx| bounds,
         move |_bounds, target, window, _cx| {
-            if let Some(image) = frame.as_ref() {
-                let _ =
-                    window.paint_image(target, target, Corners::default(), image.clone(), 0, false);
-            }
+            let Some(image) = frame.as_ref() else {
+                return;
+            };
+            // 帧里已经按视频比例排好黑边，正常情况下比例和区域一致，等比之后
+            // 一像素都不差。但区域刚变过（收起/展开播放列表、拖窗口）而新帧
+            // 还没送到时，手上这帧还是旧比例：直接铺满会把画面拉扁，所以退一步
+            // 按帧自身的比例居中，宁可两侧多一条黑边也不让画面变形。
+            let size = image.size(0);
+            let (width, height) = (i32::from(size.width) as f32, i32::from(size.height) as f32);
+            let fitted = fit_rect(target, width / height);
+            let _ = window.paint_image(fitted, fitted, Corners::default(), image.clone(), 0, false);
         },
     )
     .absolute()

@@ -1136,6 +1136,15 @@ fn render_loop(
     // 否则内部会走「整帧拷贝」的慢路径，所以这里自己做对齐，而不是直接扔一个 Vec。
     let mut buffer = FrameBuffer::default();
     let mut current = TargetSize::default();
+    // 「区域尺寸变了，但还没按新尺寸送出一帧」。
+    //
+    // 暂停时 mpv 不会再产生新帧（`RENDER_UPDATE_FRAME` 始终为假），而界面是把
+    // 整帧铺满视频区域的：不主动重画的话，旧比例的帧会被拉伸到新区域，
+    // 看起来就是「切播放列表时画面变形」。这里记一笔，下一轮无条件重画一次。
+    let mut resized = false;
+    // 还没有任何画面（刚启动、纯音频）时不重画：那会送出一张纯黑图，
+    // 把界面上的「拖入文件」空状态盖掉。
+    let mut rendered_once = false;
 
     loop {
         if shared.shutdown.load(Ordering::SeqCst) {
@@ -1156,15 +1165,19 @@ fn render_loop(
         if target != current {
             current = target;
             buffer.resize(current.width, current.height);
+            resized = true;
         }
 
         // mpv 告诉我们有帧才渲染；没有就继续等，避免空转。
+        // 但尺寸变了要例外：暂停时这就是唯一能让画面重新适配的机会。
         let flags = unsafe { (api.render_context_update)(context) };
-        if flags & ffi::RENDER_UPDATE_FRAME == 0 {
+        let fresh = flags & ffi::RENDER_UPDATE_FRAME != 0;
+        if !fresh && !(resized && rendered_once) {
             continue;
         }
 
         // 界面还没取走上一帧，就丢掉这一帧。播放器宁可掉帧也不能让内存堆积。
+        // `resized` 不清，下一轮还会重试，尺寸变化不会因为这次丢掉而失效。
         if shared.frame_pending.swap(true, Ordering::SeqCst) {
             continue;
         }
@@ -1180,6 +1193,8 @@ fn render_loop(
         shared.frame_serial.fetch_add(1, Ordering::SeqCst);
         shared.notify(PlayerEvent::Frame(Arc::new(image)));
         unsafe { (api.render_context_report_swap)(context) };
+        resized = false;
+        rendered_once = true;
     }
 
     unsafe {
