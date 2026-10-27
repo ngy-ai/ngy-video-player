@@ -20,14 +20,17 @@
 //! 播放器这种以正确性优先的产品，这笔交易划算。真正的高码率 4K 场景再另做零拷贝
 //! 后端即可，接口不需要变。
 
-use crate::player::ffi::{
-    self, MpvApi, MpvEventEndFile, MpvEventProperty, MpvRenderContext, MpvRenderParam, SendPtr,
-    event, format, render_param,
+use crate::player::{
+    ffi::{
+        self, MpvApi, MpvEventEndFile, MpvEventProperty, MpvRenderContext, MpvRenderParam, SendPtr,
+        event, format, render_param,
+    },
+    frame::{self, FrameBuffer},
+    thumbnail::{self, Thumbnailer},
 };
 use anyhow::{Context as _, Result, anyhow};
 use futures::channel::mpsc::UnboundedSender;
 use gpui_kit::RenderImage;
-use image::{Frame, ImageBuffer, Rgba};
 use std::{
     ffi::{CString, c_char, c_int, c_void},
     path::{Path, PathBuf},
@@ -215,6 +218,9 @@ pub enum PlayerEvent {
     Dirty,
     /// 新的一帧画面。
     Frame(Arc<RenderImage>),
+    /// 进度条预览图。`time` 是当初请求的时间点（不是实际画面时间，
+    /// 因为实际帧会落在关键帧附近）。
+    Thumbnail { time: f64, image: Arc<RenderImage> },
     /// 当前文件播放结束。
     Ended(EndReason),
     /// 出错了，界面应该显示出来。
@@ -307,6 +313,12 @@ pub struct Engine {
     signal: Arc<RenderSignal>,
     threads: Mutex<Vec<JoinHandle<()>>>,
     render_target: Mutex<TargetSize>,
+    /// 进度条悬停预览用的第二个 mpv 实例。
+    ///
+    /// 第一次悬停时才创建：大多数会话根本不会碰进度条，没必要一启动就多开
+    /// 一份解码器。`None` 且 `thumbnail_failed` 为真是「试过、起不来」。
+    thumbnail: Mutex<Option<Thumbnailer>>,
+    thumbnail_failed: AtomicBool,
 }
 
 impl std::fmt::Debug for Engine {
@@ -384,6 +396,8 @@ impl Engine {
             signal,
             threads: Mutex::new(vec![engine_thread, render_thread]),
             render_target: Mutex::new(TargetSize::default()),
+            thumbnail: Mutex::new(None),
+            thumbnail_failed: AtomicBool::new(false),
         })
     }
 
@@ -525,12 +539,65 @@ impl Engine {
 
     pub fn toggle_fullscreen_hint(&self) {}
 
+    /// 请求一张 `path` 在 `time` 处的预览图。
+    ///
+    /// 悬停时指针每动一下就会调一次：真正的节流在预览实例那侧（只做最新的一条），
+    /// 这里只负责「第一次用的时候把实例起起来」。
+    pub fn preview(&self, path: &Path, time: f64) {
+        if self.shared.shutdown.load(Ordering::SeqCst)
+            || self.thumbnail_failed.load(Ordering::Relaxed)
+        {
+            return;
+        }
+
+        // 渲染尺寸按视频比例走，宽银幕和 4:3 都不会被拉变形。
+        let aspect = self.shared.state().aspect();
+        let (_, height) = thumbnail::render_size(aspect);
+
+        let mut slot = self.thumbnail.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.is_none() {
+            match Thumbnailer::spawn(Arc::clone(&self.api), self.shared.events.clone()) {
+                Ok(created) => *slot = Some(created),
+                Err(error) => {
+                    // 只影响悬停预览这一个功能，所以记一条日志就够，
+                    // 不弹横幅、也不影响正在播放的视频。
+                    log_warn!("进度条预览不可用: {error:#}");
+                    self.thumbnail_failed.store(true, Ordering::Relaxed);
+                    return;
+                }
+            }
+        }
+        if let Some(thumbnailer) = slot.as_ref() {
+            thumbnailer.show(path, time, height);
+        }
+    }
+
+    /// 不再需要预览（换片、停止播放）：让预览实例把文件卸掉。
+    pub fn stop_preview(&self) {
+        if let Some(thumbnailer) = self
+            .thumbnail
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            thumbnailer.stop();
+        }
+    }
+
     pub fn shutdown(&self) {
         if self.shared.shutdown.swap(true, Ordering::SeqCst) {
             return;
         }
         self.signal.wake();
         unsafe { (self.api.wakeup)(self.handle.get()) };
+
+        // 预览实例先停：它独立于主实例，但同样占着文件和一路解码器。
+        drop(
+            self.thumbnail
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take(),
+        );
 
         let threads = std::mem::take(&mut *self.threads.lock().unwrap_or_else(|e| e.into_inner()));
         for thread in threads {
@@ -1064,7 +1131,6 @@ fn render_loop(
     // 否则内部会走「整帧拷贝」的慢路径，所以这里自己做对齐，而不是直接扔一个 Vec。
     let mut buffer = FrameBuffer::default();
     let mut current = TargetSize::default();
-    let mut format = CString::new("bgr0").expect("静态字符串");
 
     loop {
         if shared.shutdown.load(Ordering::SeqCst) {
@@ -1098,14 +1164,14 @@ fn render_loop(
             continue;
         }
 
-        let rendered = render_one(&api, context, current, &mut buffer, &mut format);
+        let rendered = frame::render_sw(&api, context, current.width, current.height, &mut buffer);
         if let Err(error) = rendered {
             log_warn!("渲染帧失败: {error:#}");
             shared.frame_pending.store(false, Ordering::SeqCst);
             continue;
         }
 
-        let image = buffer.into_image();
+        let image = buffer.to_image();
         shared.frame_serial.fetch_add(1, Ordering::SeqCst);
         shared.notify(PlayerEvent::Frame(Arc::new(image)));
         unsafe { (api.render_context_report_swap)(context) };
@@ -1114,111 +1180,6 @@ fn render_loop(
     unsafe {
         (api.render_context_set_update_callback)(context, None, std::ptr::null_mut());
         (api.render_context_free)(context);
-    }
-}
-
-fn render_one(
-    api: &MpvApi,
-    context: *mut MpvRenderContext,
-    size: TargetSize,
-    buffer: &mut FrameBuffer,
-    format: &mut CString,
-) -> Result<()> {
-    let mut dimensions: [c_int; 2] = [size.width as c_int, size.height as c_int];
-    let mut stride: usize = buffer.stride;
-    // 注意：SW_POINTER 的 data 就是像素数据本身的地址（`Type: void*`），
-    // 不是「指向指针的指针」。多套一层星号的话 mpv 会把画面写到栈上这个变量
-    // 所在的地址，直接段错误。
-    let pointer: *mut c_void = buffer.pointer() as *mut c_void;
-
-    let mut params = [
-        MpvRenderParam {
-            kind: render_param::SW_SIZE,
-            data: dimensions.as_mut_ptr() as *mut c_void,
-        },
-        MpvRenderParam {
-            kind: render_param::SW_FORMAT,
-            data: format.as_ptr() as *mut c_void,
-        },
-        MpvRenderParam {
-            kind: render_param::SW_STRIDE,
-            data: &mut stride as *mut usize as *mut c_void,
-        },
-        MpvRenderParam {
-            kind: render_param::SW_POINTER,
-            data: pointer,
-        },
-        MpvRenderParam {
-            kind: render_param::INVALID,
-            data: std::ptr::null_mut(),
-        },
-    ];
-
-    let rc = unsafe { (api.render_context_render)(context, params.as_mut_ptr()) };
-    if rc < 0 {
-        return Err(anyhow!("mpv_render_context_render: {}", api.error_text(rc)));
-    }
-    Ok(())
-}
-
-/// 一块 64 字节对齐的取帧缓冲。
-///
-/// mpv 用它内部的 SIMD 路径直接写这块内存；只要 stride 与起始指针都对齐到 64，
-/// 就不会触发「先渲染到临时缓冲、再整帧 memcpy 给你」的退化路径。
-#[derive(Default)]
-struct FrameBuffer {
-    storage: Vec<u8>,
-    offset: usize,
-    stride: usize,
-    width: u32,
-    height: u32,
-}
-
-impl FrameBuffer {
-    fn resize(&mut self, width: u32, height: u32) {
-        // 每行按 64 字节向上取整（4 字节像素，64/4=16，始终是整数个像素）。
-        let stride = ((width as usize * 4).div_ceil(64)) * 64;
-        let needed = stride * height as usize + 64;
-        if self.storage.len() < needed {
-            self.storage.resize(needed, 0);
-        }
-        let base = self.storage.as_ptr() as usize;
-        self.offset = (64 - (base % 64)) % 64;
-        self.stride = stride;
-        self.width = width;
-        self.height = height;
-    }
-
-    fn pointer(&mut self) -> *mut u8 {
-        unsafe { self.storage.as_mut_ptr().add(self.offset) }
-    }
-
-    /// 拷成一张紧密排列、alpha 全不透明的 BGRA 图像。
-    ///
-    /// 两个细节：
-    /// * mpv 给的第四字节是「未定义的填充值」，必须强制写成 255。不为 0 的话
-    ///   GPUI 的 alpha 混合会把整帧当成透明，屏幕上只剩黑底。
-    /// * 这次拷贝无法避免：`RenderImage` 要求拥有自己的像素。
-    fn into_image(&self) -> RenderImage {
-        let width = self.width as usize;
-        let height = self.height as usize;
-        let row_bytes = width * 4;
-
-        let mut pixels = vec![0u8; row_bytes * height];
-        for y in 0..height {
-            let src_start = self.offset + y * self.stride;
-            let dst_start = y * row_bytes;
-            pixels[dst_start..dst_start + row_bytes]
-                .copy_from_slice(&self.storage[src_start..src_start + row_bytes]);
-        }
-        for chunk in pixels.chunks_exact_mut(4) {
-            chunk[3] = 255;
-        }
-
-        let image: ImageBuffer<Rgba<u8>, Vec<u8>> =
-            ImageBuffer::from_raw(self.width, self.height, pixels)
-                .expect("缓冲区尺寸由我们自己分配，必然匹配");
-        RenderImage::new([Frame::new(image)])
     }
 }
 

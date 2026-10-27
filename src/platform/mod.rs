@@ -5,3 +5,4 @@
 //! 实现，不引入跨平台 crate。理由与后果见 `docs/adr/0001`。
 
 pub mod associations;
+pub mod reveal;

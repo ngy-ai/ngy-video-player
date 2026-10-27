@@ -19,10 +19,11 @@ use anyhow::Result;
 use futures::{StreamExt as _, channel::mpsc::UnboundedReceiver};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, Bounds, ClickEvent, Context, CursorStyle, ExternalPaths, FocusHandle,
-    IntoElement, KeyBinding, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Render, RenderImage, ScrollDelta, ScrollWheelEvent, SharedString, Styled,
-    Window, WindowBounds, WindowOptions, actions, canvas, div, point, px, size,
+    AnyElement, App, Bounds, ClickEvent, Context, Corners, CursorStyle, ExternalPaths, FocusHandle,
+    Hsla, IntoElement, KeyBinding, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, RenderImage, ScrollDelta,
+    ScrollWheelEvent, SharedString, Styled, Window, WindowBounds, WindowOptions, actions, canvas,
+    div, point, px, size,
 };
 use std::{
     cell::Cell,
@@ -66,6 +67,113 @@ fn format_speed(speed: f64) -> String {
         text.pop();
     }
     format!("{text}×")
+}
+
+/// `8_400_000_000` → `8.4 GB`。文件大小用二进制单位，和资源管理器说的一致。
+fn format_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
+}
+
+/// 右键菜单里的一行：图标 + 文字，整行可点。
+fn item_menu_entry(
+    id: &'static str,
+    icon_name: IconName,
+    label: &'static str,
+    color: Hsla,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .px(px(10.0))
+        .py(px(7.0))
+        .mx(px(4.0))
+        .rounded(px(6.0))
+        .text_size(px(13.0))
+        .text_color(color)
+        .cursor(CursorStyle::PointingHand)
+        .hover(|style| style.bg(ui::surface_hover()))
+        .child(ui::icon(icon_name, 14.0, color))
+        .child(label)
+        .on_click(on_click)
+        .into_any_element()
+}
+
+/// 「查看格式」的正文：容器、时长、大小，再逐条列轨道。
+fn render_media_info(info: &crate::player::MediaInfo) -> AnyElement {
+    let mut summary: Vec<(String, String)> = Vec::new();
+    if !info.container.is_empty() {
+        summary.push(("容器".to_string(), info.container.clone()));
+    }
+    if info.duration > 0.0 {
+        summary.push(("时长".to_string(), format_time(info.duration)));
+    }
+    if let Some(size) = info.size {
+        summary.push(("大小".to_string(), format_size(size)));
+    }
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .children(summary.into_iter().map(|(key, value)| {
+            div()
+                .flex()
+                .justify_between()
+                .gap(px(16.0))
+                .text_size(px(13.0))
+                .child(div().text_color(text_muted()).child(key))
+                .child(div().text_color(text()).child(value))
+        }))
+        .child(
+            div()
+                .mt(px(6.0))
+                .text_size(px(12.0))
+                .text_color(text_muted())
+                .child(format!("轨道 · {}", info.tracks.len())),
+        )
+        .children(info.tracks.iter().map(|track| {
+            let mut meta: Vec<String> = Vec::new();
+            if !track.language.is_empty() {
+                meta.push(track.language.to_uppercase());
+            }
+            if !track.codec.is_empty() {
+                meta.push(track.codec.clone());
+            }
+            if !track.title.is_empty() {
+                meta.push(track.title.clone());
+            }
+            if !track.detail.is_empty() {
+                meta.push(track.detail.clone());
+            }
+            if track.external {
+                meta.push("外挂".to_string());
+            }
+            if meta.is_empty() {
+                meta.push("—".to_string());
+            }
+
+            div()
+                .flex()
+                .items_start()
+                .gap(px(10.0))
+                .text_size(px(13.0))
+                .child(div().w(px(34.0)).text_color(ui::accent()).child(track.kind))
+                .child(div().flex_1().text_color(text()).child(meta.join(" · ")))
+        }))
+        .into_any_element()
 }
 
 /// 给新列表起名字：文件夹名 / m3u 文件名 / 文件所在目录名。
@@ -145,6 +253,9 @@ const PLAYLIST_MIN_WIDTH: f32 = 220.0;
 const PLAYLIST_MAX_WIDTH: f32 = 760.0;
 const VIDEO_MIN_WIDTH: f32 = 480.0;
 const PLAYLIST_RESIZER_WIDTH: f32 = 6.0;
+/// 行右键菜单的尺寸，只用来把弹窗往窗口里收。
+const ITEM_MENU_WIDTH: f32 = 168.0;
+const ITEM_MENU_HEIGHT: f32 = 118.0;
 
 #[derive(Clone, Debug, Default)]
 pub struct LaunchOptions {
@@ -166,6 +277,38 @@ impl Banner {
             body: body.into(),
         }
     }
+}
+
+/// 播放列表行的右键菜单。位置是窗口坐标，弹窗按它绝对定位。
+struct ItemMenu {
+    index: usize,
+    path: PathBuf,
+    position: Point<Pixels>,
+}
+
+/// 「查看格式」面板。探测要读文件，所以先开一个 Loading 状态再填内容。
+struct FileInfoPanel {
+    path: PathBuf,
+    state: InfoState,
+}
+
+enum InfoState {
+    Loading,
+    Ready(crate::player::MediaInfo),
+    Failed(String),
+}
+
+/// 进度条悬停预览的即时状态。
+struct HoverPreview {
+    /// 鼠标指向的时间点（秒）。
+    time: f64,
+    /// 在进度条上的横向比例（0..1），决定浮层停在哪。
+    ratio: f32,
+    /// 已经拿到的预览图。
+    ///
+    /// 换位置后先沿用上一张，等新的回来再替换：每动一下鼠标就把浮层清空，
+    /// 看起来比「慢半拍」更难受，而且会一直闪。
+    image: Option<Arc<RenderImage>>,
 }
 
 pub struct PlayerApp {
@@ -191,6 +334,10 @@ pub struct PlayerApp {
     selection_anchor: Option<usize>,
     /// 正在拖播放列表的左边界。
     playlist_dragging: bool,
+    /// 播放列表行的右键菜单。
+    item_menu: Option<ItemMenu>,
+    /// 「查看格式」面板；`None` 表示没打开。
+    file_info: Option<FileInfoPanel>,
     settings: Settings,
     focus: FocusHandle,
 
@@ -205,6 +352,15 @@ pub struct PlayerApp {
     volume_dragging: bool,
     /// Ctrl/⌘ + 滚轮的像素余量：触控板一次滑动拆成很多小增量，攒够一格才走一帧。
     frame_scroll: f32,
+    /// 进度条悬停预览；`None` 表示鼠标不在进度条上。
+    hover: Option<HoverPreview>,
+    /// 已经发出、还没回来的预览请求（时间点 + 发出时刻）。
+    ///
+    /// 同一时刻只挂一条：悬停时指针每动几个像素就产生一次请求，全都发出去只会
+    /// 让预览永远追着指针跑。结果回来后再按「当时」的位置补一条，最终收敛。
+    preview_request: Option<(f64, Instant)>,
+    /// 已经画过、等待归还给 GPU atlas 的旧预览图。规则与 `retired` 相同。
+    preview_retired: VecDeque<Arc<RenderImage>>,
 
     /// 原生文件选择框是否已经打开。
     ///
@@ -380,6 +536,8 @@ impl PlayerApp {
             selection: BTreeSet::new(),
             selection_anchor: None,
             playlist_dragging: false,
+            item_menu: None,
+            file_info: None,
             settings,
             focus,
             last_activity: Instant::now(),
@@ -389,6 +547,9 @@ impl PlayerApp {
             volume_bounds: Rc::new(Cell::new(Bounds::default())),
             volume_dragging: false,
             frame_scroll: 0.0,
+            hover: None,
+            preview_request: None,
+            preview_retired: VecDeque::new(),
             dialog_open: false,
             osd: None,
             error: None,
@@ -489,6 +650,10 @@ impl PlayerApp {
                             engine.frame_consumed();
                         }
                         this.incoming = Some(image);
+                        cx.notify();
+                    }
+                    PlayerEvent::Thumbnail { time, image } => {
+                        this.on_thumbnail(time, image);
                         cx.notify();
                     }
                     PlayerEvent::Ended(reason) => {
@@ -658,6 +823,10 @@ impl PlayerApp {
     fn exit_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.show_help {
             self.show_help = false;
+        } else if self.file_info.is_some() {
+            self.file_info = None;
+        } else if self.item_menu.is_some() {
+            self.item_menu = None;
         } else if self.menu_bar.is_some() {
             self.menu_bar = None;
         } else if self.menu.is_some() {
@@ -845,6 +1014,9 @@ impl PlayerApp {
         self.snapshot.duration = 0.0;
         self.snapshot.tracks.clear();
         self.error = None;
+        // 换片：上一部的预览图和时间点全部作废，预览实例里那个文件也卸掉，
+        // 否则它会一直占着文件和一路解码器。
+        self.clear_preview();
         self.send(Command::Load { url, start: None });
         log_info!("打开 {}", path.display());
     }
@@ -1015,6 +1187,85 @@ impl PlayerApp {
         cx.notify();
     }
 
+    // -- 行右键菜单 --------------------------------------------------------
+
+    /// 右键某一行：在鼠标位置弹出菜单。越界就往窗口里收，别飘到屏幕外。
+    fn open_item_menu(
+        &mut self,
+        index: usize,
+        path: PathBuf,
+        position: Point<Pixels>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let viewport = window.viewport_size();
+        let max_x = (f32::from(viewport.width) - ITEM_MENU_WIDTH - 8.0).max(8.0);
+        let max_y = (f32::from(viewport.height) - ITEM_MENU_HEIGHT - 8.0).max(8.0);
+        let position = point(
+            px(f32::from(position.x).clamp(8.0, max_x)),
+            px(f32::from(position.y).clamp(8.0, max_y)),
+        );
+
+        self.item_menu = Some(ItemMenu {
+            index,
+            path,
+            position,
+        });
+        // 右键菜单和悬浮菜单/菜单栏互斥，免得两层浮层叠在一起。
+        self.menu = None;
+        self.menu_bar = None;
+        self.poke();
+        cx.notify();
+    }
+
+    fn reveal_item(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.item_menu = None;
+        match platform::reveal::reveal(&path) {
+            // 文件管理器可能被别的窗口盖住，给一句提示免得以为没反应。
+            Ok(()) => self.flash("已在文件管理器中定位"),
+            Err(message) => self.flash(message),
+        }
+        cx.notify();
+    }
+
+    /// 打开「查看格式」。探测要 loadfile，放到后台线程里跑，结果用 oneshot 回来。
+    fn show_file_info(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.item_menu = None;
+        self.file_info = Some(FileInfoPanel {
+            path: path.clone(),
+            state: InfoState::Loading,
+        });
+
+        let target = path.clone();
+        let (tx, rx) = futures::channel::oneshot::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::player::probe::probe(&target));
+        });
+
+        cx.spawn(async move |this, cx| {
+            let result = rx
+                .await
+                .unwrap_or_else(|_| Err("探测线程意外退出".to_string()));
+            let _ = this.update(cx, |this, cx| {
+                // 探测期间面板可能被关掉，或者已经换成另一个文件：只认同一份。
+                let Some(panel) = this.file_info.as_mut() else {
+                    return;
+                };
+                if panel.path != path {
+                    return;
+                }
+                panel.state = match result {
+                    Ok(info) => InfoState::Ready(info),
+                    Err(message) => InfoState::Failed(message),
+                };
+                cx.notify();
+            });
+        })
+        .detach();
+
+        cx.notify();
+    }
+
     fn pick_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog_open {
             return;
@@ -1133,6 +1384,18 @@ impl PlayerApp {
                 if let Some(stale) = self.retired.pop_front() {
                     let _ = window.drop_image(stale);
                 }
+            }
+        }
+    }
+
+    /// 把不再显示的预览图还给 atlas。
+    ///
+    /// `drop_image` 只应该在没有元素再画它的时候调，所以在渲染路径上做，
+    /// 而且留一张余量——刚换下来的那张可能还在 GPU 队列里被采样。
+    fn drop_retired_previews(&mut self, window: &mut Window) {
+        while self.preview_retired.len() > 1 {
+            if let Some(stale) = self.preview_retired.pop_front() {
+                let _ = window.drop_image(stale);
             }
         }
     }
@@ -1314,6 +1577,92 @@ impl PlayerApp {
                     this.end_progress_drag(cx);
                 }),
             )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                this.update_hover(Some(event.position.x), cx);
+            }))
+            // 指针离开这一条只能靠 `on_hover` 得知：移出去之后这棵子树
+            // 再也收不到鼠标事件，光靠 on_mouse_move 浮层会一直挂在那里。
+            .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
+                if !*hovered {
+                    this.update_hover(None, cx);
+                }
+            }))
+            .children(self.hover.as_ref().map(|hover| self.render_preview(hover)))
+    }
+
+    /// 进度条上方的悬停预览：一张小图 + 对应时间。
+    ///
+    /// 浮层是进度条的绝对定位子节点，画在画面之上、控制条之外，
+    /// 不占控制条的布局空间，也不会把进度条顶高。
+    fn render_preview(&self, hover: &HoverPreview) -> AnyElement {
+        const WIDTH: f32 = 208.0;
+        const PADDING: f32 = 3.0;
+        const LABEL: f32 = 18.0;
+
+        let bar_width = f32::from(self.progress_bounds.get().size.width);
+        // 跟着指针走，但不许越出进度条两端——浮层跑到控制条外面看着像画错了。
+        let left = (hover.ratio * bar_width - WIDTH * 0.5).clamp(0.0, (bar_width - WIDTH).max(0.0));
+
+        // 图框高度按视频比例走：宽银幕片子不该被塞进一个 16:9 的框里。
+        let aspect = self.snapshot.aspect().clamp(0.5, 4.0);
+        let image_height = ((WIDTH - PADDING * 2.0) / aspect).clamp(60.0, 200.0);
+        let image = hover.image.clone();
+        let time = hover.time;
+
+        div()
+            .absolute()
+            .left(px(left))
+            .bottom(px(22.0))
+            .w(px(WIDTH))
+            .p(px(PADDING))
+            .flex()
+            .flex_col()
+            .gap(px(PADDING))
+            .rounded(px(8.0))
+            .bg(surface())
+            .border_1()
+            .border_color(gpui_kit::rgb(0x2c2c34))
+            .shadow_lg()
+            .child(
+                div()
+                    .relative()
+                    .w_full()
+                    .h(px(image_height))
+                    .rounded(px(5.0))
+                    .overflow_hidden()
+                    .bg(gpui_kit::rgb(0x000000))
+                    .child(
+                        canvas(
+                            |_bounds, _window, _cx| (),
+                            move |bounds, (), window, _cx| {
+                                if let Some(image) = image.as_ref() {
+                                    let _ = window.paint_image(
+                                        bounds,
+                                        bounds,
+                                        Corners::default(),
+                                        image.clone(),
+                                        0,
+                                        false,
+                                    );
+                                }
+                            },
+                        )
+                        .absolute()
+                        .inset_0(),
+                    ),
+            )
+            .child(
+                div()
+                    .h(px(LABEL))
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(11.0))
+                    .text_color(text())
+                    .child(format_time(time)),
+            )
+            .into_any_element()
     }
 
     fn begin_progress_drag(&mut self, x: Pixels) {
@@ -1343,6 +1692,99 @@ impl PlayerApp {
         let offset = f32::from(x) - f32::from(bounds.origin.x);
         let ratio = (offset as f64 / width).clamp(0.0, 1.0);
         ratio * self.snapshot.duration
+    }
+
+    // -- 进度条悬停预览 ----------------------------------------------------
+
+    /// 鼠标在进度条上（`Some(x)`）或离开（`None`）时更新预览浮层。
+    fn update_hover(&mut self, x: Option<Pixels>, cx: &mut Context<Self>) {
+        let Some(x) = x else {
+            if self.hover.is_some() {
+                self.drop_hover();
+                cx.notify();
+            }
+            return;
+        };
+
+        let duration = self.snapshot.duration;
+        let bounds = self.progress_bounds.get();
+        let width = f32::from(bounds.size.width);
+        if duration <= 0.0 || width <= 1.0 {
+            return;
+        }
+
+        let offset = (f32::from(x) - f32::from(bounds.origin.x)).clamp(0.0, width);
+        let ratio = offset / width;
+        let time = ratio as f64 * duration;
+
+        // 只有「手上没有挂着的请求」才发新的。结果回来后会按当时的位置再补一条，
+        // 所以最后一格不会漏；而中途那条即使丢掉，用户也早就划过去了。
+        // 纯音频没有画面可取，别让预览实例在那儿白解码。
+        let pending = self
+            .preview_request
+            .is_some_and(|(_, at)| at.elapsed() < Duration::from_millis(1500));
+        if !pending && self.snapshot.has_video() {
+            self.request_preview(time);
+        }
+
+        let image = self.hover.as_ref().and_then(|hover| hover.image.clone());
+        self.hover = Some(HoverPreview { time, ratio, image });
+        cx.notify();
+    }
+
+    fn request_preview(&mut self, time: f64) {
+        let Some(path) = self.snapshot.path.clone() else {
+            return;
+        };
+        let Some(engine) = &self.engine else {
+            return;
+        };
+        engine.preview(&path, time);
+        self.preview_request = Some((time, Instant::now()));
+    }
+
+    /// 预览图回来了。
+    fn on_thumbnail(&mut self, time: f64, image: Arc<RenderImage>) {
+        self.preview_request = None;
+
+        let Some(hover) = &mut self.hover else {
+            // 鼠标已经离开进度条：图没地方放，但它在 atlas 里占着一块，
+            // 交给渲染路径统一回收。
+            self.preview_retired.push_back(image);
+            return;
+        };
+
+        if let Some(previous) = hover.image.replace(image) {
+            self.preview_retired.push_back(previous);
+        }
+
+        // 送来的是几格之前的位置：指针多半已经挪远了，按当前位置再要一张。
+        // 鼠标停下后下一次就能对上，所以这个「追」不会无限循环。
+        let follow_up = ((hover.time - time).abs() > 0.5).then_some(hover.time);
+        if let Some(time) = follow_up {
+            self.request_preview(time);
+        }
+    }
+
+    /// 鼠标离开进度条：浮层收掉。
+    ///
+    /// 预览实例仍然留着那个文件——回头再划过进度条不用重新打开，
+    /// 打开一个文件比 seek 一次贵得多。
+    fn drop_hover(&mut self) {
+        if let Some(hover) = self.hover.take()
+            && let Some(image) = hover.image
+        {
+            self.preview_retired.push_back(image);
+        }
+        self.preview_request = None;
+    }
+
+    /// 换片/关文件：预览整体作废，连预览实例里的文件一起卸掉。
+    fn clear_preview(&mut self) {
+        self.drop_hover();
+        if let Some(engine) = &self.engine {
+            engine.stop_preview();
+        }
     }
 
     fn render_volume(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2628,6 +3070,7 @@ impl PlayerApp {
         let is_current = current == Some(index);
         let is_selected = self.selection.contains(&index);
         let group = format!("playlist-row-{index}");
+        let row_path = path.to_path_buf();
 
         div()
             .id(gpui_kit::ElementId::Name(format!("item-{index}").into()))
@@ -2703,6 +3146,14 @@ impl PlayerApp {
             .on_click(cx.listener(move |this, event: &ClickEvent, _window, cx| {
                 this.select_item(index, event.modifiers(), cx);
             }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    // 右键只弹菜单：不选中、不换歌，也不让点击漏到画面上。
+                    cx.stop_propagation();
+                    this.open_item_menu(index, row_path.clone(), event.position, window, cx);
+                }),
+            )
             .into_any_element()
     }
 
@@ -2777,6 +3228,166 @@ impl PlayerApp {
         )
     }
 
+    /// 行右键菜单：贴在鼠标位置，三项都是对「这一个文件」的操作。
+    fn render_item_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let menu = self.item_menu.as_ref()?;
+        let index = menu.index;
+        let reveal_path = menu.path.clone();
+        let info_path = menu.path.clone();
+
+        Some(
+            div()
+                .id("item-menu")
+                .absolute()
+                .left(menu.position.x)
+                .top(menu.position.y)
+                .w(px(ITEM_MENU_WIDTH))
+                .py(px(6.0))
+                .rounded(px(10.0))
+                .bg(surface())
+                .border_1()
+                .border_color(gpui_kit::rgb(0x2c2c34))
+                .shadow_lg()
+                // 菜单上的点击统一吃掉：一是别漏到画面去切播放状态，二是别让
+                // 根节点的「点别处收菜单」把菜单在 mouse-down 阶段就拆掉，
+                // 否则 mouse-up 时元素已经不在，菜单项永远点不中。
+                .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
+                    cx.stop_propagation();
+                }))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                        cx.stop_propagation();
+                    }),
+                )
+                .child(item_menu_entry(
+                    "item-menu-delete",
+                    IconName::Trash,
+                    "删除",
+                    ui::danger(),
+                    cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                        cx.stop_propagation();
+                        this.item_menu = None;
+                        this.remove_items(&[index], cx);
+                    }),
+                ))
+                .child(item_menu_entry(
+                    "item-menu-reveal",
+                    IconName::FolderOpen,
+                    "定位文件",
+                    text(),
+                    cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                        cx.stop_propagation();
+                        this.reveal_item(reveal_path.clone(), cx);
+                    }),
+                ))
+                .child(item_menu_entry(
+                    "item-menu-info",
+                    IconName::Info,
+                    "查看格式",
+                    text(),
+                    cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                        cx.stop_propagation();
+                        this.show_file_info(info_path.clone(), cx);
+                    }),
+                )),
+        )
+    }
+
+    /// 「查看格式」面板：文件头 + 探测结果（容器、时长、大小、每条轨道）。
+    fn render_file_info(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let panel = self.file_info.as_ref()?;
+        let name = panel
+            .path
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| panel.path.display().to_string());
+
+        let body: AnyElement = match &panel.state {
+            InfoState::Loading => {
+                ui::label("正在读取格式信息…", 13.0, text_muted()).into_any_element()
+            }
+            InfoState::Failed(message) => div()
+                .text_size(px(13.0))
+                .text_color(ui::danger())
+                .child(message.clone())
+                .into_any_element(),
+            InfoState::Ready(info) => render_media_info(info),
+        };
+
+        Some(
+            div()
+                .id("file-info")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(gpui_kit::rgba(0x000000b8))
+                // 面板是模态的：点它不该穿透去暂停视频。
+                .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
+                    cx.stop_propagation();
+                }))
+                .child(
+                    div()
+                        .w(px(560.0))
+                        .p(px(20.0))
+                        .rounded(px(14.0))
+                        .bg(surface())
+                        .border_1()
+                        .border_color(gpui_kit::rgb(0x2c2c34))
+                        .flex()
+                        .flex_col()
+                        .gap(px(10.0))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap(px(12.0))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(2.0))
+                                        .child(
+                                            div()
+                                                .text_size(px(15.0))
+                                                .text_color(text())
+                                                .child(name),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(11.0))
+                                                .text_color(text_faint())
+                                                .child(ui::ellipsis(
+                                                    panel.path.display().to_string(),
+                                                )),
+                                        ),
+                                )
+                                .child(icon_button(
+                                    "file-info-close",
+                                    IconName::X,
+                                    false,
+                                    false,
+                                    cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                        this.file_info = None;
+                                        cx.notify();
+                                    }),
+                                )),
+                        )
+                        .child(
+                            div()
+                                .id("file-info-body")
+                                .max_h(px(430.0))
+                                .overflow_y_scroll()
+                                .child(body),
+                        ),
+                ),
+        )
+    }
+
     fn render_help(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         if !self.show_help {
             return None;
@@ -2792,6 +3403,7 @@ impl PlayerApp {
             ("L", "播放列表"),
             ("Ctrl/⌘ 点击", "列表多选"),
             ("Shift 点击", "连选一段"),
+            ("右键列表项", "删除 / 定位文件 / 查看格式"),
             ("Delete", "删除所选项"),
             ("M", "静音"),
             ("O", "打开文件"),
@@ -2845,6 +3457,7 @@ impl PlayerApp {
 impl Render for PlayerApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.swap_frame(window);
+        self.drop_retired_previews(window);
         self.update_render_target(window);
 
         let title = if self.snapshot.media_title.is_empty() {
@@ -2939,6 +3552,24 @@ impl Render for PlayerApp {
                     this.toggle_help(cx);
                 }
             }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _window, cx| {
+                    // 点任意别处先收起右键菜单；菜单项自己的点击会截断冒泡。
+                    if this.item_menu.take().is_some() {
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, _: &MouseDownEvent, _window, cx| {
+                    // 空白处右键同样收起菜单（行上的右键会截断，转去弹新菜单）。
+                    if this.item_menu.take().is_some() {
+                        cx.notify();
+                    }
+                }),
+            )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 this.poke();
                 if this.dragging.is_some() {
@@ -3024,7 +3655,10 @@ impl Render for PlayerApp {
                 this.child(self.render_menu_bar(window, cx))
             })
             .children(self.render_error(panel_width, cx))
+            // 右键菜单在普通浮层之上、模态面板之下。
+            .children(self.render_item_menu(cx))
             .children(self.render_help(cx))
+            .children(self.render_file_info(cx))
     }
 }
 
