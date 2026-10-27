@@ -9,7 +9,7 @@ use crate::{
     formats, platform,
     player::{Command, EndReason, Engine, LoopMode, PlayerEvent, Snapshot, TrackKind},
     playlist::{self, Playlist, PlaylistSet},
-    settings::Settings,
+    settings::{OnTop, Settings},
     ui::{
         self, bg, format_time, icon, icon_button, pill_button, surface, text, text_faint,
         text_muted,
@@ -454,6 +454,11 @@ pub struct PlayerApp {
     /// 「查看格式」面板；`None` 表示没打开。
     file_info: Option<FileInfoPanel>,
     settings: Settings,
+    /// 上一次真正下发给窗口系统的置顶状态。
+    ///
+    /// 置顶是窗口系统的事，不是界面每帧都要重设的属性；比对一下，只在
+    /// 「想置顶」和「已经在置顶」不一致时才调平台 API。
+    on_top_applied: bool,
     focus: FocusHandle,
 
     /// 鼠标最后一次活动的时间，用来决定控制条什么时候淡出。
@@ -626,6 +631,7 @@ enum BarAction {
     Next,
     Seek(f64),
     SetLoop(LoopMode),
+    SetOnTop(OnTop),
     TogglePlaylist,
     ToggleFullscreen,
     ToggleHelp,
@@ -671,6 +677,7 @@ impl PlayerApp {
             item_menu: None,
             file_info: None,
             settings,
+            on_top_applied: false,
             focus,
             last_activity: Instant::now(),
             controls_forced: true,
@@ -1120,6 +1127,45 @@ impl PlayerApp {
 
     fn toggle_fullscreen(&mut self, window: &mut Window) {
         window.toggle_fullscreen();
+        // 进出全屏时平台会重排窗口层级，之前设过的置顶可能被清掉；下一帧重设一次。
+        self.on_top_applied = false;
+    }
+
+    /// 置顶由「偏好」和「当前播放状态」共同决定。
+    fn wants_on_top(&self) -> bool {
+        match self.settings.on_top {
+            OnTop::Never => false,
+            // 暂停、空载、放完都不算「正在播」——这时还压着别的窗口只会碍事。
+            OnTop::Playing => !self.snapshot.idle && !self.snapshot.paused,
+            OnTop::Always => true,
+        }
+    }
+
+    /// 期望值和上次下发的值不一致时才动窗口层级。
+    ///
+    /// 放到 `window.defer` 里执行：`SetWindowPos` 会同步派发窗口消息，在渲染途中
+    /// 改 Z 序有重入风险，等这一帧收尾再做最稳。
+    fn sync_on_top(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let want = self.wants_on_top();
+        if want == self.on_top_applied {
+            return;
+        }
+        self.on_top_applied = want;
+        window.defer(cx, move |window, _cx| {
+            if !platform::topmost::set(window, want) {
+                log_warn!("窗口置顶未生效：当前窗口系统不支持");
+            }
+        });
+    }
+
+    fn set_on_top(&mut self, mode: OnTop) {
+        if self.settings.on_top == mode {
+            return;
+        }
+        self.settings.on_top = mode;
+        // 这是「下次启动也照这个策略」的偏好，不能等窗口关闭才落盘。
+        self.settings.save();
+        self.flash(format!("置顶：{}", mode.label()));
     }
 
     /// Esc 的语义：一层一层往回退，而不是直接全关。
@@ -2850,6 +2896,19 @@ impl PlayerApp {
                         .hint("F")
                         .checked(window.is_fullscreen()),
                 ));
+                items.push(BarItem::Separator);
+                // 置顶要拿原生窗口句柄：Wayland 没给普通窗口留这个能力，只能置灰并说明。
+                let on_top = platform::topmost::supported(window);
+                for mode in OnTop::ALL {
+                    items.push(BarItem::Entry(
+                        BarEntry::new(mode.label(), SetOnTop(mode))
+                            .checked(self.settings.on_top == mode)
+                            .enabled(on_top),
+                    ));
+                }
+                if !on_top {
+                    items.push(BarItem::Entry(BarEntry::note("当前窗口系统不支持置顶")));
+                }
             }
             BarMenu::Settings => {
                 let supported = platform::associations::supported();
@@ -2907,6 +2966,7 @@ impl PlayerApp {
             BarAction::Next => self.next_file(cx),
             BarAction::Seek(delta) => self.seek_by(delta, cx),
             BarAction::SetLoop(mode) => self.set_loop(mode, cx),
+            BarAction::SetOnTop(mode) => self.set_on_top(mode),
             BarAction::TogglePlaylist => {
                 self.set_playlist_visible(!self.settings.show_playlist);
             }
@@ -4099,6 +4159,7 @@ impl Render for PlayerApp {
         self.swap_frame(window);
         self.drop_retired_previews(window);
         self.update_render_target(window);
+        self.sync_on_top(window, cx);
 
         let title = if self.snapshot.media_title.is_empty() {
             "视频播放器".to_string()

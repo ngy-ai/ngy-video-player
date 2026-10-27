@@ -19,6 +19,10 @@ path = "src/main.rs"
 gpui-kit = "0.6.4"
 anyhow = "1.0"
 
+# 窗口置顶要拿原生窗口句柄（HWND / NSView / X11 window id）。GPUI 还没有置顶开关，
+# 只能自己调平台 API；这个包已在 GPUI 的依赖图里，只是把类型拿到手，不增加编译量。
+raw-window-handle = "0.6"
+
 # libmpv 以**运行时动态加载**的方式接进来（见 src/player/ffi.rs）：
 # 构建时不需要头文件、不需要链接、不需要 C 工具链，缺库时给用户一条明确的提示，
 # 而不是让二进制直接起不来。

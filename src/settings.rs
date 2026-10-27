@@ -9,6 +9,32 @@ use std::path::PathBuf;
 
 use crate::player::LoopMode;
 
+/// 窗口置顶策略。三档而不是一个开关：看片时想让它压住别的窗口，
+/// 暂停去干别的活时又不想它挡路，这两种诉求得分开表达。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OnTop {
+    /// 不置顶。
+    #[default]
+    Never,
+    /// 只在真正播放时置顶；暂停、空载、放完都让出层级。
+    Playing,
+    /// 不管播没播都置顶。
+    Always,
+}
+
+impl OnTop {
+    /// 菜单里的全部选项，顺序就是展示顺序。
+    pub const ALL: [OnTop; 3] = [OnTop::Never, OnTop::Playing, OnTop::Always];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            OnTop::Never => "不置顶",
+            OnTop::Playing => "播放时置顶",
+            OnTop::Always => "总是置顶",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -17,7 +43,10 @@ pub struct Settings {
     pub speed: f64,
     pub loop_mode: LoopMode,
     pub show_playlist: bool,
-    pub always_on_top: bool,
+    /// 置顶策略。早期版本这里叫 `always_on_top` 且是 bool，改名换类型后
+    /// 仍认旧键，否则整份配置会解析失败、被当成默认值覆盖掉。
+    #[serde(default, alias = "always_on_top")]
+    pub on_top: OnTop,
     pub last_dir: Option<PathBuf>,
     pub window_width: f32,
     pub window_height: f32,
@@ -45,7 +74,7 @@ impl Default for Settings {
             speed: 1.0,
             loop_mode: LoopMode::Off,
             show_playlist: false,
-            always_on_top: false,
+            on_top: OnTop::Never,
             last_dir: None,
             window_width: 1120.0,
             window_height: 680.0,
@@ -163,5 +192,43 @@ impl<'de> Deserialize<'de> for LoopMode {
             "one" => LoopMode::One,
             _ => LoopMode::Off,
         })
+    }
+}
+
+impl Serialize for OnTop {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.tag())
+    }
+}
+
+impl<'de> Deserialize<'de> for OnTop {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        /// 旧配置里同一个键是 bool（`always_on_top`）；认不出来时才回落到「不置顶」。
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Bool(bool),
+            Text(String),
+        }
+
+        Ok(match Raw::deserialize(deserializer)? {
+            Raw::Bool(true) => OnTop::Always,
+            Raw::Bool(false) => OnTop::Never,
+            Raw::Text(text) => match text.as_str() {
+                "playing" => OnTop::Playing,
+                "always" => OnTop::Always,
+                _ => OnTop::Never,
+            },
+        })
+    }
+}
+
+impl OnTop {
+    fn tag(self) -> &'static str {
+        match self {
+            OnTop::Never => "never",
+            OnTop::Playing => "playing",
+            OnTop::Always => "always",
+        }
     }
 }

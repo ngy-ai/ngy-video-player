@@ -4044,6 +4044,7 @@ dependencies = [
  "gpui-kit",
  "image",
  "libloading",
+ "raw-window-handle",
  "rfd",
  "rust-embed",
  "serde",
