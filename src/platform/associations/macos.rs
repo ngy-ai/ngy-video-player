@@ -24,7 +24,6 @@ const APP_NAME: &str = "ngy-video-player";
 const UTF8: u32 = 0x0800_0100;
 /// `kLSRolesAll`
 const ROLES_ALL: u32 = 0xffff_ffff;
-const COMPARE_EQUAL: i32 = 0;
 
 type CFTypeRef = *const c_void;
 
@@ -41,7 +40,6 @@ unsafe extern "C" {
         length: isize,
         is_directory: u8,
     ) -> CFTypeRef;
-    fn CFStringCompare(left: CFTypeRef, right: CFTypeRef, options: u64) -> i32;
     fn CFRelease(value: CFTypeRef);
 }
 
@@ -52,7 +50,6 @@ unsafe extern "C" {
         roles: u32,
         handler: CFTypeRef,
     ) -> i32;
-    fn LSCopyDefaultRoleHandlerForContentType(content_type: CFTypeRef, roles: u32) -> CFTypeRef;
     fn LSRegisterURL(url: CFTypeRef, update: u8) -> i32;
 }
 
@@ -214,30 +211,11 @@ pub fn status() -> Result<Status> {
     let Ok(text) = std::fs::read_to_string(info_plist_path(&bundle)) else {
         return Ok(Status::default());
     };
-    let declared = plist::declared_extensions(&text);
-    if declared.is_empty() {
-        return Ok(Status::default());
-    }
 
-    let handler = Cf::string(BUNDLE_ID)?;
-    let mut registered = 0usize;
-    for extension in &declared {
-        let Ok(content_type) = content_type(extension) else {
-            continue;
-        };
-        let current =
-            unsafe { LSCopyDefaultRoleHandlerForContentType(content_type.raw(), ROLES_ALL) };
-        if current.is_null() {
-            continue;
-        }
-        let current = Cf(current);
-        if unsafe { CFStringCompare(current.raw(), handler.raw(), 0) } == COMPARE_EQUAL {
-            registered += 1;
-        }
-    }
-
+    // 只报「我们声明了什么」，不去查系统里当前默认是谁：用户把默认改成别的播放器是
+    // 他的自由，这里不监工——和 Windows 上不读 `UserChoice` 是同一条原则。
     Ok(Status {
-        registered,
+        registered: plist::declared_extensions(&text).len(),
         target: Some(bundle),
     })
 }
