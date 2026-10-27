@@ -2309,9 +2309,13 @@ impl PlayerApp {
             .unwrap_or_else(|| path.display().to_string());
         let is_current = current == Some(index);
         let is_selected = self.selection.contains(&index);
+        let group = format!("playlist-row-{index}");
 
         div()
             .id(gpui_kit::ElementId::Name(format!("item-{index}").into()))
+            // 行尾的删除按钮只在这一行被指向时出现，靠 group hover 的样式下发；
+            // 不用界面状态另存一个 hovered 索引，省掉每次进出都整窗重绘。
+            .group(group.clone())
             .flex()
             .items_center()
             .gap(px(8.0))
@@ -2367,6 +2371,9 @@ impl PlayerApp {
                     .size(px(24.0))
                     .rounded(px(6.0))
                     .cursor(CursorStyle::PointingHand)
+                    // 占位与常显时一致，鼠标移上去才淡入，文字不会跟着左右跳。
+                    .opacity(0.0)
+                    .group_hover(group, |style| style.opacity(1.0))
                     .hover(|style| style.bg(ui::surface_hover()))
                     .child(icon(IconName::Trash, 14.0, text_faint()))
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
