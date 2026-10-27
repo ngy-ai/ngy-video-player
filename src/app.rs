@@ -447,9 +447,11 @@ impl PlayerApp {
         self.playlists.active_playlist_mut()
     }
 
-    /// 正在播的那一页。没有播放目标时退回当前显示页，总得有个可操作对象。
-    fn playback_tab(&self) -> usize {
-        self.playing_tab.unwrap_or_else(|| self.playlists.active())
+    /// 正在播的那一页。`None` 表示引擎里可能还有东西在放，但已经没有播放队列了
+    /// （正在播的列表被关掉、清空或删光）。这时换集和自动续播都停下来，
+    /// 等用户重新从列表里点一个文件——列表的增删合闭永远不打断播放。
+    fn playback_tab(&self) -> Option<usize> {
+        self.playing_tab
     }
 
     /// 面板宽度：跟着窗口收，避免窗口缩小后面板把画面整块吃掉。
@@ -480,11 +482,6 @@ impl PlayerApp {
                         if let Some(engine) = &this.engine {
                             // 告诉取帧线程「这一帧已被取走」，否则它会主动丢帧。
                             engine.frame_consumed();
-                        }
-                        // 列表被清空后引擎可能还在收尾推最后一帧；画面已经按空列表
-                        // 清掉了，这一帧再贴上去就成了一层擦不掉的「上一部片子」。
-                        if this.playlist().is_empty() {
-                            return;
                         }
                         this.incoming = Some(image);
                         cx.notify();
@@ -671,7 +668,12 @@ impl PlayerApp {
         }
         // 自动续播跟着「正在播的那一页」走，不跟当前显示页：否则在列表 B 里
         // 翻看时，A 里的片子放完了会跳到 B 的队列里。
-        let tab = self.playback_tab();
+        let Some(tab) = self.playback_tab() else {
+            // 队列被关掉/清空了，就让这一集自然放完，不再往后接。
+            self.controls_forced = true;
+            cx.notify();
+            return;
+        };
         match self.settings.loop_mode {
             LoopMode::One => {
                 if let Some(path) = self.playlists.tab(tab).and_then(|p| p.current()).cloned() {
@@ -825,7 +827,9 @@ impl PlayerApp {
     }
 
     fn next_file(&mut self, cx: &mut Context<Self>) {
-        let tab = self.playback_tab();
+        let Some(tab) = self.playback_tab() else {
+            return;
+        };
         let wrap = self.settings.loop_mode != LoopMode::Off
             || self.playlists.tab(tab).is_some_and(|list| list.len() > 1);
         if let Some(index) = self
@@ -839,7 +843,9 @@ impl PlayerApp {
     }
 
     fn previous_file(&mut self, cx: &mut Context<Self>) {
-        let tab = self.playback_tab();
+        let Some(tab) = self.playback_tab() else {
+            return;
+        };
         let wrap = self.settings.loop_mode != LoopMode::Off
             || self.playlists.tab(tab).is_some_and(|list| list.len() > 1);
         if let Some(index) = self
@@ -893,8 +899,11 @@ impl PlayerApp {
         cx.notify();
     }
 
-    /// 删除当前页里的若干项。只有删的是正在播的那一页、又删到了当前项，才动引擎。
-    fn remove_items(&mut self, indexes: &[usize], window: &mut Window, cx: &mut Context<Self>) {
+    /// 删除当前页里的若干项。
+    ///
+    /// 只改列表，不动引擎：正在放的文件早就装进去解码了，删掉列表里的条目不该让
+    /// 画面黑一下。页内位置由 `remove_many` 顺延到后继项，这一集放完从那里接着走。
+    fn remove_items(&mut self, indexes: &[usize], cx: &mut Context<Self>) {
         let tab = self.playlists.active();
         let removal = {
             let Some(list) = self.playlists.tab_mut(tab) else {
@@ -907,46 +916,29 @@ impl PlayerApp {
         }
         self.selection.clear();
         self.selection_anchor = None;
-
-        if removal.current_removed && self.playing_tab == Some(tab) {
-            match removal.current {
-                Some(index) => self.play_tab_index(tab, index),
-                None => {
-                    self.playing_tab = None;
-                    self.stop_playback(window);
-                }
-            }
-        }
         self.playlists.save();
         self.flash(format!("已移除 {} 个文件", removal.removed));
         self.poke();
         cx.notify();
     }
 
-    fn remove_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn remove_selection(&mut self, cx: &mut Context<Self>) {
         if self.selection.is_empty() {
             return;
         }
         let indexes: Vec<usize> = self.selection.iter().copied().collect();
-        self.remove_items(&indexes, window, cx);
+        self.remove_items(&indexes, cx);
     }
 
-    fn clear_playlist(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let tab = self.playlists.active();
+    fn clear_playlist(&mut self, cx: &mut Context<Self>) {
         let count = self.playlist().len();
         if count == 0 {
             return;
         }
-        // 只清列表，磁盘上的文件一动不动，所以不做二次确认——重新拖进来就行。
-        if let Some(list) = self.playlists.tab_mut(tab) {
-            list.clear();
-        }
+        // 只清列表，播放和磁盘上的文件都不动，所以不做二次确认——重新拖进来就行。
+        self.playlist_mut().clear();
         self.selection.clear();
         self.selection_anchor = None;
-        if self.playing_tab == Some(tab) {
-            self.playing_tab = None;
-            self.stop_playback(window);
-        }
         self.playlists.save();
         self.flash(format!("已清空播放列表（{count} 个文件仍在磁盘上）"));
         cx.notify();
@@ -974,7 +966,7 @@ impl PlayerApp {
         cx.notify();
     }
 
-    fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    fn close_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         let name = self
             .playlists
             .tabs()
@@ -984,10 +976,9 @@ impl PlayerApp {
         if !self.playlists.remove(index) {
             return;
         }
-        // 正在播的那一页被关掉，队列就没了：停下来比继续放一个「不存在的列表」更诚实。
+        // 关页面不动播放：正在放的东西还在引擎里，让它自然放完，只是不再有「下一集」。
         if self.playing_tab == Some(index) {
             self.playing_tab = None;
-            self.stop_playback(window);
         } else if let Some(playing) = self.playing_tab
             && playing > index
         {
@@ -999,32 +990,6 @@ impl PlayerApp {
         self.flash(format!("已关闭列表「{name}」"));
         self.poke();
         cx.notify();
-    }
-
-    /// 停掉引擎并把画面退回空状态。
-    ///
-    /// mpv 的 `stop` 不负责清掉最后一张画面，帧和统计信息得界面自己丢，
-    /// 否则空列表上会留着一张「上一部片子的最后一秒」。
-    fn stop_playback(&mut self, window: &mut Window) {
-        self.send(Command::Stop);
-        self.snapshot.position = 0.0;
-        self.snapshot.duration = 0.0;
-        self.snapshot.tracks.clear();
-        self.snapshot.chapters.clear();
-        self.snapshot.media_title.clear();
-        self.snapshot.path = None;
-        self.error = None;
-        self.dragging = None;
-        self.controls_forced = true;
-        let stale = self
-            .frame
-            .take()
-            .into_iter()
-            .chain(self.incoming.take())
-            .chain(self.retired.drain(..));
-        for frame in stale {
-            let _ = window.drop_image(frame);
-        }
     }
 
     fn pick_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2378,10 +2343,10 @@ impl PlayerApp {
                                                 .hover(|style| style.bg(ui::surface_active()))
                                                 .child(icon(IconName::X, 10.0, text_faint()))
                                                 .on_click(cx.listener(
-                                                    move |this, _: &ClickEvent, window, cx| {
+                                                    move |this, _: &ClickEvent, _window, cx| {
                                                         // 不截断的话这一下还会落到页签的「切换」上。
                                                         cx.stop_propagation();
-                                                        this.close_tab(index, window, cx);
+                                                        this.close_tab(index, cx);
                                                     },
                                                 )),
                                         )
@@ -2498,9 +2463,9 @@ impl PlayerApp {
                                         })
                                         .child("清空")
                                         .on_click(cx.listener(
-                                            |this, _: &ClickEvent, window, cx| {
+                                            |this, _: &ClickEvent, _window, cx| {
                                                 cx.stop_propagation();
-                                                this.clear_playlist(window, cx);
+                                                this.clear_playlist(cx);
                                             },
                                         )),
                                 )
@@ -2550,9 +2515,9 @@ impl PlayerApp {
                                         .hover(|style| style.bg(ui::surface_hover()))
                                         .child("删除所选")
                                         .on_click(cx.listener(
-                                            |this, _: &ClickEvent, window, cx| {
+                                            |this, _: &ClickEvent, _window, cx| {
                                                 cx.stop_propagation();
-                                                this.remove_selection(window, cx);
+                                                this.remove_selection(cx);
                                             },
                                         )),
                                 )
@@ -2706,10 +2671,10 @@ impl PlayerApp {
                     .group_hover(group, |style| style.opacity(1.0))
                     .hover(|style| style.bg(ui::surface_hover()))
                     .child(icon(IconName::Trash, 14.0, text_faint()))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
                         // 不截断的话，同一次点击还会落到整行的「换歌」上。
                         cx.stop_propagation();
-                        this.remove_items(&[index], window, cx);
+                        this.remove_items(&[index], cx);
                     })),
             )
             .on_click(cx.listener(move |this, event: &ClickEvent, _window, cx| {
@@ -2932,10 +2897,10 @@ impl Render for PlayerApp {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ToggleHelp, _window, cx| this.toggle_help(cx)))
-            .on_action(cx.listener(|this, _: &DeleteSelected, window, cx| {
+            .on_action(cx.listener(|this, _: &DeleteSelected, _window, cx| {
                 // 面板关着的时候选择是看不见的，这时候删等于盲删，直接忽略。
                 if this.settings.show_playlist {
-                    this.remove_selection(window, cx);
+                    this.remove_selection(cx);
                 }
             }))
             .on_action(
