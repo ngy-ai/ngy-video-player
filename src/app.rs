@@ -19,14 +19,14 @@ use anyhow::Result;
 use futures::{StreamExt as _, channel::mpsc::UnboundedReceiver};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    App, Bounds, ClickEvent, Context, CursorStyle, ExternalPaths, FocusHandle, IntoElement,
-    KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Render, RenderImage, ScrollDelta, ScrollWheelEvent, SharedString, Styled, Window, WindowBounds,
-    WindowOptions, actions, canvas, div, point, px, size,
+    AnyElement, App, Bounds, ClickEvent, Context, CursorStyle, ExternalPaths, FocusHandle,
+    IntoElement, KeyBinding, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, Render, RenderImage, ScrollDelta, ScrollWheelEvent, SharedString, Styled,
+    Window, WindowBounds, WindowOptions, actions, canvas, div, point, px, size,
 };
 use std::{
     cell::Cell,
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     path::PathBuf,
     rc::Rc,
     sync::Arc,
@@ -52,6 +52,7 @@ actions!(
         StopPlayback,
         ToggleHelp,
         ExitOverlay,
+        DeleteSelected,
     ]
 );
 
@@ -157,6 +158,10 @@ pub struct PlayerApp {
     retired: VecDeque<Arc<RenderImage>>,
 
     playlist: Playlist,
+    /// 列表里被选中的行。索引只对当前这一版列表有效，任何增删都要清空。
+    selection: BTreeSet<usize>,
+    /// Shift 连选的起点（最后一次普通点击或叠加点击的位置）。
+    selection_anchor: Option<usize>,
     settings: Settings,
     focus: FocusHandle,
 
@@ -340,6 +345,8 @@ impl PlayerApp {
             incoming: None,
             retired: VecDeque::new(),
             playlist: Playlist::default(),
+            selection: BTreeSet::new(),
+            selection_anchor: None,
             settings,
             focus,
             last_activity: Instant::now(),
@@ -412,6 +419,11 @@ impl PlayerApp {
                         if let Some(engine) = &this.engine {
                             // 告诉取帧线程「这一帧已被取走」，否则它会主动丢帧。
                             engine.frame_consumed();
+                        }
+                        // 列表被清空后引擎可能还在收尾推最后一帧；画面已经按空列表
+                        // 清掉了，这一帧再贴上去就成了一层擦不掉的「上一部片子」。
+                        if this.playlist.is_empty() {
+                            return;
                         }
                         this.incoming = Some(image);
                         cx.notify();
@@ -492,6 +504,16 @@ impl PlayerApp {
         cx.notify();
     }
 
+    /// 播放列表面板的开合。关掉时顺手清掉选择：再打开时不该有一批
+    /// 「关着的时候选的」行还亮着，Delete 也不该删到看不见的东西。
+    fn set_playlist_visible(&mut self, visible: bool) {
+        self.settings.show_playlist = visible;
+        if !visible {
+            self.selection.clear();
+            self.selection_anchor = None;
+        }
+    }
+
     fn toggle_play(&mut self, cx: &mut Context<Self>) {
         self.send(Command::PlayPause);
         self.poke();
@@ -560,7 +582,7 @@ impl PlayerApp {
         } else if self.menu.is_some() {
             self.menu = None;
         } else if self.settings.show_playlist {
-            self.settings.show_playlist = false;
+            self.set_playlist_visible(false);
         } else if window.is_fullscreen() {
             window.toggle_fullscreen();
         }
@@ -577,7 +599,12 @@ impl PlayerApp {
     }
 
     fn on_ended(&mut self, reason: EndReason, cx: &mut Context<Self>) {
-        if reason == EndReason::Error {
+        // `Stopped` 是「被 stop、或正在播的文件被新文件顶掉」，不是放完了。
+        // 换歌 / 删除当前项都会顺带触发它，跟着往前走会白跳一个文件。
+        if matches!(
+            reason,
+            EndReason::Error | EndReason::Stopped | EndReason::Quit
+        ) {
             cx.notify();
             return;
         }
@@ -665,6 +692,8 @@ impl PlayerApp {
         }
 
         self.playlist.replace(files, start);
+        self.selection.clear();
+        self.selection_anchor = None;
         self.play_index(start);
     }
 
@@ -698,6 +727,115 @@ impl PlayerApp {
         if let Some(index) = self.playlist.previous_index(wrap) {
             self.play_index(index);
             cx.notify();
+        }
+    }
+
+    // -- 列表编辑 ----------------------------------------------------------
+
+    /// 列表行的单击语义：普通点击播放，Ctrl/⌘ 点击增删选择，Shift 点击连选。
+    ///
+    /// 没有单独的「选择模式」开关——播放器里点列表的第一意图永远是换歌，
+    /// 把多选藏在修饰键后面比让每次点击都先进选择态更顺手。
+    fn select_item(&mut self, index: usize, modifiers: Modifiers, cx: &mut Context<Self>) {
+        if modifiers.shift {
+            let anchor = self.selection_anchor.unwrap_or(index);
+            let (start, end) = if anchor <= index {
+                (anchor, index)
+            } else {
+                (index, anchor)
+            };
+            // 连选替换上一次的区间，否则反复 Shift 点击只会越选越多、缩不回去。
+            self.selection = (start..=end).collect();
+            if self.selection_anchor.is_none() {
+                self.selection_anchor = Some(index);
+            }
+            self.poke();
+            cx.notify();
+            return;
+        }
+
+        if modifiers.secondary() {
+            if !self.selection.remove(&index) {
+                self.selection.insert(index);
+            }
+            self.selection_anchor = Some(index);
+            self.poke();
+            cx.notify();
+            return;
+        }
+
+        self.selection.clear();
+        self.selection_anchor = Some(index);
+        self.play_index(index);
+        self.poke();
+        cx.notify();
+    }
+
+    /// 删除若干项。删到正在播的那一项才动引擎，其余只影响列表。
+    fn remove_items(&mut self, indexes: &[usize], window: &mut Window, cx: &mut Context<Self>) {
+        let removal = self.playlist.remove_many(indexes);
+        if removal.removed == 0 {
+            return;
+        }
+        self.selection.clear();
+        self.selection_anchor = None;
+
+        if removal.current_removed {
+            match removal.current {
+                Some(index) => self.play_index(index),
+                None => self.stop_playback(window),
+            }
+        }
+        self.flash(format!("已移除 {} 个文件", removal.removed));
+        self.poke();
+        cx.notify();
+    }
+
+    fn remove_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selection.is_empty() {
+            return;
+        }
+        let indexes: Vec<usize> = self.selection.iter().copied().collect();
+        self.remove_items(&indexes, window, cx);
+    }
+
+    fn clear_playlist(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let count = self.playlist.len();
+        if count == 0 {
+            return;
+        }
+        // 只清列表，磁盘上的文件一动不动，所以不做二次确认——重新拖进来就行。
+        self.playlist.clear();
+        self.selection.clear();
+        self.selection_anchor = None;
+        self.stop_playback(window);
+        self.flash(format!("已清空播放列表（{count} 个文件仍在磁盘上）"));
+        cx.notify();
+    }
+
+    /// 停掉引擎并把画面退回空状态。
+    ///
+    /// mpv 的 `stop` 不负责清掉最后一张画面，帧和统计信息得界面自己丢，
+    /// 否则空列表上会留着一张「上一部片子的最后一秒」。
+    fn stop_playback(&mut self, window: &mut Window) {
+        self.send(Command::Stop);
+        self.snapshot.position = 0.0;
+        self.snapshot.duration = 0.0;
+        self.snapshot.tracks.clear();
+        self.snapshot.chapters.clear();
+        self.snapshot.media_title.clear();
+        self.snapshot.path = None;
+        self.error = None;
+        self.dragging = None;
+        self.controls_forced = true;
+        let stale = self
+            .frame
+            .take()
+            .into_iter()
+            .chain(self.incoming.take())
+            .chain(self.retired.drain(..));
+        for frame in stale {
+            let _ = window.drop_image(frame);
         }
     }
 
@@ -1260,7 +1398,7 @@ impl PlayerApp {
                         self.settings.show_playlist,
                         false,
                         cx.listener(|this, _: &ClickEvent, _window, cx| {
-                            this.settings.show_playlist = !this.settings.show_playlist;
+                            this.set_playlist_visible(!this.settings.show_playlist);
                             this.poke();
                             cx.notify();
                         }),
@@ -1604,7 +1742,7 @@ impl PlayerApp {
             BarAction::Seek(delta) => self.seek_by(delta, cx),
             BarAction::SetLoop(mode) => self.set_loop(mode, cx),
             BarAction::TogglePlaylist => {
-                self.settings.show_playlist = !self.settings.show_playlist;
+                self.set_playlist_visible(!self.settings.show_playlist);
             }
             BarAction::ToggleFullscreen => self.toggle_fullscreen(window),
             BarAction::ToggleHelp => self.show_help = !self.show_help,
@@ -1961,6 +2099,14 @@ impl PlayerApp {
 
     fn render_playlist(&self, top: Pixels, cx: &mut Context<Self>) -> impl IntoElement {
         let current = self.playlist.index();
+        let len = self.playlist.len();
+        let selected = self.selection.len();
+        let multi_hint = if cfg!(target_os = "macos") {
+            "⌘ 点击多选 · Shift 连选 · Delete 删除"
+        } else {
+            "Ctrl 点击多选 · Shift 连选 · Delete 删除"
+        };
+
         div()
             .id("playlist")
             .absolute()
@@ -1986,80 +2132,253 @@ impl PlayerApp {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .px(px(14.0))
-                    .py(px(12.0))
+                    .pl(px(14.0))
+                    .pr(px(6.0))
+                    .py(px(8.0))
                     .child(
                         div()
                             .text_size(px(13.0))
                             .text_color(text_muted())
-                            .child(format!("播放列表 · {}", self.playlist.len())),
+                            .child(format!("播放列表 · {len}")),
                     )
-                    .child(icon_button(
-                        "playlist-close",
-                        IconName::X,
-                        false,
-                        false,
-                        cx.listener(|this, _: &ClickEvent, _window, cx| {
-                            this.settings.show_playlist = false;
-                            cx.notify();
-                        }),
-                    )),
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(2.0))
+                            // 用文字而不是垃圾桶图标：标题栏的图标离「关闭」太近，
+                            // 而且和行尾的「移除这一项」撞脸，一不留神就清空了整张表。
+                            .when(len > 0, |this| {
+                                this.child(
+                                    div()
+                                        .id("playlist-clear")
+                                        .px(px(6.0))
+                                        .py(px(3.0))
+                                        .rounded(px(6.0))
+                                        .text_size(px(12.0))
+                                        .text_color(text_muted())
+                                        .cursor(CursorStyle::PointingHand)
+                                        .hover(|style| {
+                                            style.bg(ui::surface_hover()).text_color(ui::danger())
+                                        })
+                                        .child("清空")
+                                        .on_click(cx.listener(
+                                            |this, _: &ClickEvent, window, cx| {
+                                                cx.stop_propagation();
+                                                this.clear_playlist(window, cx);
+                                            },
+                                        )),
+                                )
+                            })
+                            .child(icon_button(
+                                "playlist-close",
+                                IconName::X,
+                                false,
+                                false,
+                                cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                    this.set_playlist_visible(false);
+                                    cx.notify();
+                                }),
+                            )),
+                    ),
+            )
+            // 有选择时才出现的一小条：把「删多少、删哪些」摆在手上。
+            .when(selected > 0, |this| {
+                this.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .px(px(14.0))
+                        .pb(px(8.0))
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .text_color(ui::accent())
+                                .child(format!("已选 {selected} 项")),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(4.0))
+                                .child(
+                                    div()
+                                        .id("playlist-remove-selected")
+                                        .px(px(6.0))
+                                        .py(px(3.0))
+                                        .rounded(px(6.0))
+                                        .text_size(px(12.0))
+                                        .text_color(ui::danger())
+                                        .cursor(CursorStyle::PointingHand)
+                                        .hover(|style| style.bg(ui::surface_hover()))
+                                        .child("删除所选")
+                                        .on_click(cx.listener(
+                                            |this, _: &ClickEvent, window, cx| {
+                                                cx.stop_propagation();
+                                                this.remove_selection(window, cx);
+                                            },
+                                        )),
+                                )
+                                .child(
+                                    div()
+                                        .id("playlist-clear-selection")
+                                        .px(px(6.0))
+                                        .py(px(3.0))
+                                        .rounded(px(6.0))
+                                        .text_size(px(12.0))
+                                        .text_color(text_muted())
+                                        .cursor(CursorStyle::PointingHand)
+                                        .hover(|style| style.bg(ui::surface_hover()))
+                                        .child("取消")
+                                        .on_click(cx.listener(
+                                            |this, _: &ClickEvent, _window, cx| {
+                                                cx.stop_propagation();
+                                                this.selection.clear();
+                                                this.selection_anchor = None;
+                                                cx.notify();
+                                            },
+                                        )),
+                                ),
+                        ),
+                )
+            })
+            .when(len == 0, |this| {
+                this.child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(8.0))
+                        .child(icon(IconName::Film, 28.0, text_faint()))
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .text_color(text_faint())
+                                .child("列表为空"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(text_faint())
+                                .child("拖入文件，或按 O 打开"),
+                        ),
+                )
+            })
+            .when(len > 0, |this| {
+                this.child(
+                    div()
+                        .id("playlist-scroll")
+                        .flex_1()
+                        .overflow_y_scroll()
+                        .flex()
+                        .flex_col()
+                        .children(
+                            self.playlist
+                                .items()
+                                .iter()
+                                .enumerate()
+                                .map(|(index, path)| {
+                                    self.render_playlist_row(index, path, current, cx)
+                                }),
+                        ),
+                )
+                .child(
+                    div()
+                        .px(px(14.0))
+                        .py(px(8.0))
+                        .text_size(px(11.0))
+                        .text_color(text_faint())
+                        .child(multi_hint),
+                )
+            })
+    }
+
+    fn render_playlist_row(
+        &self,
+        index: usize,
+        path: &std::path::Path,
+        current: Option<usize>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let name = path
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.display().to_string());
+        let is_current = current == Some(index);
+        let is_selected = self.selection.contains(&index);
+
+        div()
+            .id(gpui_kit::ElementId::Name(format!("item-{index}").into()))
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .pl(px(10.0))
+            .pr(px(6.0))
+            .py(px(8.0))
+            .when(is_current, |this| this.bg(gpui_kit::rgb(0x1f2a3a)))
+            .when(is_selected && !is_current, |this| {
+                this.bg(gpui_kit::rgba(0x5aa9ff1f))
+            })
+            .when(!is_current, |this| {
+                this.hover(|style| style.bg(ui::surface_hover()))
+            })
+            .cursor(CursorStyle::PointingHand)
+            .child(
+                // 勾选标记占固定一格，选中与未选中之间文字不会左右跳。
+                div()
+                    .w(px(14.0))
+                    .flex()
+                    .justify_center()
+                    .when(is_selected, |this| {
+                        this.child(icon(IconName::Check, 12.0, ui::accent()))
+                    }),
             )
             .child(
                 div()
-                    .id("playlist-scroll")
                     .flex_1()
-                    .overflow_y_scroll()
+                    .overflow_hidden()
                     .flex()
                     .flex_col()
-                    .children(
-                        self.playlist
-                            .items()
-                            .iter()
-                            .enumerate()
-                            .map(|(index, path)| {
-                                let name = path
-                                    .file_name()
-                                    .map(|value| value.to_string_lossy().to_string())
-                                    .unwrap_or_else(|| path.display().to_string());
-                                let is_current = current == Some(index);
-                                div()
-                                    .id(gpui_kit::ElementId::Name(format!("item-{index}").into()))
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(2.0))
-                                    .px(px(14.0))
-                                    .py(px(9.0))
-                                    .when(is_current, |this| this.bg(gpui_kit::rgb(0x1f2a3a)))
-                                    .when(!is_current, |this| {
-                                        this.hover(|style| style.bg(ui::surface_hover()))
-                                    })
-                                    .cursor(CursorStyle::PointingHand)
-                                    .child(
-                                        div()
-                                            .text_size(px(13.0))
-                                            .text_color(if is_current {
-                                                ui::accent()
-                                            } else {
-                                                text()
-                                            })
-                                            .child(ui::ellipsis(name)),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(11.0))
-                                            .text_color(text_faint())
-                                            .child(formats::kind_label(path).to_string()),
-                                    )
-                                    .on_click(cx.listener(
-                                        move |this, _: &ClickEvent, _window, cx| {
-                                            this.play_index(index);
-                                            cx.notify();
-                                        },
-                                    ))
-                            }),
+                    .gap(px(2.0))
+                    .child(
+                        div()
+                            .text_size(px(13.0))
+                            .text_color(if is_current { ui::accent() } else { text() })
+                            .child(ui::ellipsis(name)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(text_faint())
+                            .child(formats::kind_label(path).to_string()),
                     ),
             )
+            .child(
+                div()
+                    .id(gpui_kit::ElementId::Name(
+                        format!("item-remove-{index}").into(),
+                    ))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(px(24.0))
+                    .rounded(px(6.0))
+                    .cursor(CursorStyle::PointingHand)
+                    .hover(|style| style.bg(ui::surface_hover()))
+                    .child(icon(IconName::Trash, 14.0, text_faint()))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        // 不截断的话，同一次点击还会落到整行的「换歌」上。
+                        cx.stop_propagation();
+                        this.remove_items(&[index], window, cx);
+                    })),
+            )
+            .on_click(cx.listener(move |this, event: &ClickEvent, _window, cx| {
+                this.select_item(index, event.modifiers(), cx);
+            }))
+            .into_any_element()
     }
 
     fn render_osd(&self, top: Pixels) -> Option<impl IntoElement> {
@@ -2143,6 +2462,9 @@ impl PlayerApp {
             ("N / P", "下一个 / 上一个"),
             ("[ ]", "减速 / 加速"),
             ("L", "播放列表"),
+            ("Ctrl/⌘ 点击", "列表多选"),
+            ("Shift 点击", "连选一段"),
+            ("Delete", "删除所选项"),
             ("M", "静音"),
             ("O", "打开文件"),
             ("F / 双击", "全屏"),
@@ -2246,7 +2568,7 @@ impl Render for PlayerApp {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &TogglePlaylist, _window, cx| {
-                this.settings.show_playlist = !this.settings.show_playlist;
+                this.set_playlist_visible(!this.settings.show_playlist);
                 this.poke();
                 cx.notify();
             }))
@@ -2266,6 +2588,12 @@ impl Render for PlayerApp {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ToggleHelp, _window, cx| this.toggle_help(cx)))
+            .on_action(cx.listener(|this, _: &DeleteSelected, window, cx| {
+                // 面板关着的时候选择是看不见的，这时候删等于盲删，直接忽略。
+                if this.settings.show_playlist {
+                    this.remove_selection(window, cx);
+                }
+            }))
             .on_action(
                 cx.listener(|this, _: &ExitOverlay, window, cx| this.exit_overlay(window, cx)),
             )
@@ -2364,6 +2692,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("[", SpeedDown, None),
         KeyBinding::new("]", SpeedUp, None),
         KeyBinding::new("escape", ExitOverlay, None),
+        KeyBinding::new("delete", DeleteSelected, None),
         // `?` 不在这里绑定：键位串按键帽字符匹配，`?` 得写成 `shift-/`，
         // 且随键盘布局变化。改由视图的 key_down 按实际字符处理。
     ]

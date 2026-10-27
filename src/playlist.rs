@@ -13,6 +13,17 @@ pub struct Playlist {
     index: Option<usize>,
 }
 
+/// 删除若干项之后的结果。界面据此决定是换歌、停播，还是什么都不用做。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Removal {
+    /// 实际删掉的项数：越界索引和重复索引不计。
+    pub removed: usize,
+    /// 被删掉的项里包含当时正在播的那一项。
+    pub current_removed: bool,
+    /// 删除后应当看作当前项的索引；`None` 表示列表已经空了。
+    pub current: Option<usize>,
+}
+
 impl Playlist {
     pub fn items(&self) -> &[PathBuf] {
         &self.items
@@ -90,24 +101,64 @@ impl Playlist {
         }
     }
 
-    pub fn remove(&mut self, index: usize) {
-        if index >= self.items.len() {
-            return;
-        }
-        self.items.remove(index);
-        self.index = match self.index {
-            Some(current) if current > index => Some(current - 1),
-            Some(current) if current == index => {
-                if self.items.is_empty() {
-                    None
-                } else {
-                    Some(current.min(self.items.len() - 1))
-                }
-            }
-            other => other,
-        };
+    /// 删除一项，等价于 `remove_many(&[index])`。
+    pub fn remove(&mut self, index: usize) -> Removal {
+        self.remove_many(&[index])
     }
 
+    /// 批量删除。`indexes` 用的是**删除前**的索引。
+    ///
+    /// 当前项被删掉时不是简单地停住：它落到后面第一个幸存者，后面没有了就退回
+    /// 前面最后一个——和用户点「下一集」的直觉一致。列表被删空时不留当前项。
+    pub fn remove_many(&mut self, indexes: &[usize]) -> Removal {
+        let mut targets: Vec<usize> = indexes
+            .iter()
+            .copied()
+            .filter(|index| *index < self.items.len())
+            .collect();
+        targets.sort_unstable();
+        targets.dedup();
+        if targets.is_empty() {
+            return Removal {
+                removed: 0,
+                current_removed: false,
+                current: self.index,
+            };
+        }
+
+        let current = self.index;
+        let current_removed = current.is_some_and(|value| targets.binary_search(&value).is_ok());
+        // 先按旧索引挑好接班人，再动列表：删完之后所有下标都变了，那时再找会错位。
+        let successor = current.and_then(|value| {
+            (value..self.items.len())
+                .find(|index| targets.binary_search(index).is_err())
+                .or_else(|| {
+                    (0..value)
+                        .rev()
+                        .find(|index| targets.binary_search(index).is_err())
+                })
+        });
+
+        for index in targets.iter().rev() {
+            self.items.remove(*index);
+        }
+
+        let shift = |index: usize| index - targets.iter().filter(|target| **target < index).count();
+        self.index = if current_removed {
+            successor.map(shift)
+        } else {
+            current.map(shift)
+        }
+        .filter(|index| *index < self.items.len());
+
+        Removal {
+            removed: targets.len(),
+            current_removed,
+            current: self.index,
+        }
+    }
+
+    /// 清空列表。只丢列表本身，磁盘上的文件一动不动。
     pub fn clear(&mut self) {
         self.items.clear();
         self.index = None;

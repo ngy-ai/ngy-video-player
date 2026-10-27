@@ -112,6 +112,93 @@ fn 播放到末尾_顺序模式停下_循环模式回绕() {
     assert_eq!(playlist.previous_index(true), Some(2));
 }
 
+fn sample(items: &[&str], start: usize) -> Playlist {
+    let mut playlist = Playlist::default();
+    playlist.replace(items.iter().map(PathBuf::from).collect(), start);
+    playlist
+}
+
+fn names(playlist: &Playlist) -> Vec<String> {
+    playlist
+        .items()
+        .iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect()
+}
+
+#[test]
+fn 批量删除_非当前项只挪索引() {
+    let mut playlist = sample(&["a.mp4", "b.mp4", "c.mp4", "d.mp4"], 2);
+
+    let removal = playlist.remove_many(&[0, 1]);
+    assert_eq!(removal.removed, 2);
+    assert!(!removal.current_removed, "没删到当前项就不该换歌");
+    assert_eq!(removal.current, Some(0));
+    assert_eq!(playlist.index(), Some(0));
+    assert_eq!(playlist.current().unwrap().to_string_lossy(), "c.mp4");
+    assert_eq!(names(&playlist), ["c.mp4", "d.mp4"]);
+}
+
+#[test]
+fn 批量删除_当前项落到后面第一个幸存者() {
+    let mut playlist = sample(&["a.mp4", "b.mp4", "c.mp4", "d.mp4"], 1);
+
+    let removal = playlist.remove_many(&[1, 2]);
+    assert!(removal.current_removed);
+    assert_eq!(removal.current, Some(1));
+    assert_eq!(
+        playlist.current().unwrap().to_string_lossy(),
+        "d.mp4",
+        "当前项和它后面的一起删掉时，应该接上后面还活着的那一项"
+    );
+}
+
+#[test]
+fn 删除末尾当前项时回退到前一个() {
+    let mut playlist = sample(&["a.mp4", "b.mp4", "c.mp4"], 2);
+
+    let removal = playlist.remove_many(&[2]);
+    assert!(removal.current_removed);
+    assert_eq!(removal.current, Some(1));
+    assert_eq!(playlist.current().unwrap().to_string_lossy(), "b.mp4");
+}
+
+#[test]
+fn 越界与重复索引被忽略() {
+    let mut playlist = sample(&["a.mp4", "b.mp4", "c.mp4"], 0);
+
+    let removal = playlist.remove_many(&[1, 1, 99]);
+    assert_eq!(removal.removed, 1);
+    assert_eq!(names(&playlist), ["a.mp4", "c.mp4"]);
+    assert_eq!(playlist.index(), Some(0), "删掉后面的项不影响当前项");
+}
+
+#[test]
+fn 删光之后列表为空且没有当前项() {
+    let mut playlist = sample(&["a.mp4", "b.mp4"], 1);
+
+    let removal = playlist.remove_many(&[0, 1]);
+    assert_eq!(removal.removed, 2);
+    assert!(removal.current_removed);
+    assert_eq!(removal.current, None);
+    assert!(playlist.is_empty());
+    assert_eq!(playlist.index(), None);
+    assert_eq!(playlist.current(), None);
+}
+
+#[test]
+fn 清空列表不留下当前项() {
+    let mut playlist = sample(&["a.mp4", "b.mp4"], 1);
+
+    playlist.clear();
+    assert!(playlist.is_empty());
+    assert_eq!(playlist.len(), 0);
+    assert_eq!(playlist.index(), None);
+    assert_eq!(playlist.current(), None);
+    assert_eq!(playlist.next_index(true), None);
+    assert_eq!(playlist.previous_index(true), None);
+}
+
 #[test]
 fn 删除当前项后索引落回有效位置() {
     let mut playlist = Playlist::default();
