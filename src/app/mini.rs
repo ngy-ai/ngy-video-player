@@ -180,15 +180,19 @@ impl MiniPlayer {
         (offset as f64 / width as f64).clamp(0.0, 1.0) * self.state.duration
     }
 
-    /// 指针横坐标换算成音量百分比。上限跟主窗口一致（mpv 能到 130）。
-    pub(super) fn volume_for_x(&self, x: Pixels) -> f64 {
+    /// 指针纵坐标换算成音量百分比。上限跟主窗口一致（mpv 能到 130）。
+    ///
+    /// 竖直滑块是「上大下小」，得翻过来算：`Pixels` 的 y 轴向下增长，
+    /// 所以 y 越小音量越大。
+    pub(super) fn volume_for_y(&self, y: Pixels) -> f64 {
         let bounds = self.volume_bounds.get();
-        let width = f32::from(bounds.size.width);
-        if width <= 1.0 {
+        let height = f32::from(bounds.size.height);
+        if height <= 1.0 {
             return self.state.volume;
         }
-        let offset = f32::from(x) - f32::from(bounds.origin.x);
-        (offset as f64 / width as f64).clamp(0.0, 1.0) * 130.0
+        let offset = f32::from(y) - f32::from(bounds.origin.y);
+        let ratio = (offset / height).clamp(0.0, 1.0);
+        (1.0 - ratio as f64) * 130.0
     }
 
     /// 顶部悬浮条：标题 + 还原 + 关闭。
@@ -275,7 +279,6 @@ impl MiniPlayer {
             .flex()
             .flex_col()
             .gap(px(4.0))
-            .px(px(10.0))
             .pt(px(6.0))
             .pb(px(8.0))
             .bg(ui::scrim())
@@ -359,10 +362,12 @@ impl MiniPlayer {
                     ),
             )
             .child(
+                // 进度条顶到窗口两边，这一行才留内边距：进度条的可用行程就是整个窗口宽。
                 div()
                     .flex()
                     .items_center()
                     .gap(px(8.0))
+                    .px(px(10.0))
                     .child(icon_button(
                         "mini-play",
                         if self.state.playing {
@@ -427,35 +432,38 @@ impl MiniPlayer {
                 }
             }))
             .when(self.volume_open, |this| {
+                let fill = if muted { text_faint() } else { text() };
                 this.child(
+                    // 竖直面板浮在图标正上方。窗口只有几百像素宽，横向滑块会把
+                    // 控制栏挤得没地方放时间，竖向也不占额外宽度。
                     div()
                         .id("mini-volume-slider")
                         .absolute()
                         .bottom(px(30.0))
-                        .right_0()
-                        .w(px(120.0))
-                        .h(px(24.0))
-                        .px(px(10.0))
-                        .py(px(9.0))
-                        .rounded(px(6.0))
+                        // 面板比图标宽，往左挪半个差值让它压着图标居中。
+                        .left(px(-13.0))
+                        .w(px(44.0))
+                        .py(px(10.0))
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(px(8.0))
+                        .rounded(px(8.0))
                         .bg(ui::scrim())
                         .child(
                             div()
+                                .text_size(px(10.0))
+                                .text_color(if muted { text_faint() } else { text() })
+                                .child(format!("{volume:.0}%")),
+                        )
+                        .child(
+                            div()
+                                .id("mini-volume-track")
                                 .relative()
-                                .h(px(4.0))
-                                .w_full()
-                                .rounded(px(2.0))
-                                .bg(gpui_kit::rgba(0xffffff30))
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .left_0()
-                                        .top_0()
-                                        .bottom_0()
-                                        .w(gpui_kit::relative(ratio))
-                                        .rounded(px(2.0))
-                                        .bg(if muted { text_faint() } else { text() }),
-                                )
+                                .w(px(20.0))
+                                .h(px(88.0))
+                                .flex()
+                                .justify_center()
                                 .child(
                                     canvas(
                                         move |bounds, _window, _cx| slot.set(bounds),
@@ -463,30 +471,64 @@ impl MiniPlayer {
                                     )
                                     .absolute()
                                     .inset_0(),
+                                )
+                                .child(
+                                    div()
+                                        .relative()
+                                        .w(px(4.0))
+                                        .h_full()
+                                        .rounded(px(2.0))
+                                        .bg(gpui_kit::rgba(0xffffff30))
+                                        .child(
+                                            // 从底往上长，滑块圆点挂在填充区顶端。
+                                            div()
+                                                .absolute()
+                                                .bottom_0()
+                                                .left_0()
+                                                .right_0()
+                                                .h(gpui_kit::relative(ratio))
+                                                .rounded(px(2.0))
+                                                .bg(fill)
+                                                .child(
+                                                    div()
+                                                        .absolute()
+                                                        .top(px(-5.0))
+                                                        .left(px(-4.0))
+                                                        .size(px(12.0))
+                                                        .rounded_full()
+                                                        .bg(fill),
+                                                ),
+                                        ),
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                                        cx.stop_propagation();
+                                        this.volume_dragging = true;
+                                        let volume = this.volume_for_y(event.position.y);
+                                        this.forward(cx, move |app, cx| {
+                                            app.set_volume_from_ui(volume, cx)
+                                        });
+                                    }),
+                                )
+                                .on_mouse_move(cx.listener(
+                                    |this, event: &MouseMoveEvent, _window, cx| {
+                                        if !this.volume_dragging {
+                                            return;
+                                        }
+                                        let volume = this.volume_for_y(event.position.y);
+                                        this.forward(cx, move |app, cx| {
+                                            app.set_volume_from_ui(volume, cx)
+                                        });
+                                    },
+                                ))
+                                .on_mouse_up(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                                        this.volume_dragging = false;
+                                        cx.notify();
+                                    }),
                                 ),
-                        )
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, event: &MouseDownEvent, _window, cx| {
-                                cx.stop_propagation();
-                                this.volume_dragging = true;
-                                let volume = this.volume_for_x(event.position.x);
-                                this.forward(cx, move |app, cx| app.set_volume_from_ui(volume, cx));
-                            }),
-                        )
-                        .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
-                            if !this.volume_dragging {
-                                return;
-                            }
-                            let volume = this.volume_for_x(event.position.x);
-                            this.forward(cx, move |app, cx| app.set_volume_from_ui(volume, cx));
-                        }))
-                        .on_mouse_up(
-                            MouseButton::Left,
-                            cx.listener(|this, _: &MouseUpEvent, _window, cx| {
-                                this.volume_dragging = false;
-                                cx.notify();
-                            }),
                         ),
                 )
             })
