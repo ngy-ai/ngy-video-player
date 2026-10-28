@@ -189,10 +189,10 @@ impl PlayerApp {
                         .checked(self.show_settings && self.settings_tab == SettingsTab::Shortcuts),
                 ));
                 items.push(BarItem::Separator);
-                items.push(BarItem::Entry(BarEntry::new(
-                    "关于 ngy-video-player",
-                    About,
-                )));
+                items.push(BarItem::Entry(
+                    BarEntry::new("关于 ngy-video-player", About)
+                        .checked(self.show_settings && self.settings_tab == SettingsTab::About),
+                ));
             }
         }
 
@@ -228,12 +228,8 @@ impl PlayerApp {
             BarAction::OpenDefaultApps => self.open_default_apps(),
             BarAction::RemoveAssociations => self.remove_associations(window, cx),
             BarAction::ToggleMaintainAssociations => self.toggle_maintain_associations(),
-            BarAction::About => {
-                self.flash(format!(
-                    "ngy-video-player {}\nGPUI + libmpv",
-                    env!("CARGO_PKG_VERSION")
-                ));
-            }
+            // 版本、引擎状态、配置位置这些信息一条提示条装不下，直接开模态窗口。
+            BarAction::About => self.open_settings(Some(SettingsTab::About)),
             BarAction::Quit => {
                 cx.quit();
                 return;

@@ -49,6 +49,7 @@ impl PlayerApp {
             SettingsTab::Playback => self.playback_page(on_top_supported, cx),
             SettingsTab::Associations => self.associations_page(cx),
             SettingsTab::Shortcuts => self.shortcuts_page(),
+            SettingsTab::About => self.about_page(),
         };
 
         Some(
@@ -120,6 +121,12 @@ impl PlayerApp {
     }
 
     fn render_settings_header(&self, cx: &mut Context<Self>) -> AnyElement {
+        // 「关于」是从帮助菜单点进来的，顶着「更多设置」的标题会让人以为走错了地方。
+        let (header_icon, header_title) = match self.settings_tab {
+            SettingsTab::About => (IconName::Info, "关于 ngy-video-player"),
+            _ => (IconName::Settings, "更多设置"),
+        };
+
         div()
             .flex()
             .items_center()
@@ -131,12 +138,12 @@ impl PlayerApp {
                     .flex()
                     .items_center()
                     .gap(px(8.0))
-                    .child(icon(IconName::Settings, 16.0, text_muted()))
+                    .child(icon(header_icon, 16.0, text_muted()))
                     .child(
                         div()
                             .text_size(px(14.0))
                             .text_color(text())
-                            .child("更多设置"),
+                            .child(header_title),
                     ),
             )
             .child(icon_button(

@@ -19,15 +19,18 @@ pub(in crate::app) enum SettingsTab {
     Associations,
     /// 键位表。
     Shortcuts,
+    /// 版本、技术栈与运行环境。菜单栏「帮助 → 关于」直接停在这里。
+    About,
 }
 
 impl SettingsTab {
-    pub(in crate::app) const ALL: [SettingsTab; 5] = [
+    pub(in crate::app) const ALL: [SettingsTab; 6] = [
         SettingsTab::Picture,
         SettingsTab::Video,
         SettingsTab::Playback,
         SettingsTab::Associations,
         SettingsTab::Shortcuts,
+        SettingsTab::About,
     ];
 
     pub(in crate::app) fn label(self) -> &'static str {
@@ -37,6 +40,7 @@ impl SettingsTab {
             SettingsTab::Playback => "播放设置",
             SettingsTab::Associations => "文件关联",
             SettingsTab::Shortcuts => "快捷键设置",
+            SettingsTab::About => "关于",
         }
     }
 
@@ -48,6 +52,7 @@ impl SettingsTab {
             SettingsTab::Playback => IconName::Clapperboard,
             SettingsTab::Associations => IconName::Link,
             SettingsTab::Shortcuts => IconName::Keyboard,
+            SettingsTab::About => IconName::Info,
         }
     }
 }
