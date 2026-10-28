@@ -111,6 +111,18 @@ impl MiniPlayer {
         });
     }
 
+    /// 点到小窗就把它抬到普通窗口层的最前。
+    ///
+    /// 光靠系统默认的点击激活不够确定：被别的应用盖住时，激活并不总会把它抬到
+    /// 那一层的最前，于是「点了它还是被压着」。这里显式改一次 Z 序。
+    /// 置顶状态下不用管——它本来就在所有普通窗口之上。
+    pub(super) fn raise_to_top(&self, window: &Window) {
+        if self.on_top {
+            return;
+        }
+        platform::topmost::raise(window);
+    }
+
     /// 图钉按钮。切完立刻下发，不等下一次 render——置顶是个立刻能感觉到的动作。
     pub(super) fn toggle_on_top(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.on_top = !self.on_top;
@@ -274,7 +286,10 @@ impl MiniPlayer {
             // 点悬浮条的空白处不该穿透到底下的画面上去触发「单击暂停」。
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|_this, _: &MouseDownEvent, _window, cx| cx.stop_propagation()),
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.raise_to_top(window);
+                }),
             )
             .child(
                 // 拖标题移动窗口。这里必须 stop_propagation，否则会被下面的画面
@@ -290,8 +305,9 @@ impl MiniPlayer {
                     .cursor(CursorStyle::PointingHand)
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|_this, _: &MouseDownEvent, window, cx| {
+                        cx.listener(|this, _: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();
+                            this.raise_to_top(window);
                             window.start_window_move();
                         }),
                     )
@@ -362,7 +378,10 @@ impl MiniPlayer {
             // 同上：控制栏上的空白也不该被当成「点画面」。
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|_this, _: &MouseDownEvent, _window, cx| cx.stop_propagation()),
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.raise_to_top(window);
+                }),
             )
             .child(
                 div()
@@ -672,6 +691,14 @@ impl Render for MiniPlayer {
             .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
                 this.set_hovered(*hovered, cx);
             }))
+            // 画面、按钮、音量面板的按下都会冒泡到这里（悬浮条与控制栏自己截住了，
+            // 它们各自也调了 `raise_to_top`），所以这一个入口就覆盖了整窗。
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, window, _cx| {
+                    this.raise_to_top(window);
+                }),
+            )
             .on_click(cx.listener(|this, event: &ClickEvent, _window, cx| {
                 // 双击的第二下不再触发切换，否则一次双击会连切两下、等于没按。
                 if event.click_count() >= 2 {

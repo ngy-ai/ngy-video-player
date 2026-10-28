@@ -19,6 +19,14 @@ pub fn set(window: &Window, on_top: bool) -> bool {
     imp::set(window, on_top)
 }
 
+/// 把窗口抬到「普通窗口层」的最前：压过所有没置顶的应用，只让置顶窗口压着它。
+///
+/// 取消置顶之后光靠系统默认的点击激活不够：窗口被别的应用盖住时，激活并不总会
+/// 把它抬到那一层的最前。这里显式改一次 Z 序，让「点一下就到最前」成为确定的。
+pub fn raise(window: &Window) -> bool {
+    imp::raise(window)
+}
+
 #[cfg(windows)]
 mod imp {
     use std::ffi::c_void;
@@ -59,6 +67,25 @@ mod imp {
 
     pub fn supported(window: &Window) -> bool {
         hwnd(window).is_some()
+    }
+
+    pub fn raise(window: &Window) -> bool {
+        let Some(hwnd) = hwnd(window) else {
+            return false;
+        };
+        // `HWND_TOP` 是「本条 Z 序带的最前」，不是绝对最前：置顶窗口仍然压得住它，
+        // 这正是取消置顶该有的语义。不抢焦点，点击的激活由系统自己处理。
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                HWND_TOP as *mut c_void,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            ) != 0
+        }
     }
 
     pub fn set(window: &Window, on_top: bool) -> bool {
@@ -128,6 +155,11 @@ mod imp {
 
     pub fn supported(window: &Window) -> bool {
         ns_window(window).is_some()
+    }
+
+    pub fn raise(_window: &Window) -> bool {
+        // macOS 点一下就由窗口服务器抬到同层最前，不需要额外做什么。
+        false
     }
 
     pub fn set(window: &Window, on_top: bool) -> bool {
@@ -209,6 +241,11 @@ mod imp {
 
     pub fn supported(window: &Window) -> bool {
         x11_window(window).is_some()
+    }
+
+    pub fn raise(_window: &Window) -> bool {
+        // X11 下点击激活由窗口管理器统一处理，抬升不需要应用插手。
+        false
     }
 
     pub fn set(window: &Window, on_top: bool) -> bool {
