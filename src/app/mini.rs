@@ -27,6 +27,11 @@ pub(super) struct MiniPlayer {
     pub(super) volume_dragging: bool,
     /// 音量滑块是否展开。
     pub(super) volume_open: bool,
+    /// 指针停在音量图标上。
+    pub(super) volume_hovered: bool,
+    /// 指针停在音量面板上。图标与面板是两个独立的命中区域，少了这个标志，
+    /// 指针一挪到面板上「离开图标」就会把面板收掉。
+    pub(super) volume_panel_hovered: bool,
     /// 进度条与音量滑块的 bounds，由 canvas 在 prepaint 阶段写回。
     pub(super) progress_bounds: Rc<Cell<Bounds<Pixels>>>,
     pub(super) volume_bounds: Rc<Cell<Bounds<Pixels>>>,
@@ -59,6 +64,8 @@ impl MiniPlayer {
             dragging: None,
             volume_dragging: false,
             volume_open: false,
+            volume_hovered: false,
+            volume_panel_hovered: false,
             progress_bounds: Rc::new(Cell::new(Bounds::default())),
             volume_bounds: Rc::new(Cell::new(Bounds::default())),
             on_top_applied: false,
@@ -162,6 +169,8 @@ impl MiniPlayer {
                 }
                 mini.controls = false;
                 mini.volume_open = false;
+                mini.volume_hovered = false;
+                mini.volume_panel_hovered = false;
                 cx.notify();
             })
             .ok();
@@ -178,6 +187,38 @@ impl MiniPlayer {
         }
         let offset = f32::from(x) - f32::from(bounds.origin.x);
         (offset as f64 / width as f64).clamp(0.0, 1.0) * self.state.duration
+    }
+
+    /// 音量面板的显隐。图标与面板都算「焦点」，指针在这两者之间移动时中间
+    /// 会经过一小段不属于任何一边的空白，所以「失去焦点」不是立刻收，
+    /// 而是等 150ms——期间移回来就作罢。
+    pub(super) fn refresh_volume_panel(&mut self, cx: &mut Context<Self>) {
+        if self.volume_hovered || self.volume_panel_hovered {
+            if !self.volume_open {
+                self.volume_open = true;
+                cx.notify();
+            }
+            return;
+        }
+        if !self.volume_open {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(150))
+                .await;
+            this.update(cx, |mini, cx| {
+                // 拖滑块时指针可能已经跑出轨道，这种情况不算失去焦点。
+                if mini.volume_hovered || mini.volume_panel_hovered || mini.volume_dragging {
+                    return;
+                }
+                mini.volume_open = false;
+                mini.volume_panel_hovered = false;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// 指针纵坐标换算成音量百分比。上限跟主窗口一致（mpv 能到 130）。
@@ -423,13 +464,9 @@ impl MiniPlayer {
                     this.forward(cx, |app, cx| app.toggle_mute(cx));
                 }),
             ))
-            // 悬停只是「打开」，关上交给控件整体收起的那一刻：鼠标从图标挪到滑块上时
-            // 图标必然先失去悬停，若在这里跟着关，滑块会瞬间消失，根本点不到。
             .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
-                if *hovered && !this.volume_open {
-                    this.volume_open = true;
-                    cx.notify();
-                }
+                this.volume_hovered = *hovered;
+                this.refresh_volume_panel(cx);
             }))
             .when(self.volume_open, |this| {
                 let fill = if muted { text_faint() } else { text() };
@@ -450,6 +487,11 @@ impl MiniPlayer {
                         .gap(px(8.0))
                         .rounded(px(8.0))
                         .bg(ui::scrim())
+                        // 面板自己也算「焦点」，否则指针一离开图标就被当成失焦。
+                        .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
+                            this.volume_panel_hovered = *hovered;
+                            this.refresh_volume_panel(cx);
+                        }))
                         .child(
                             div()
                                 .text_size(px(10.0))
