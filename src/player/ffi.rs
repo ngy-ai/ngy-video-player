@@ -8,9 +8,13 @@
 //!    Linux 走发行版的 `libmpv.so.2`），运行期决定更省事；
 //! 3. 库缺失时可以给用户一句能读懂的话，而不是让整个程序在加载阶段就死掉。
 //!
+//! release 构建还会把库内嵌进 exe（见 [`super::embed`]），所以「旁边没有 dll」不再是
+//! 失败条件：磁盘上找不到时解压一份内置的出来加载。
+//!
 //! 只声明这个播放器真正用到的符号。参数与返回值严格按 mpv 官方 `client.h` /
 //! `render.h` 写，结构体布局也照抄 C 定义。
 
+use super::embed;
 use anyhow::{Context as _, Result, anyhow, bail};
 use libloading::Library;
 use std::{
@@ -208,22 +212,27 @@ impl MpvApi {
     /// 找库并加载。
     ///
     /// 搜索顺序是有讲究的：先看用户显式指定，再看程序自身目录（免安装分发时库就放在
-    /// 旁边），最后才交给系统加载器。这样同一个 exe 既能「绿色版自带 dll」，也能
+    /// 旁边），然后才交给系统加载器。这样同一个 exe 既能「绿色版自带 dll」，也能
     /// 「用系统包管理器装的 libmpv」。
+    ///
+    /// 磁盘上全都找不到时，才动用编译期内嵌的那一份——旁边或系统里已经有库就优先
+    /// 用它们，用户特意换过的版本不该被内置的旧库盖掉。
     pub fn load() -> Result<Arc<Self>> {
         let mut tried = Vec::new();
 
         for candidate in search_paths() {
-            match unsafe { Self::open(&candidate) } {
-                Ok(api) => {
-                    log_info!(
-                        "已加载 libmpv: {} ({})",
-                        candidate.display(),
-                        api.version_string()
-                    );
-                    return Ok(Arc::new(api));
+            if let Some(api) = Self::try_open(&candidate, &mut tried) {
+                return Ok(api);
+            }
+        }
+
+        match embed::materialize() {
+            None => {}
+            Some(Err(error)) => tried.push(format!("内置 libmpv 落盘失败: {error:#}")),
+            Some(Ok(path)) => {
+                if let Some(api) = Self::try_open(&path, &mut tried) {
+                    return Ok(api);
                 }
-                Err(error) => tried.push(format!("{}: {error}", candidate.display())),
             }
         }
 
@@ -232,9 +241,28 @@ impl MpvApi {
              解决办法（任选其一）：\n\
              • 把 libmpv 放到程序目录（Windows: libmpv-2.dll；macOS: libmpv.2.dylib；Linux: libmpv.so.2）\n\
              • 用系统包管理器安装：macOS `brew install mpv`，Debian/Ubuntu `apt install libmpv2`，Fedora `dnf install mpv-libs`\n\
-             • 设置环境变量 NGY_MPV_LIB 指向库文件",
+             • 设置环境变量 NGY_MPV_LIB 指向库文件\n\
+             • 想做出「一个 exe 就能播」的版本：先运行 scripts/fetch-libmpv.sh，再 cargo build --release（构建时会把库内嵌进去）",
             tried.join("\n")
         )
+    }
+
+    /// 试一个候选路径，失败原因记进 `tried` 供出错时展示。
+    fn try_open(path: &Path, tried: &mut Vec<String>) -> Option<Arc<Self>> {
+        match unsafe { Self::open(path) } {
+            Ok(api) => {
+                log_info!(
+                    "已加载 libmpv: {} ({})",
+                    path.display(),
+                    api.version_string()
+                );
+                Some(Arc::new(api))
+            }
+            Err(error) => {
+                tried.push(format!("{}: {error:#}", path.display()));
+                None
+            }
+        }
     }
 
     unsafe fn open(path: &Path) -> Result<Self> {

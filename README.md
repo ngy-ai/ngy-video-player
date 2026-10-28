@@ -44,6 +44,35 @@ mpv 的 render API 支持把解码结果直接渲染到一块 CPU 内存（`MPV_
 cargo run --release -- path/to/video.mkv
 ```
 
+### 打包：一个 exe
+
+release 构建会把 `libs/<平台>/` 里的 libmpv **内嵌进可执行文件**，所以
+`target/release/ngy-video-player.exe` 本身就是完整分发包：拷到任何一台没装过 mpv 的
+机器上都能直接播，不需要在旁边摆 dll。
+
+```bash
+./scripts/fetch-libmpv.sh   # 库放到 libs/<平台>/（只需一次）
+cargo build --release       # 产物约 130MB，其中约 116MB 是库
+```
+
+首次启动会把内置的库解压到用户缓存目录，之后直接复用：
+
+| 平台 | 落点 |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\ngy-video-player\libmpv\` |
+| macOS | `~/Library/Caches/ngy-video-player/libmpv/` |
+| Linux | `~/.cache/ngy-video-player/libmpv/` |
+
+文件名带内容哈希（`9665c142b49567cc-libmpv-2.dll`）：换了库版本会写出新文件，
+旧的在下次解压后清掉，不会误用上一版的库。
+
+- debug 构建不内嵌（开发期 `libs/` 就在手边，每次链接搬上百 MB 没有意义）；
+- `NGY_EMBED_MPV=<路径>` 指定要内嵌的库，`NGY_EMBED_MPV=0` 关掉内嵌，
+  做出「库放在旁边」的轻薄 exe；
+- 内嵌只搬 libmpv 本身：Windows 的 `libmpv-2.dll` 是自包含的，macOS/Linux 从
+  Homebrew / 发行版拿到的库还依赖同目录或固定路径上的其它共享库，跨机器分发请
+  继续用 `bash scripts/bundle-macos.sh` 生成的 `.app`。
+
 ### libmpv 从哪来
 
 程序**不链接** libmpv，运行时按顺序查找（见 `src/player/ffi.rs`）：
@@ -52,7 +81,8 @@ cargo run --release -- path/to/video.mkv
 2. 可执行文件所在目录；
 3. macOS 的 `Contents/Frameworks`；
 4. `libs/<平台>/`（`windows-x86_64` / `macos-arm64` / `linux-x86_64` …）；
-5. 系统加载器路径。
+5. 系统加载器路径；
+6. 编译期内嵌的那一份（release 构建，见上节「打包：一个 exe」）。
 
 | 平台 | 库文件名 | 获取方式 |
 | --- | --- | --- |
@@ -195,6 +225,7 @@ src/
 │     └─ plist.rs      macOS 的 Info.plist 生成（跨平台可测）
 └─ player/
    ├─ ffi.rs        libmpv 的运行时绑定（dlopen，不用头文件）
+   ├─ embed.rs      release 内嵌的 libmpv：解压到缓存目录再加载
    ├─ engine.rs     引擎线程 + 取帧线程 + 状态快照
    └─ mod.rs
 ```
@@ -216,6 +247,9 @@ src/
   需要的话在设置窗口的「视频设置」页里切到智能解码或硬件解码，不必手改配置文件。
 - 播放显卡只在 Windows 上能列出（`EnumDisplayDevicesW`），且只对硬件解码这一路有意义；
   Linux/macOS 显示「系统自动选择」。
+- 单文件分发的 exe 约 130MB（其中约 116MB 是内嵌的 libmpv），首次启动要多花一次解压
+  的时间写进缓存目录。不想要这个体积就 `NGY_EMBED_MPV=0 cargo build --release`，
+  改回「库放在 exe 旁边」的分发方式。
 
 文件关联相关的限制：
 

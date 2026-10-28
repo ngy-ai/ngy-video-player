@@ -3,6 +3,8 @@
 #
 # 目的只有一个：让 `cargo run` 能直接找到动态库。程序本身不链接 libmpv，
 # 运行时按「exe 目录 → libs/<平台>/ → 系统路径」的顺序查找（见 src/player/ffi.rs）。
+# 另外 release 构建会把这个目录里的库内嵌进 exe，分发时只需要一个文件；
+# 想要单文件产物，就先跑这个脚本再 cargo build --release。
 #
 # 用法：
 #   ./scripts/fetch-libmpv.sh            # 准备到 libs/<平台>/
