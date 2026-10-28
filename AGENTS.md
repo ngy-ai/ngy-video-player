@@ -25,7 +25,11 @@ cargo clippy --all-targets        # 静态检查
 
 ```
 src/main.rs      入口：参数解析、帮助
-src/app.rs       主视图：窗口、快捷键、控制条、播放列表、OSD
+src/app.rs       主视图入口：状态类型、PlayerApp 字段、快捷键、run()
+src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
+                 session（初始化/事件循环）、playback、window（迷你窗/置顶）、
+                 picture、playlist_ops、video_area、controls、menus、bar、
+                 menu_bar、associations、playlist_ui、overlays、panels、mini、render
 src/ui.rs        配色、图标按钮、时间格式、等比画面
 src/formats.rs   扩展名清单（文件过滤器 + 拖入判断）
 src/playlist.rs  播放列表、m3u/pls 解析、目录展开、自然序
@@ -33,7 +37,9 @@ src/screenshot.rs 截图落点与文件名
 src/settings.rs  偏好持久化
 src/logging.rs   终端 + 滚动日志文件
 src/platform/    associations.rs（文件关联：注册/撤销/状态，按平台实现）
-src/player/      ffi.rs（运行时绑定）、engine.rs（引擎/取帧线程）
+src/player/      ffi.rs（运行时绑定）、frame.rs、probe.rs、thumbnail.rs
+src/player/engine.rs  引擎入口：Engine 句柄、Shared 共享状态、命令/查询接口
+src/player/engine/    state（对外类型）、event_loop、dispatch、render_loop
 ```
 
 ## 约定
