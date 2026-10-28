@@ -18,8 +18,8 @@ use crate::{
     playlist::{self, Playlist, PlaylistSet},
     settings::{DecodeMode, OnTop, RenderMode, Rotation, Settings, VideoAspect},
     ui::{
-        self, bg, format_time, icon, icon_button, pill_button, surface, text, text_faint,
-        text_muted,
+        self, bg, format_time, icon, icon_button, icon_button_with_tip, pill_button_with_tip,
+        surface, text, text_faint, text_muted,
     },
 };
 use anyhow::Result;

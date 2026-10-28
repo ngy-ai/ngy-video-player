@@ -6,8 +6,9 @@
 use gpui_kit::component::Icon;
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, Bounds, ClickEvent, Corners, CursorStyle, ElementId, Hsla, IntoElement,
-    Pixels, RenderImage, SharedString, Styled, Window, canvas, div, point, px, rgb, size,
+    AnyElement, AnyView, App, Bounds, ClickEvent, Corners, CursorStyle, ElementId, Hsla,
+    IntoElement, Pixels, RenderImage, SharedString, Styled, Window, canvas, div, point, px, rgb,
+    size,
 };
 use std::sync::Arc;
 
@@ -88,12 +89,59 @@ pub fn icon(icon: IconName, size: f32, color: Hsla) -> impl IntoElement {
     Icon::new(icon).size(px(size)).text_color(color)
 }
 
+/// 悬停提示的气泡本体。
+///
+/// GPUI 的 `.tooltip()` 只负责「何时显示、显示在哪」，气泡长什么样得自己给。
+/// 这里不走组件库的 `Tooltip`：那套要求整棵界面挂在它的 `Root` 下，播放器没有
+/// 引入那个根组件，直接用控制条同一套深色配色画一个小标签更省事。
+struct TipView(SharedString);
+
+impl Render for TipView {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px(px(8.0))
+            .py(px(4.0))
+            .rounded(px(6.0))
+            .bg(rgb(SURFACE_ACTIVE))
+            .text_size(px(11.0))
+            .text_color(text())
+            .child(self.0.clone())
+    }
+}
+
+/// 把一段文字包成 `.tooltip()` 需要的视图构造器。
+fn tip_builder(tip: SharedString) -> impl Fn(&mut Window, &mut App) -> AnyView {
+    move |_window, cx| cx.new(|_| TipView(tip.clone())).into()
+}
+
 /// 控制条上的图标按钮。`active` 用于「已开启」的开关态（字幕、循环等）。
 pub fn icon_button(
     id: impl Into<ElementId>,
     icon_name: IconName,
     active: bool,
     disabled: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    icon_button_with_tip(
+        id,
+        icon_name,
+        active,
+        disabled,
+        None::<&'static str>,
+        on_click,
+    )
+}
+
+/// 带悬停文字说明的图标按钮。
+///
+/// 控制条右侧是一排纯图标开关，光看图分不清「字幕」还是「音轨」，更认不出
+/// 迷你窗和全屏；鼠标停上去就该把这颗按钮做什么说清楚。
+pub fn icon_button_with_tip(
+    id: impl Into<ElementId>,
+    icon_name: IconName,
+    active: bool,
+    disabled: bool,
+    tip: Option<impl Into<SharedString>>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     let color = if disabled {
@@ -103,6 +151,7 @@ pub fn icon_button(
     } else {
         text()
     };
+    let tip = tip.map(Into::into);
 
     div()
         .id(id)
@@ -119,6 +168,7 @@ pub fn icon_button(
         .when(!disabled, |this| {
             this.hover(|style| style.bg(surface_hover()).rounded(px(8.0)))
         })
+        .when_some(tip, |this, tip| this.tooltip(tip_builder(tip)))
         .child(icon(icon_name, 18.0, color))
         .when(!disabled, |this| {
             this.on_click(
@@ -139,14 +189,18 @@ pub fn icon_button(
 ///
 /// 纯图标按钮在这些功能上不够用——用户看不到「现在是不是 1.5 倍速」「现在是列表
 /// 循环还是单集循环」，就会以为播放器根本没有这些功能。
-pub fn pill_button(
+///
+/// 按钮上的文字是**当前值**而不是功能名，所以悬停提示讲的是「这颗按钮干什么」。
+pub fn pill_button_with_tip(
     id: impl Into<ElementId>,
     icon_name: IconName,
     label: impl Into<SharedString>,
     active: bool,
+    tip: Option<impl Into<SharedString>>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     let color = if active { accent() } else { text() };
+    let tip = tip.map(Into::into);
 
     div()
         .id(id)
@@ -158,6 +212,7 @@ pub fn pill_button(
         .rounded(px(8.0))
         .cursor(CursorStyle::PointingHand)
         .hover(|style| style.bg(surface_hover()).rounded(px(8.0)))
+        .when_some(tip, |this, tip| this.tooltip(tip_builder(tip)))
         .child(icon(icon_name, 15.0, color))
         .child(
             div()

@@ -186,13 +186,15 @@ impl PlayerApp {
                             .child(div().child(time_text)),
                     )
                     .child(div().flex_1())
-                    // 右：功能开关
-                    .child(pill_button(
+                    // 右：功能开关。这一排全是纯图标/当前值，鼠标停上去要有说明，
+                    // 否则「字幕」和「音轨」、迷你窗和全屏只能靠试。
+                    .child(pill_button_with_tip(
                         "speed",
                         IconName::Gauge,
                         format_speed(snapshot.speed),
                         self.menu.is_some_and(Menu::is_speed)
                             || (snapshot.speed - 1.0).abs() > 0.001,
+                        Some("播放速度"),
                         cx.listener(|this, _: &ClickEvent, _window, cx| {
                             // 预设列表和自定义面板是同一层，展开状态下再点一次直接收起。
                             this.menu = if this.menu.is_some_and(Menu::is_speed) {
@@ -205,11 +207,12 @@ impl PlayerApp {
                             cx.notify();
                         }),
                     ))
-                    .child(icon_button(
+                    .child(icon_button_with_tip(
                         "subtitle",
                         IconName::Captions,
                         subtitle_active,
                         false,
+                        Some("字幕"),
                         cx.listener(|this, _: &ClickEvent, _window, cx| {
                             this.menu =
                                 (this.menu != Some(Menu::Subtitle)).then_some(Menu::Subtitle);
@@ -218,11 +221,12 @@ impl PlayerApp {
                             cx.notify();
                         }),
                     ))
-                    .child(icon_button(
+                    .child(icon_button_with_tip(
                         "audio",
                         IconName::AudioLines,
                         false,
                         !has_video,
+                        Some("音轨"),
                         cx.listener(|this, _: &ClickEvent, _window, cx| {
                             this.menu = (this.menu != Some(Menu::Audio)).then_some(Menu::Audio);
                             this.menu_bar = None;
@@ -230,7 +234,7 @@ impl PlayerApp {
                             cx.notify();
                         }),
                     ))
-                    .child(pill_button(
+                    .child(pill_button_with_tip(
                         "loop",
                         match self.settings.loop_mode {
                             LoopMode::Off | LoopMode::All => IconName::Repeat,
@@ -238,6 +242,7 @@ impl PlayerApp {
                         },
                         self.settings.loop_mode.short_label(),
                         self.menu == Some(Menu::Loop) || self.settings.loop_mode != LoopMode::Off,
+                        Some("循环模式"),
                         cx.listener(|this, _: &ClickEvent, _window, cx| {
                             this.menu = (this.menu != Some(Menu::Loop)).then_some(Menu::Loop);
                             this.menu_bar = None;
@@ -245,31 +250,34 @@ impl PlayerApp {
                             cx.notify();
                         }),
                     ))
-                    .child(icon_button(
+                    .child(icon_button_with_tip(
                         "playlist-toggle",
                         IconName::ListVideo,
                         self.settings.show_playlist,
                         false,
+                        Some("播放列表（L）"),
                         cx.listener(|this, _: &ClickEvent, _window, cx| {
                             this.set_playlist_visible(!this.settings.show_playlist);
                             this.poke();
                             cx.notify();
                         }),
                     ))
-                    .child(icon_button(
+                    .child(icon_button_with_tip(
                         "mini",
                         IconName::PictureInPicture2,
                         self.mini.is_some(),
                         false,
+                        Some("迷你窗口（T）"),
                         cx.listener(|this, _: &ClickEvent, window, cx| {
                             this.toggle_mini(window, cx);
                         }),
                     ))
-                    .child(icon_button(
+                    .child(icon_button_with_tip(
                         "fullscreen",
                         IconName::Maximize,
                         false,
                         false,
+                        Some("全屏（F）"),
                         cx.listener(|this, _: &ClickEvent, window, cx| {
                             this.toggle_fullscreen(window);
                             cx.notify();
