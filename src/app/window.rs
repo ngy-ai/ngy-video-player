@@ -38,6 +38,9 @@ impl PlayerApp {
         if self.mini.is_some() {
             return;
         }
+        // 上一轮还原可能还没来得及走到 `mini_closed`；新会话必须从「没在还原」起步，
+        // 否则接下来那次「点任务栏」会被误判成我们自己发起的还原而放过去。
+        self.main_restoring = false;
 
         // 小窗模式与全屏互斥：不可见的主窗口停在全屏状态没有意义，
         // 还原回来还会落在一个说不清是全屏还是窗口的中间态。
@@ -77,7 +80,8 @@ impl PlayerApp {
                 // 那个值会让系统把非客户区加回来。
                 titlebar: None,
                 // 工具窗口：任务栏和 Alt+Tab 里都不出现。小窗模式下任务栏只该剩主窗口
-                // 那一条——点它就是「还原」，多一条会让这个手势失去唯一性。
+                // 那一条，多一条会让「点任务栏」这个手势含糊不清；那一条被点中时
+                // 由可见性观察者把小窗重新抬回前台（见 `PlayerApp::new`）。
                 kind: WindowKind::PopUp,
                 // 主窗口马上要最小化，键盘必须落在小窗上。
                 focus: true,
@@ -145,10 +149,28 @@ impl PlayerApp {
     /// 一次，而这个方法本身就跑在 `PlayerApp` 的借用里，会直接 panic。
     /// gpui 的 `activate` 在 Windows 上顺带 `SW_RESTORE`，最小化的窗口会一并恢复。
     pub(super) fn reactivate_main(&mut self, cx: &mut Context<Self>) {
+        // 这次「主窗口变可见」是我们自己要的，别让可见性观察者又把它收回去。
+        self.main_restoring = true;
         let handle = self.main_window;
         let _ = cx.update_window(handle, |_root, window, _cx| {
             // gpui 的 `activate_window` 只做线程内的激活，不会把窗口抬到别的进程
             // 之上，从最小化还原后主窗口会停在别的应用后面。Windows 上走自己的实现。
+            if !platform::window::bring_to_front(window) {
+                window.activate_window();
+            }
+        });
+    }
+
+    /// 把前台交还给小窗。
+    ///
+    /// 用户点任务栏上那一条时，系统会先还原并激活主窗口；这里紧跟着把小窗抬回
+    /// 最前，让这个手势最终落在小窗上，而不是把主窗口翻出来。
+    pub(super) fn focus_mini(&mut self, cx: &mut Context<Self>) {
+        let Some(handle) = self.mini_window else {
+            return;
+        };
+        let handle: AnyWindowHandle = handle.into();
+        let _ = cx.update_window(handle, |_root, window, _cx| {
             if !platform::window::bring_to_front(window) {
                 window.activate_window();
             }
@@ -174,6 +196,8 @@ impl PlayerApp {
     pub(super) fn mini_closed(&mut self) {
         self.mini = None;
         self.mini_window = None;
+        // 小窗没了，主窗口的可见性重新回到「用户说了算」，下一次变可见照常处理。
+        self.main_restoring = false;
         self.settings.save();
         self.flash("小窗：关");
     }

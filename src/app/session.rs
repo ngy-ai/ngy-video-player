@@ -66,6 +66,7 @@ impl PlayerApp {
             menu_bar: None,
             mini: None,
             mini_window: None,
+            main_restoring: false,
             main_window: window.window_handle(),
             association_status: platform::associations::Status::default(),
             gpu_adapters: platform::gpu::adapters(),
@@ -90,13 +91,22 @@ impl PlayerApp {
         app.start_idle_watchdog(cx);
         app.auto_maintain_associations();
 
-        // 小窗模式的不变式：同一时刻只有主窗口或小窗之一可见。所以主窗口一旦
-        // 重新可见——最典型的是用户从任务栏把它点回来——就等于退出小窗模式，
-        // 小窗跟着收掉。注册时会立刻回调一次，那时还没有小窗，是空操作。
-        cx.observe_window_visibility(window, |app, visibility, _window, cx| {
-            if matches!(visibility, WindowVisibility::Visible) && app.mini.is_some() {
-                app.dismiss_mini(cx);
+        // 小窗模式的不变式：同一时刻只有主窗口或小窗之一可见。
+        //
+        // 主窗口重新可见——最典型的是用户点了任务栏上那一条——并不表示「退出
+        // 小窗」：用户想看的是播放器，而此刻播放器就是那个小窗。所以把它重新
+        // 收起来，再把小窗抬到前台，让这个手势落在小窗上。真正退出小窗只有
+        // 小窗上的还原按钮 / Esc / T，那几条路径会先置上 `main_restoring`。
+        // 注册时会立刻回调一次，那时还没有小窗，是空操作。
+        cx.observe_window_visibility(window, |app, visibility, window, cx| {
+            if !matches!(visibility, WindowVisibility::Visible)
+                || app.mini.is_none()
+                || app.main_restoring
+            {
+                return;
             }
+            window.minimize_window();
+            app.focus_mini(cx);
         })
         .detach();
 
