@@ -44,7 +44,11 @@ impl PlayerApp {
 
         // 小窗模式与全屏互斥：不可见的主窗口停在全屏状态没有意义，
         // 还原回来还会落在一个说不清是全屏还是窗口的中间态。
-        if window.is_fullscreen() {
+        //
+        // 退出全屏是**异步**的（gpui 在自己的任务里改窗口样式），收起主窗口因此
+        // 也得等它落地，见 `hide_main_when_windowed`。
+        let leaving_fullscreen = window.is_fullscreen();
+        if leaving_fullscreen {
             window.toggle_fullscreen();
         }
 
@@ -157,7 +161,9 @@ impl PlayerApp {
                 // 收起用「藏」而不是最小化：最小化的主窗口仍然在任务栏上挂着一条，
                 // 点它时系统会先把主窗口还原、再交给我们按回去，中间那一帧躲不掉。
                 // 藏起来连那一条都没有，任务栏上只剩小窗（见 `platform::window::can_hide`）。
-                if !platform::window::hide(window) {
+                if leaving_fullscreen {
+                    self.hide_main_when_windowed(cx);
+                } else if !platform::window::hide(window) {
                     window.minimize_window();
                 }
                 self.flash("小窗：开");
@@ -167,6 +173,48 @@ impl PlayerApp {
                 self.flash("打开小窗失败");
             }
         }
+    }
+
+    /// 收起主窗口，但要等它真的退出全屏之后再收。
+    ///
+    /// gpui 的 `toggle_fullscreen` 是异步的：进全屏时它把当时的**整份**窗口样式存下来，
+    /// 退出时再原样写回 `GWL_STYLE`。那份样式是窗口可见时取的，里面带着 `WS_VISIBLE`，
+    /// 于是紧接着执行的 `SW_HIDE` 会被这次样式还原撤销——主窗口重新出现在屏幕上，而
+    /// 这一下「变可见」并不发 `WM_SHOWWINDOW`，可见性观察者也收不到回调，最后就是
+    /// 主窗口和小窗同时留在屏幕上。
+    ///
+    /// 收起因此排到 `is_fullscreen()` 翻成 false 之后。平台的退出全屏任务先入队，
+    /// 正常情况下这里第一轮就已经退干净了；轮询只是为了不依赖那个先后顺序。
+    fn hide_main_when_windowed(&mut self, cx: &mut Context<Self>) {
+        let handle = self.main_window;
+        cx.spawn(async move |this, cx| {
+            // 上限一秒：窗口没退出全屏（比如平台那条路径压根没走）也照收不误——
+            // 「两个窗口同时可见」比「停在全屏状态」严重得多。
+            for _ in 0..60 {
+                let windowed = cx
+                    .update_window(handle, |_root, window, _cx| !window.is_fullscreen())
+                    .unwrap_or(true);
+                if windowed {
+                    break;
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(16))
+                    .await;
+            }
+            // 期间用户已经回到主窗口（Esc / 还原按钮），这时再收就等于把窗口藏没了。
+            let Some(app) = this.upgrade() else {
+                return;
+            };
+            if !cx.read_entity(&app, |app, _| app.mini.is_some() && !app.main_restoring) {
+                return;
+            }
+            let _ = cx.update_window(handle, |_root, window, _cx| {
+                if !platform::window::hide(window) {
+                    window.minimize_window();
+                }
+            });
+        })
+        .detach();
     }
 
     /// 让主窗口重新可见（并回到前台）。这是「还原」的核心一步。
