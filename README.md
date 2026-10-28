@@ -66,6 +66,10 @@ cargo build --release       # 产物约 130MB，其中约 116MB 是库
 文件名带内容哈希（`9665c142b49567cc-libmpv-2.dll`）：换了库版本会写出新文件，
 旧的在下次解压后清掉，不会误用上一版的库。
 
+exe 也不依赖系统里的 VC++ 运行库：Windows 目标在 `.cargo/config.toml` 里静态链接
+MSVC 运行库（`+crt-static`），干净系统上双击就能开，不会弹出「由于找不到
+VCRUNTIME140.dll，无法继续执行代码」（见 `docs/adr/0006`）。
+
 - debug 构建不内嵌（开发期 `libs/` 就在手边，每次链接搬上百 MB 没有意义）；
 - `NGY_EMBED_MPV=<路径>` 指定要内嵌的库，`NGY_EMBED_MPV=0` 关掉内嵌，
   做出「库放在旁边」的轻薄 exe；

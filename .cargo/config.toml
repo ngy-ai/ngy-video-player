@@ -1,0 +1,20 @@
+# Windows 全静态链接 MSVC 运行库（等价于 C/C++ 项目里的「多线程 (/MT)」）。
+#
+# 默认的动态 CRT 会让 exe 依赖 vcruntime140.dll：干净的 Windows（LTSC / 刚装完的
+# 系统 / 精简版）没装 VC++ 运行库，双击就报「由于找不到 VCRUNTIME140.dll，无法
+# 继续执行代码」。这个依赖由**加载器**在进程启动前解析，内置或解压都救不了
+# （见 docs/adr/0006），只能在链接期去掉。
+#
+# 代价是 exe 大几百 KB；换来的是「exe 拷到哪台机器都能跑」，与单文件分发同一个目标。
+# libmpv-2.dll 不受影响：zhongfly 的 Windows 构建是 MinGW 全静态，本身不带
+# vcruntime 依赖，加载时不需要额外运行库。
+#
+# 注意：外部设置了 RUSTFLAGS 时 cargo 会忽略这里的 rustflags（CI 里设了全局
+# RUSTFLAGS 的话要把 +crt-static 一并写进去）。临时回退到动态 CRT：
+#   $env:RUSTFLAGS = "-C target-feature=-crt-static"
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
