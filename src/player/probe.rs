@@ -17,6 +17,12 @@ use std::{
 /// 探测失败前最多等多久。网络路径/坏文件不该把界面线程之外的探测线程吊死。
 const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 
+/// 探测最常撞上的几个 mpv 错误码（`mpv/client.h`）。这些码的原文是英文，
+/// 界面上直接甩给用户没有指导意义，所以挑出这几个换成能看懂的说明。
+const NOTHING_TO_PLAY: i32 = -16;
+const UNKNOWN_FORMAT: i32 = -17;
+const LOADING_FAILED: i32 = -13;
+
 /// 一条轨道在界面上要展示的全部信息。
 #[derive(Clone, Debug)]
 pub struct MediaTrack {
@@ -62,14 +68,17 @@ fn probe_inner(path: &Path) -> Result<MediaInfo> {
     };
 
     // 只解复用：不解码、不出声、不建窗口。这样打开 4K 大文件也只读索引。
+    //
+    // `vid`/`aid`/`sid` 不能设成 `no` 来省事：mpv 把「一条轨道都没选中」当成没有
+    // 可播内容，直接结束会话（END_FILE + `no audio or video data played`），
+    // 连 FILE_LOADED 都不发、track-list 也一并清空，探测反而什么都读不到。
+    // 保留正常选轨、把输出接到 null，再用 `pause` 停在第一帧之前，效果一样。
     for (name, value) in [
         ("config", "no"),
         ("terminal", "no"),
         ("vo", "null"),
         ("ao", "null"),
-        ("vid", "no"),
-        ("aid", "no"),
-        ("sid", "no"),
+        ("pause", "yes"),
         ("audio-display", "no"),
         ("idle", "yes"),
         ("force-window", "no"),
@@ -115,11 +124,10 @@ fn wait_loaded(api: &MpvApi, handle: *mut MpvHandle, path: &Path) -> Result<()> 
             event::FILE_LOADED => return Ok(()),
             event::END_FILE => {
                 let data = unsafe { (*event).data as *const ffi::MpvEventEndFile };
-                let reason = if data.is_null() {
-                    "未知原因".to_string()
-                } else {
-                    api.error_text(unsafe { (*data).error })
-                };
+                if data.is_null() {
+                    bail!("无法解析 {}：未知原因", path.display());
+                }
+                let reason = describe_error(api, unsafe { (*data).error });
                 bail!("无法解析 {}：{reason}", path.display());
             }
             _ => {}
@@ -127,6 +135,16 @@ fn wait_loaded(api: &MpvApi, handle: *mut MpvHandle, path: &Path) -> Result<()> 
         if Instant::now() > deadline {
             bail!("读取文件信息超时：{}", path.display());
         }
+    }
+}
+
+/// 把探测失败的错误码翻成中文，并尽量指出下一步该查什么。
+fn describe_error(api: &MpvApi, code: i32) -> String {
+    match code {
+        NOTHING_TO_PLAY => "文件里没有可播放的音频或视频轨道".to_string(),
+        UNKNOWN_FORMAT => "无法识别的文件格式（可能不是媒体文件，或者文件不完整）".to_string(),
+        LOADING_FAILED => "打开文件失败（可能被占用、权限不足或已损坏）".to_string(),
+        _ => api.error_text(code),
     }
 }
 
@@ -141,6 +159,11 @@ fn read_tracks(api: &MpvApi, handle: *mut MpvHandle) -> Vec<MediaTrack> {
 
     for index in 0..count {
         let key = |name: &str| format!("track-list/{index}/{name}");
+        // 封面图（mp4 的 attached_pic，例如「专辑封面」）在 mpv 里也占一条 video 轨，
+        // 但它不是内容轨，混进列表只会让用户以为片子有两路画面。
+        if api.property_flag(handle, &key("image")).unwrap_or(false) {
+            continue;
+        }
         let kind = match api.property_string(handle, &key("type")).as_deref() {
             Some("video") => "视频",
             Some("audio") => "音频",
@@ -234,5 +257,17 @@ struct HandleGuard {
 impl Drop for HandleGuard {
     fn drop(&mut self) {
         unsafe { (self.api.terminate_destroy)(self.handle) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 不存在检查排在加载 libmpv 之前，所以这条不需要库也能跑。
+    #[test]
+    fn 文件不存在时直接报错() {
+        let error = probe(Path::new("probe-missing-file.mp4")).unwrap_err();
+        assert!(error.contains("文件已不存在"), "{error}");
     }
 }
