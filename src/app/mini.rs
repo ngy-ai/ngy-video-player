@@ -345,7 +345,7 @@ impl MiniPlayer {
                     )
                     .child(self.state.title.clone()),
             )
-            .child(icon_button(
+            .child(icon_button_with_tip(
                 "mini-on-top",
                 // 两个图标而不是同一个图标变色：置顶与否只看颜色的差别太弱，
                 // 尤其在视频画面上什么底色都可能出现。
@@ -356,15 +356,22 @@ impl MiniPlayer {
                 },
                 self.on_top,
                 false,
+                // 提示写「点了会发生什么」，已置顶时就不该再说「置顶」。
+                Some(if self.on_top {
+                    "取消置顶"
+                } else {
+                    "窗口置顶"
+                }),
                 cx.listener(|this, _: &ClickEvent, window, cx| {
                     this.toggle_on_top(window, cx);
                 }),
             ))
-            .child(icon_button(
+            .child(icon_button_with_tip(
                 "mini-restore",
                 IconName::Minimize2,
                 false,
                 false,
+                Some("回到主窗口"),
                 cx.listener(|this, _: &ClickEvent, window, cx| {
                     // 先把主窗口拉回来再关自己：反过来的话中间那几帧屏幕上什么都没有。
                     this.dismissed = true;
@@ -373,13 +380,14 @@ impl MiniPlayer {
                     cx.notify();
                 }),
             ))
-            .child(icon_button(
+            .child(icon_button_with_tip(
                 "mini-close",
                 IconName::X,
                 false,
                 false,
                 // 悬浮条上的关闭和主窗口标题栏上的关闭是同一件事：结束整个应用。
                 // 「回到大窗口」是左边那个还原按钮的职责，两者不能混。
+                Some("退出程序"),
                 cx.listener(|_this, _: &ClickEvent, _window, cx| cx.quit()),
             ))
             .into_any_element()
@@ -497,7 +505,7 @@ impl MiniPlayer {
                     .items_center()
                     .gap(px(8.0))
                     .px(px(10.0))
-                    .child(icon_button(
+                    .child(icon_button_with_tip(
                         "mini-play",
                         if self.state.playing {
                             IconName::Pause
@@ -506,6 +514,11 @@ impl MiniPlayer {
                         },
                         false,
                         false,
+                        Some(if self.state.playing {
+                            "暂停（空格）"
+                        } else {
+                            "播放（空格）"
+                        }),
                         cx.listener(|this, _: &ClickEvent, _window, cx| {
                             this.forward(cx, |app, cx| app.toggle_play(cx));
                         }),
@@ -543,11 +556,18 @@ impl MiniPlayer {
         div()
             .id("mini-volume-wrap")
             .relative()
-            .child(icon_button(
+            .child(icon_button_with_tip(
                 "mini-volume",
                 icon,
                 muted,
                 false,
+                // 这颗按钮只切静音，调音量是悬停后弹出的竖条；提示得说清这一点，
+                // 否则会让人以为点一下能调大小。
+                Some(if muted {
+                    "取消静音（M）·悬停调音量"
+                } else {
+                    "静音（M）·悬停调音量"
+                }),
                 cx.listener(|this, _: &ClickEvent, _window, cx| {
                     this.forward(cx, |app, cx| app.toggle_mute(cx));
                 }),
