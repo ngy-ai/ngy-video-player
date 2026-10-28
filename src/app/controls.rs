@@ -154,6 +154,9 @@ impl PlayerApp {
                     .flex()
                     .items_center()
                     .gap(px(6.0))
+                    // 窗口窄到面板压着控制条时（见 `playlist_max_width`），
+                    // 宁可把右侧几颗按钮裁掉，也不能让它们画到播放列表上面去。
+                    .overflow_hidden()
                     // 左：播放控制（提示里带上快捷键，和菜单栏的口径一致）
                     .child(icon_button_with_tip(
                         "prev",

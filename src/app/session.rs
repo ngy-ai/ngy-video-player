@@ -158,14 +158,24 @@ impl PlayerApp {
     /// 面板宽度：跟着窗口收，避免窗口缩小后面板把画面整块吃掉。
     pub(super) fn playlist_width(&self, window: &Window) -> f32 {
         let available = f32::from(window.viewport_size().width);
-        let max = (available - VIDEO_MIN_WIDTH).clamp(PLAYLIST_MIN_WIDTH, PLAYLIST_MAX_WIDTH);
-        self.settings.playlist_width.clamp(PLAYLIST_MIN_WIDTH, max)
+        self.settings
+            .playlist_width
+            .clamp(PLAYLIST_MIN_WIDTH, Self::playlist_max_width(available))
+    }
+
+    /// 面板最多能占多宽。
+    ///
+    /// 控制条让开面板之后剩下的那一条是定宽的，压到 `CONTROLS_MIN_WIDTH`
+    /// 以下时右侧按钮就会越过面板边界、压在列表行上。窗口特别窄时也只能
+    /// 保住 `PLAYLIST_MIN_WIDTH`，剩下的交给控制条自己去裁。
+    fn playlist_max_width(available: f32) -> f32 {
+        (available - CONTROLS_MIN_WIDTH).clamp(PLAYLIST_MIN_WIDTH, PLAYLIST_MAX_WIDTH)
     }
 
     /// 拖动面板左边界。面板贴右边，所以宽度就是「窗口宽 - 鼠标 x」。
     pub(super) fn drag_playlist_width(&mut self, x: Pixels, window: &Window) {
         let available = f32::from(window.viewport_size().width);
-        let max = (available - VIDEO_MIN_WIDTH).clamp(PLAYLIST_MIN_WIDTH, PLAYLIST_MAX_WIDTH);
+        let max = Self::playlist_max_width(available);
         self.settings.playlist_width = (available - f32::from(x)).clamp(PLAYLIST_MIN_WIDTH, max);
     }
 
@@ -302,5 +312,31 @@ impl PlayerApp {
             self.selection.clear();
             self.selection_anchor = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 面板和控制条并排：面板最多只能占到「窗口宽 - 控制条所需宽度」，
+    /// 否则控制条右侧的按钮会越界压在列表行上。
+    #[test]
+    fn playlist_never_squeezes_the_controls() {
+        for window in [1920.0_f32, 1280.0, 1120.0, 1000.0] {
+            let panel = PlayerApp::playlist_max_width(window);
+            assert!(
+                window - panel >= CONTROLS_MIN_WIDTH,
+                "窗口 {window} 宽时面板占到 {panel}，控制条只剩 {}",
+                window - panel
+            );
+        }
+    }
+
+    /// 窗口窄到连控制条都排不下时，面板退到最小宽度为止；
+    /// 再窄只能由控制条自己裁，不能反过来挤没画面。
+    #[test]
+    fn narrow_window_keeps_the_playlist_at_its_minimum() {
+        assert_eq!(PlayerApp::playlist_max_width(700.0), PLAYLIST_MIN_WIDTH);
     }
 }

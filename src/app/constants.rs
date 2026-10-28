@@ -21,11 +21,23 @@ pub(super) const SCREENSHOT_PREVIEW_HEIGHT: f32 = 158.0;
 /// 没人搭理时多久自动收起。鼠标停在卡片上时不计时。
 pub(super) const SCREENSHOT_CARD_LIFETIME: Duration = Duration::from_secs(10);
 pub(super) const MENUBAR_HEIGHT: f32 = 32.0;
-/// 播放列表面板拖动时的宽度边界。视频那边至少留 480px：再窄控制条上的
-/// 倍速/循环/全屏就挤成一团，拖到头也不该出现这种布局。
+/// 播放列表面板拖动时的宽度边界。上限还要再受 `CONTROLS_MIN_WIDTH` 约束，
+/// 见 `PlayerApp::playlist_max_width`。
 pub(super) const PLAYLIST_MIN_WIDTH: f32 = 220.0;
 pub(super) const PLAYLIST_MAX_WIDTH: f32 = 760.0;
-pub(super) const VIDEO_MIN_WIDTH: f32 = 480.0;
+/// 控制条一行排下全部按钮所需的宽度。
+///
+/// 控制条按「窗口宽 - 面板宽」定宽，面板一旦把这一条压窄，右侧的倍速、
+/// 循环、全屏就会越界画到播放列表上去。所以面板能拖到多宽，得先扣掉这个数。
+/// 加减控制条上的按钮或改它们的尺寸时，这里要跟着改。
+pub(super) const CONTROLS_MIN_WIDTH: f32 = 18.0 * 2.0 // 左右内边距
+    + 34.0 * 8.0 // 上一集、播放、下一集、字幕、音轨、列表、迷你、全屏
+    + 6.0 // 播放键与音量之间的空档
+    + (34.0 + 2.0 + 84.0) // 音量图标 + 间隙 + 滑条
+    + (8.0 + 104.0) // 时间文字（含左边距），按 "10:29:00 / 10:29:00" 算
+    + 64.0 // 倍速 pill
+    + 56.0 // 循环 pill
+    + 6.0 * 13.0; // 行内间距
 pub(super) const PLAYLIST_RESIZER_WIDTH: f32 = 6.0;
 /// 行右键菜单的尺寸，只用来把弹窗往窗口里收。
 pub(super) const ITEM_MENU_WIDTH: f32 = 168.0;
