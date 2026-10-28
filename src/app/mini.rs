@@ -139,6 +139,32 @@ impl MiniPlayer {
         cx.notify();
     }
 
+    /// 小窗被系统收起来时把自己叫回来。
+    ///
+    /// 小窗模式下屏幕上只该有小窗。用户点任务栏那一条时，系统可能直接对「整个
+    /// 应用」下手：主窗口本来就最小化着，于是唯一的变化就是小窗一起消失——播放器
+    /// 看起来凭空没了，点任务栏反而成了关掉它的开关。这里把它拉回前台。
+    ///
+    /// 三条主动退出的路径（还原按钮 / T / Esc）会先置上 `dismissed`，应用退出时
+    /// `app_gone` 会置上，两者都不召回，不会和销毁过程抢窗口。
+    pub(super) fn recall(
+        &mut self,
+        visibility: WindowVisibility,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(visibility, WindowVisibility::Hidden) || self.dismissed || self.app_gone {
+            return;
+        }
+        log_info!("小窗被系统收起，已重新召回");
+        // 走 `bring_to_front` 而不是 `activate_window`：后者只在窗口「最小化」时
+        // 才 `SW_RESTORE`，被 `SW_HIDE` 藏起来的那一路拉不回来。
+        if !platform::window::bring_to_front(window) {
+            window.activate_window();
+        }
+        cx.notify();
+    }
+
     /// 从主窗口拉一份显示状态过来。由 `cx.observe` 在主窗口 notify 之后调用，
     /// 那时两边都没被借用，可以安全 `read`（原因见 `MiniState` 的文档）。
     pub(super) fn pull_state(&mut self, app: &Entity<PlayerApp>, cx: &mut Context<Self>) {
@@ -335,6 +361,7 @@ impl MiniPlayer {
                 false,
                 cx.listener(|this, _: &ClickEvent, window, cx| {
                     // 先把主窗口拉回来再关自己：反过来的话中间那几帧屏幕上什么都没有。
+                    this.dismissed = true;
                     this.forward(cx, |app, cx| app.reactivate_main(cx));
                     window.remove_window();
                     cx.notify();
@@ -749,12 +776,14 @@ impl Render for MiniPlayer {
             }))
             .on_action(cx.listener(|this, _: &ToggleMini, window, cx| {
                 // T 在小窗里的含义与主窗口一致——切换小窗模式，也就是还原。
+                this.dismissed = true;
                 this.forward(cx, |app, cx| app.reactivate_main(cx));
                 window.remove_window();
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ExitOverlay, window, cx| {
                 // 小窗里没有别的浮层可关，Esc 就是退出小窗模式。
+                this.dismissed = true;
                 this.forward(cx, |app, cx| app.reactivate_main(cx));
                 window.remove_window();
                 cx.notify();

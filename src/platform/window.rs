@@ -17,6 +17,16 @@ pub fn bring_to_front(window: &Window) -> bool {
     imp::bring_to_front(window)
 }
 
+/// 立即把窗口收起来。返回 `false` 表示这个平台没有对应实现，调用方退回
+/// `Window::minimize_window()`。
+///
+/// gpui 的 `minimize_window` 走 `ShowWindowAsync`：请求投出去就返回，窗口要等
+/// 下一轮消息循环才真的收起。小窗模式下要赶在「主窗口刚被系统还原」的同一拍把
+/// 它按回去，晚一拍就意味着主窗口实打实地闪出来一次。
+pub fn minimize(window: &Window) -> bool {
+    imp::minimize(window)
+}
+
 #[cfg(windows)]
 mod imp {
     use std::ffi::c_void;
@@ -25,6 +35,7 @@ mod imp {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     const SW_RESTORE: i32 = 9;
+    const SW_MINIMIZE: i32 = 6;
 
     #[link(name = "user32")]
     unsafe extern "system" {
@@ -60,6 +71,15 @@ mod imp {
         // 并且抬到了 Z 序顶端，不该再让调用方去走另一条路径。
         true
     }
+
+    pub fn minimize(window: &Window) -> bool {
+        let Some(hwnd) = hwnd(window) else {
+            return false;
+        };
+        // 同步版：`ShowWindow` 会当场派发 `WM_SIZE`，不等下一轮消息循环。
+        unsafe { ShowWindow(hwnd, SW_MINIMIZE) };
+        true
+    }
 }
 
 #[cfg(not(windows))]
@@ -69,6 +89,11 @@ mod imp {
     pub fn bring_to_front(_window: &Window) -> bool {
         // macOS 的 `activate` 会 `makeKeyAndOrderFront`，X11 会发 `_NET_ACTIVE_WINDOW`，
         // 两边本来就是对的，交给 gpui。
+        false
+    }
+
+    pub fn minimize(_window: &Window) -> bool {
+        // 两边的 `minimize` 都只是把请求交给窗口服务器，没有「晚一拍」的问题。
         false
     }
 }

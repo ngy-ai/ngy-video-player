@@ -89,8 +89,16 @@ impl PlayerApp {
                 window_min_size: Some(size(px(MINI_MIN_WIDTH), px(90.0))),
                 ..Default::default()
             },
-            |_window, cx| {
+            |window, cx| {
                 let view = cx.new(|cx| MiniPlayer::new(app, state, on_top, cx));
+                // 小窗自己的可见性：系统把它收起来时（点任务栏把整个应用最小化），
+                // 它得把自己叫回来，否则屏幕上什么都不剩。见 `MiniPlayer::recall`。
+                view.update(cx, |_mini, cx| {
+                    cx.observe_window_visibility(window, |mini, visibility, window, cx| {
+                        mini.recall(visibility, window, cx);
+                    })
+                    .detach();
+                });
                 *slot = Some(view.clone());
                 view
             },

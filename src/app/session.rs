@@ -105,7 +105,9 @@ impl PlayerApp {
             {
                 return;
             }
-            window.minimize_window();
+            if !platform::window::minimize(window) {
+                window.minimize_window();
+            }
             app.focus_mini(cx);
         })
         .detach();
