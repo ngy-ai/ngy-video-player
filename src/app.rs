@@ -21,11 +21,12 @@ use anyhow::Result;
 use futures::{StreamExt as _, channel::mpsc::UnboundedReceiver};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, Bounds, ClickEvent, Context, Corners, CursorStyle, ElementId, Entity,
-    ExternalPaths, FocusHandle, Hsla, IntoElement, KeyBinding, KeyDownEvent, Modifiers,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, RenderImage,
-    ScrollDelta, ScrollWheelEvent, SharedString, Styled, WeakEntity, Window, WindowBounds,
-    WindowHandle, WindowOptions, actions, canvas, div, img, point, px, size,
+    AnyElement, AnyWindowHandle, App, AppContext, Bounds, ClickEvent, Context, Corners,
+    CursorStyle, ElementId, Entity, ExternalPaths, FocusHandle, Hsla, IntoElement, KeyBinding,
+    KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Point, Render, RenderImage, ScrollDelta, ScrollWheelEvent, SharedString, Styled, WeakEntity,
+    Window, WindowBounds, WindowHandle, WindowKind, WindowOptions, WindowVisibility, actions,
+    canvas, div, img, point, px, size,
 };
 use std::{
     cell::Cell,
@@ -656,6 +657,8 @@ pub struct PlayerApp {
     mini: Option<Entity<MiniPlayer>>,
     /// 小窗的窗口句柄：退出小窗时要靠它把窗口关掉，而不是只清掉引用。
     mini_window: Option<WindowHandle<MiniPlayer>>,
+    /// 主窗口句柄。小窗模式下主窗口是最小化的，还原时要从「小窗那一侧」把它拉回来。
+    main_window: AnyWindowHandle,
     /// 文件关联的落点缓存。
     ///
     /// 查询要逐个读注册表，不能放进每帧都跑的渲染路径里；只在展开「设置」菜单、
@@ -817,8 +820,11 @@ enum BarAction {
 #[derive(Clone, Default)]
 struct MiniState {
     title: SharedString,
-    /// 播放进度 0~1。
-    ratio: f32,
+    position: f64,
+    duration: f64,
+    playing: bool,
+    volume: f64,
+    muted: bool,
     /// 播放列表是否为空——空的时候画面区提示「没有正在播放的文件」。
     empty: bool,
 }
@@ -838,14 +844,27 @@ struct MiniPlayer {
     /// 已经画过、等待归还给 GPU atlas 的旧帧。规则与主窗口一致（留两帧余量），
     /// 但两窗口的 atlas 是各一份，所以各自还各自的。
     retired: VecDeque<Arc<RenderImage>>,
-    /// 鼠标是否停在小窗上：只有这时候才浮出标题条，平时不挡画面。
+    /// 鼠标是否停在小窗上。
     hovered: bool,
+    /// 悬浮条与控制栏是否可见。比 `hovered` 慢半拍，见 `set_hovered`。
+    controls: bool,
+    /// 拖动进度条时的临时位置；`None` 表示没在拖。
+    dragging: Option<f64>,
+    /// 拖动音量滑块时为真。
+    volume_dragging: bool,
+    /// 音量滑块是否展开。
+    volume_open: bool,
+    /// 进度条与音量滑块的 bounds，由 canvas 在 prepaint 阶段写回。
+    progress_bounds: Rc<Cell<Bounds<Pixels>>>,
+    volume_bounds: Rc<Cell<Bounds<Pixels>>>,
     /// 已经下发给窗口系统的置顶状态。
     on_top_applied: bool,
     /// 上一次记下的窗口宽度，用来判断用户有没有拖动过边框（变了才回写偏好）。
     last_width: f32,
-    /// 主窗口已经被释放。真正的关闭要等到下一次 render（那时才拿得到 `Window`），
-    /// 所以这里只记一笔，render 里再执行。
+    /// 主窗口要求关掉小窗（或者是主窗口没了）。真正的关闭要等到下一次 render，
+    /// 那时才拿得到 `&mut Window`。
+    dismissed: bool,
+    /// 主窗口已经被释放，跟着退出。
     app_gone: bool,
     focus: FocusHandle,
 }
@@ -859,8 +878,15 @@ impl MiniPlayer {
             incoming: None,
             retired: VecDeque::new(),
             hovered: false,
+            controls: false,
+            dragging: None,
+            volume_dragging: false,
+            volume_open: false,
+            progress_bounds: Rc::new(Cell::new(Bounds::default())),
+            volume_bounds: Rc::new(Cell::new(Bounds::default())),
             on_top_applied: false,
             last_width: 0.0,
+            dismissed: false,
             app_gone: false,
             focus: cx.focus_handle(),
         }
@@ -925,22 +951,80 @@ impl MiniPlayer {
         });
     }
 
-    fn render_bar(&self, title: SharedString, cx: &mut Context<Self>) -> AnyElement {
+    /// 鼠标进出。控件不是跟着指针立刻闪，而是移开之后再等 500ms：
+    /// 从画面挪到底部控制栏的无主区域、或者贴边划过，都不该让控件抖一下。
+    fn set_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) {
+        self.hovered = hovered;
+        if hovered {
+            if !self.controls {
+                self.controls = true;
+            }
+            cx.notify();
+            return;
+        }
+
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(500))
+                .await;
+            this.update(cx, |mini, cx| {
+                // 期间指针又回来了就什么都不做。
+                if mini.hovered || !mini.controls {
+                    return;
+                }
+                mini.controls = false;
+                mini.volume_open = false;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// 指针横坐标换算成片内秒数。
+    fn time_for_x(&self, x: Pixels) -> f64 {
+        let bounds = self.progress_bounds.get();
+        let width = f32::from(bounds.size.width);
+        if width <= 1.0 || self.state.duration <= 0.0 {
+            return self.state.position;
+        }
+        let offset = f32::from(x) - f32::from(bounds.origin.x);
+        (offset as f64 / width as f64).clamp(0.0, 1.0) * self.state.duration
+    }
+
+    /// 指针横坐标换算成音量百分比。上限跟主窗口一致（mpv 能到 130）。
+    fn volume_for_x(&self, x: Pixels) -> f64 {
+        let bounds = self.volume_bounds.get();
+        let width = f32::from(bounds.size.width);
+        if width <= 1.0 {
+            return self.state.volume;
+        }
+        let offset = f32::from(x) - f32::from(bounds.origin.x);
+        (offset as f64 / width as f64).clamp(0.0, 1.0) * 130.0
+    }
+
+    /// 顶部悬浮条：标题 + 还原 + 关闭。
+    fn render_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         div()
             .id("mini-bar")
             .absolute()
             .top_0()
             .left_0()
             .right_0()
-            .h(px(34.0))
+            .h(px(32.0))
             .flex()
             .items_center()
-            .justify_between()
+            .gap(px(4.0))
             .px(px(8.0))
             .bg(ui::scrim())
+            // 点悬浮条的空白处不该穿透到底下的画面上去触发「单击暂停」。
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_this, _: &MouseDownEvent, _window, cx| cx.stop_propagation()),
+            )
             .child(
-                // 拖标题移动窗口：整块画面留给「单击暂停 / 双击全屏」。
-                // 这里必须 stop_propagation，否则松手时会被画面当成一次单击。
+                // 拖标题移动窗口。这里必须 stop_propagation，否则会被下面的画面
+                // 当成一次单击而顺手把播放暂停掉。
                 div()
                     .id("mini-title")
                     .flex_1()
@@ -957,16 +1041,17 @@ impl MiniPlayer {
                             window.start_window_move();
                         }),
                     )
-                    .child(title),
+                    .child(self.state.title.clone()),
             )
             .child(icon_button(
-                "mini-fullscreen",
-                IconName::Maximize2,
+                "mini-restore",
+                IconName::Minimize2,
                 false,
                 false,
                 cx.listener(|this, _: &ClickEvent, window, cx| {
-                    window.toggle_fullscreen();
-                    this.forward(cx, |app, _cx| app.poke());
+                    // 先把主窗口拉回来再关自己：反过来的话中间那几帧屏幕上什么都没有。
+                    this.forward(cx, |app, cx| app.reactivate_main(cx));
+                    window.remove_window();
                     cx.notify();
                 }),
             ))
@@ -975,25 +1060,259 @@ impl MiniPlayer {
                 IconName::X,
                 false,
                 false,
-                cx.listener(|_this, _: &ClickEvent, window, cx| {
-                    // 小窗自己关自己时只关窗口，界面侧的引用交给 `on_window_closed` 收尾。
-                    // 不能绕回 `PlayerApp::close_mini`：那会再 lease 一次本视图，而这段
-                    // 回调正跑在本视图的 update 里，直接 panic。
-                    window.remove_window();
-                    cx.notify();
+                // 悬浮条上的关闭和主窗口标题栏上的关闭是同一件事：结束整个应用。
+                // 「回到大窗口」是左边那个还原按钮的职责，两者不能混。
+                cx.listener(|_this, _: &ClickEvent, _window, cx| cx.quit()),
+            ))
+            .into_any_element()
+    }
+
+    /// 底部控制栏：进度 + 播放暂停 + 时间 + 音量。
+    fn render_controls(&self, cx: &mut Context<Self>) -> AnyElement {
+        let duration = self.state.duration;
+        let position = self.dragging.unwrap_or(self.state.position);
+        let ratio = if duration > 0.0 {
+            (position / duration).clamp(0.0, 1.0) as f32
+        } else {
+            0.0
+        };
+        let slot = self.progress_bounds.clone();
+
+        div()
+            .id("mini-controls")
+            .absolute()
+            .bottom_0()
+            .left_0()
+            .right_0()
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .px(px(10.0))
+            .pt(px(6.0))
+            .pb(px(8.0))
+            .bg(ui::scrim())
+            // 同上：控制栏上的空白也不该被当成「点画面」。
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_this, _: &MouseDownEvent, _window, cx| cx.stop_propagation()),
+            )
+            .child(
+                div()
+                    .id("mini-progress")
+                    .relative()
+                    .w_full()
+                    .h(px(14.0))
+                    .flex()
+                    .items_center()
+                    .cursor(CursorStyle::PointingHand)
+                    .child(
+                        canvas(
+                            move |bounds, _window, _cx| slot.set(bounds),
+                            |_bounds, (), _window, _cx| {},
+                        )
+                        .absolute()
+                        .inset_0(),
+                    )
+                    .child(
+                        div()
+                            .relative()
+                            .h(px(4.0))
+                            .w_full()
+                            .rounded(px(2.0))
+                            .bg(gpui_kit::rgba(0xffffff30))
+                            .child(
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .top_0()
+                                    .bottom_0()
+                                    .w(gpui_kit::relative(ratio))
+                                    .rounded(px(2.0))
+                                    .bg(ui::accent())
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .right(px(-4.0))
+                                            .top(px(-3.0))
+                                            .size(px(10.0))
+                                            .rounded_full()
+                                            .bg(ui::accent()),
+                                    ),
+                            ),
+                    )
+                    // 按下即定位、拖动跟随、松手才真正 seek：和主窗口一致，
+                    // 边拖边 seek 在长片子上会把解码线程反复打断。
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                            cx.stop_propagation();
+                            let at = this.time_for_x(event.position.x);
+                            this.dragging = Some(at);
+                            cx.notify();
+                        }),
+                    )
+                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                        if this.dragging.is_none() {
+                            return;
+                        }
+                        let at = this.time_for_x(event.position.x);
+                        this.dragging = Some(at);
+                        cx.notify();
+                    }))
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                            let Some(position) = this.dragging.take() else {
+                                return;
+                            };
+                            this.forward(cx, |app, cx| app.seek_to(position, cx));
+                            cx.notify();
+                        }),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(icon_button(
+                        "mini-play",
+                        if self.state.playing {
+                            IconName::Pause
+                        } else {
+                            IconName::Play
+                        },
+                        false,
+                        false,
+                        cx.listener(|this, _: &ClickEvent, _window, cx| {
+                            this.forward(cx, |app, cx| app.toggle_play(cx));
+                        }),
+                    ))
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(text_muted())
+                            .child(format!(
+                                "{} / {}",
+                                format_time(position),
+                                format_time(duration)
+                            )),
+                    )
+                    .child(div().flex_1())
+                    .child(self.render_volume(cx)),
+            )
+            .into_any_element()
+    }
+
+    /// 音量：点图标切静音，悬停展开滑块。与主窗口的 `render_volume` 同一套手势。
+    fn render_volume(&self, cx: &mut Context<Self>) -> AnyElement {
+        let muted = self.state.muted;
+        let volume = if muted { 0.0 } else { self.state.volume };
+        let ratio = (volume / 130.0).clamp(0.0, 1.0) as f32;
+        let icon = if muted || volume <= 0.0 {
+            IconName::VolumeX
+        } else if volume < 55.0 {
+            IconName::Volume1
+        } else {
+            IconName::Volume2
+        };
+        let slot = self.volume_bounds.clone();
+
+        div()
+            .id("mini-volume-wrap")
+            .relative()
+            .child(icon_button(
+                "mini-volume",
+                icon,
+                muted,
+                false,
+                cx.listener(|this, _: &ClickEvent, _window, cx| {
+                    this.forward(cx, |app, cx| app.toggle_mute(cx));
                 }),
             ))
+            // 悬停只是「打开」，关上交给控件整体收起的那一刻：鼠标从图标挪到滑块上时
+            // 图标必然先失去悬停，若在这里跟着关，滑块会瞬间消失，根本点不到。
+            .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
+                if *hovered && !this.volume_open {
+                    this.volume_open = true;
+                    cx.notify();
+                }
+            }))
+            .when(self.volume_open, |this| {
+                this.child(
+                    div()
+                        .id("mini-volume-slider")
+                        .absolute()
+                        .bottom(px(30.0))
+                        .right_0()
+                        .w(px(120.0))
+                        .h(px(24.0))
+                        .px(px(10.0))
+                        .py(px(9.0))
+                        .rounded(px(6.0))
+                        .bg(ui::scrim())
+                        .child(
+                            div()
+                                .relative()
+                                .h(px(4.0))
+                                .w_full()
+                                .rounded(px(2.0))
+                                .bg(gpui_kit::rgba(0xffffff30))
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .left_0()
+                                        .top_0()
+                                        .bottom_0()
+                                        .w(gpui_kit::relative(ratio))
+                                        .rounded(px(2.0))
+                                        .bg(if muted { text_faint() } else { text() }),
+                                )
+                                .child(
+                                    canvas(
+                                        move |bounds, _window, _cx| slot.set(bounds),
+                                        |_bounds, (), _window, _cx| {},
+                                    )
+                                    .absolute()
+                                    .inset_0(),
+                                ),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                                cx.stop_propagation();
+                                this.volume_dragging = true;
+                                let volume = this.volume_for_x(event.position.x);
+                                this.forward(cx, move |app, cx| app.set_volume_from_ui(volume, cx));
+                            }),
+                        )
+                        .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                            if !this.volume_dragging {
+                                return;
+                            }
+                            let volume = this.volume_for_x(event.position.x);
+                            this.forward(cx, move |app, cx| app.set_volume_from_ui(volume, cx));
+                        }))
+                        .on_mouse_up(
+                            MouseButton::Left,
+                            cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                                this.volume_dragging = false;
+                                cx.notify();
+                            }),
+                        ),
+                )
+            })
             .into_any_element()
     }
 }
 
 impl Render for MiniPlayer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // 主窗口关掉之后 PlayerApp 就被释放，这个小窗既没有控件也没有人驱动了，
-        // 跟着一起关，免得留下一个关不掉、也没法操作的空窗口。
-        //
-        // 关闭放在这里而不是 release 回调里：只有 render 拿得到 `&mut Window`。
-        if self.app_gone || self.app.upgrade().is_none() {
+        // 主窗口要求关掉，或者干脆已经被释放（用户把整个应用关了），
+        // 这个小窗既没有控件也没有人驱动，跟着一起关，免得留下一个关不掉、
+        // 也没法操作的空窗口。关闭放在这里而不是回调里：只有 render 拿得到
+        // `&mut Window`。
+        if self.dismissed || self.app_gone || self.app.upgrade().is_none() {
             window.remove_window();
             return div().size_full().bg(bg()).into_any_element();
         }
@@ -1004,8 +1323,6 @@ impl Render for MiniPlayer {
 
         // 这里不再去读 `PlayerApp`：小窗的第一次绘制发生在主窗口的回调里，
         // 那时主窗口正被可变借用。标题和进度都由主窗口推送过来（见 `PlayerApp::sync_mini`）。
-        let title = self.state.title.clone();
-        let ratio = self.state.ratio;
         let hint = if self.state.empty {
             "没有正在播放的文件"
         } else {
@@ -1039,30 +1356,20 @@ impl Render for MiniPlayer {
                         ),
                 )
             })
-            .when(self.hovered, |this| this.child(self.render_bar(title, cx)))
-            .child(
-                div()
-                    .id("mini-progress")
-                    .absolute()
-                    .bottom_0()
-                    .left_0()
-                    .right_0()
-                    .h(px(3.0))
-                    .bg(gpui_kit::rgba(0xffffff20))
-                    .child(div().h_full().w(gpui_kit::relative(ratio)).bg(ui::accent())),
-            )
+            // 两条同进同出：分开触发的话鼠标在中间移来移去会让它们各闪各的。
+            .when(self.controls, |this| {
+                this.child(self.render_bar(cx))
+                    .child(self.render_controls(cx))
+            })
             .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
-                this.hovered = *hovered;
-                cx.notify();
+                this.set_hovered(*hovered, cx);
             }))
-            .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
+            .on_click(cx.listener(|this, event: &ClickEvent, _window, cx| {
+                // 双击的第二下不再触发切换，否则一次双击会连切两下、等于没按。
                 if event.click_count() >= 2 {
-                    // 双击把小窗放大到全屏，而不是关掉它：都双击了，
-                    // 意图多半是「想看大一点」，不是「不要这个小窗」。
-                    window.toggle_fullscreen();
-                } else {
-                    this.forward(cx, |app, cx| app.toggle_play(cx));
+                    return;
                 }
+                this.forward(cx, |app, cx| app.toggle_play(cx));
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &TogglePlay, _window, cx| {
@@ -1083,21 +1390,16 @@ impl Render for MiniPlayer {
             .on_action(cx.listener(|this, _: &VolumeDown, _window, cx| {
                 this.forward(cx, |app, cx| app.change_volume(-VOLUME_STEP, cx));
             }))
-            .on_action(cx.listener(|_this, _: &ToggleFullscreen, window, cx| {
-                window.toggle_fullscreen();
-                cx.notify();
-            }))
-            .on_action(cx.listener(|_this, _: &ToggleMini, window, cx| {
+            .on_action(cx.listener(|this, _: &ToggleMini, window, cx| {
+                // T 在小窗里的含义与主窗口一致——切换小窗模式，也就是还原。
+                this.forward(cx, |app, cx| app.reactivate_main(cx));
                 window.remove_window();
                 cx.notify();
             }))
-            .on_action(cx.listener(|_this, _: &ExitOverlay, window, cx| {
-                // Esc 在小窗里的含义：先退全屏，已经是普通大小就收回小窗。
-                if window.is_fullscreen() {
-                    window.toggle_fullscreen();
-                } else {
-                    window.remove_window();
-                }
+            .on_action(cx.listener(|this, _: &ExitOverlay, window, cx| {
+                // 小窗里没有别的浮层可关，Esc 就是退出小窗模式。
+                this.forward(cx, |app, cx| app.reactivate_main(cx));
+                window.remove_window();
                 cx.notify();
             }))
             .into_any_element()
@@ -1168,6 +1470,7 @@ impl PlayerApp {
             menu_bar: None,
             mini: None,
             mini_window: None,
+            main_window: window.window_handle(),
             association_status: platform::associations::Status::default(),
             gpu_adapters: platform::gpu::adapters(),
             startup_failure,
@@ -1190,6 +1493,16 @@ impl PlayerApp {
         app.consume_events(event_rx, cx);
         app.start_idle_watchdog(cx);
         app.auto_maintain_associations();
+
+        // 小窗模式的不变式：同一时刻只有主窗口或小窗之一可见。所以主窗口一旦
+        // 重新可见——最典型的是用户从任务栏把它点回来——就等于退出小窗模式，
+        // 小窗跟着收掉。注册时会立刻回调一次，那时还没有小窗，是空操作。
+        cx.observe_window_visibility(window, |app, visibility, _window, cx| {
+            if matches!(visibility, WindowVisibility::Visible) && app.mini.is_some() {
+                app.dismiss_mini(cx);
+            }
+        })
+        .detach();
 
         if options.paths.is_empty() {
             app.restore_session();
@@ -1252,6 +1565,10 @@ impl PlayerApp {
                         if let Some(engine) = &this.engine {
                             this.snapshot = engine.snapshot();
                         }
+                        // 小窗模式下主窗口是最小化的，不会重绘；小窗的标题、进度和
+                        // 播放状态全靠快照变化时推过去。`Dirty` 是快照唯一的变更信号，
+                        // 挂在这里比挂在主窗口 render 上可靠。
+                        this.sync_mini(cx);
                         cx.notify();
                     }
                     PlayerEvent::Frame(image) => {
@@ -1385,6 +1702,7 @@ impl PlayerApp {
     fn toggle_play(&mut self, cx: &mut Context<Self>) {
         self.send(Command::PlayPause);
         self.poke();
+        self.sync_mini(cx);
         cx.notify();
     }
 
@@ -1392,6 +1710,7 @@ impl PlayerApp {
         self.send(Command::SeekRelative(delta));
         let arrow = if delta > 0.0 { "⏩" } else { "⏪" };
         self.flash(format!("{arrow} {:.0}s", delta.abs()));
+        self.sync_mini(cx);
         cx.notify();
     }
 
@@ -1405,6 +1724,7 @@ impl PlayerApp {
         }
         self.send(Command::SetVolume(next));
         self.flash(format!("音量 {next:.0}%"));
+        self.sync_mini(cx);
         cx.notify();
     }
 
@@ -1437,6 +1757,7 @@ impl PlayerApp {
         self.snapshot.muted = muted;
         self.send(Command::SetMuted(muted));
         self.flash(if muted { "已静音" } else { "取消静音" });
+        self.sync_mini(cx);
         cx.notify();
     }
 
@@ -1619,17 +1940,24 @@ impl PlayerApp {
         if visible {
             self.open_mini(window, cx);
         } else {
-            self.close_mini(cx);
+            self.dismiss_mini(cx);
         }
     }
 
-    /// 另开一个置顶小窗口放画面，主窗口原样保留。
+    /// 进入小窗模式：另开一个置顶小窗口放画面，然后把主窗口最小化。
     ///
     /// 之所以不是「把主窗口缩小」：缩小之后播放列表、控制条、菜单栏全得挤进
-    /// 几百像素里，等于换一种难用。弹一个独立小窗，两边各管各的更省事。
+    /// 几百像素里，等于换一种难用，而且窗口尺寸剧变会让 mpv 反复重设渲染目标。
+    /// 弹一个独立小窗，主窗口的一切状态原样保留，还原是瞬时的。
     fn open_mini(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.mini.is_some() {
             return;
+        }
+
+        // 小窗模式与全屏互斥：不可见的主窗口停在全屏状态没有意义，
+        // 还原回来还会落在一个说不清是全屏还是窗口的中间态。
+        if window.is_fullscreen() {
+            window.toggle_fullscreen();
         }
 
         let screen = self.screen_bounds(window, cx);
@@ -1654,13 +1982,16 @@ impl PlayerApp {
                     origin,
                     size(px(width), px(height)),
                 ))),
-                titlebar: Some(gpui_kit::TitlebarOptions {
-                    title: Some(SharedString::from("小窗")),
-                    appears_transparent: false,
-                    traffic_light_position: None,
-                }),
-                // 不抢焦点：弹小窗就是为了继续在主窗口里干别的事。
-                focus: false,
+                // `titlebar: None` 在 Windows 后端等价于 `hide_title_bar = true`，
+                // 也就是**不要系统标题栏**，正好是小窗要的样子；标题改由悬浮条自己画。
+                // 注意 `Some(TitlebarOptions { appears_transparent: false })` 是反过来的，
+                // 那个值会让系统把非客户区加回来。
+                titlebar: None,
+                // 工具窗口：任务栏和 Alt+Tab 里都不出现。小窗模式下任务栏只该剩主窗口
+                // 那一条——点它就是「还原」，多一条会让这个手势失去唯一性。
+                kind: WindowKind::PopUp,
+                // 主窗口马上要最小化，键盘必须落在小窗上。
+                focus: true,
                 is_resizable: true,
                 window_min_size: Some(size(px(MINI_MIN_WIDTH), px(90.0))),
                 ..Default::default()
@@ -1702,6 +2033,8 @@ impl PlayerApp {
                     }
                 })
                 .detach();
+                // 先把小窗显示出来，再收起主窗口：反过来的话有一瞬间屏幕上什么都没有。
+                window.minimize_window();
                 self.flash("小窗：开");
             }
             Err(error) => {
@@ -1711,16 +2044,29 @@ impl PlayerApp {
         }
     }
 
-    /// 关掉小窗。窗口只是被标记待关，真正的销毁由窗口系统在下一帧完成；
-    /// 引用与偏好由 `mini_closed` 在窗口真正关掉时收尾。
+    /// 让主窗口重新可见（并回到前台）。这是「还原」的核心一步。
     ///
-    /// 只从主窗口这一侧调用：小窗自己的回调里再回来 lease 本视图会 panic。
-    fn close_mini(&mut self, cx: &mut Context<Self>) {
-        // 先松手，免得「按下关 / 立刻再按开」这几帧里 `is_some()` 还成立而走错分支。
-        self.mini = None;
-        if let Some(handle) = self.mini_window.take() {
-            let _ = handle.update(cx, |_mini, window, _cx| window.remove_window());
-        }
+    /// 走 `update_window` 而不是 `WindowHandle::update`：后者会把 `PlayerApp` 再 lease
+    /// 一次，而这个方法本身就跑在 `PlayerApp` 的借用里，会直接 panic。
+    /// gpui 的 `activate` 在 Windows 上顺带 `SW_RESTORE`，最小化的窗口会一并恢复。
+    fn reactivate_main(&mut self, cx: &mut Context<Self>) {
+        let handle = self.main_window;
+        let _ = cx.update_window(handle, |_root, window, _cx| window.activate_window());
+    }
+
+    /// 让小窗自己关掉。真正的销毁在它的下一次 render 里做——只有那儿拿得到
+    /// `&mut Window`。引用与偏好由 `mini_closed` 收尾。
+    fn dismiss_mini(&mut self, cx: &mut Context<Self>) {
+        let Some(mini) = &self.mini else {
+            return;
+        };
+        mini.update(cx, |mini, cx| {
+            if mini.dismissed {
+                return;
+            }
+            mini.dismissed = true;
+            cx.notify();
+        });
     }
 
     /// 小窗关掉之后的收尾。窗口已经销毁，这里只清界面侧的引用。
@@ -1739,15 +2085,20 @@ impl PlayerApp {
             } else {
                 SharedString::from(self.snapshot.media_title.clone())
             },
-            ratio: self.progress_ratio(),
+            position: self.progress_value(),
+            duration: self.snapshot.duration,
+            playing: !self.snapshot.paused,
+            volume: self.snapshot.volume,
+            muted: self.snapshot.muted,
             empty: self.playlist().is_empty(),
         }
     }
 
     /// 把小窗要显示的状态推过去。小窗自己不读 `PlayerApp`，只收推送（原因见 `MiniState`）。
     ///
-    /// 只在真的变了才 `notify`：主窗口每画一帧都调这里，进度线本来就要跟着走，
-    /// 但标题没变时没必要让小窗再重绘一次。
+    /// 不能挂在主窗口的 `render` 上：小窗模式下主窗口是最小化的，它根本不会重绘，
+    /// 那样小窗的标题和进度会当场冻住。所以推进由事件驱动（见各个调用点）。
+    /// 只在真的变了才 `notify`——每帧都推一次，绝大部分时候是空转。
     fn sync_mini(&mut self, cx: &mut Context<Self>) {
         let Some(mini) = &self.mini else {
             return;
@@ -1756,13 +2107,36 @@ impl PlayerApp {
         mini.update(cx, move |mini, cx| {
             if mini.state.title == state.title
                 && mini.state.empty == state.empty
-                && (mini.state.ratio - state.ratio).abs() < f32::EPSILON
+                && mini.state.playing == state.playing
+                && mini.state.muted == state.muted
+                && (mini.state.position - state.position).abs() < 0.005
+                && (mini.state.duration - state.duration).abs() < 0.005
+                && (mini.state.volume - state.volume).abs() < 0.005
             {
                 return;
             }
             mini.state = state;
             cx.notify();
         });
+    }
+
+    /// 小窗拖进度条：直接跳到某一秒。
+    fn seek_to(&mut self, position: f64, cx: &mut Context<Self>) {
+        self.send(Command::SeekAbsolute(position));
+        self.poke();
+        self.sync_mini(cx);
+        cx.notify();
+    }
+
+    /// 小窗音量滑块。
+    fn set_volume_from_ui(&mut self, volume: f64, cx: &mut Context<Self>) {
+        if self.snapshot.muted && volume > 0.0 {
+            self.snapshot.muted = false;
+            self.send(Command::SetMuted(false));
+        }
+        self.set_volume(volume);
+        self.sync_mini(cx);
+        cx.notify();
     }
 
     /// 小窗宽度。用户拖过就按拖过的来，但最多占屏幕宽的 40%——
@@ -2028,8 +2402,8 @@ impl PlayerApp {
             // 卡片是最后一个浮上来的东西，Esc 先收它，再考虑关面板、退全屏。
             self.clear_screenshot_card();
         } else if self.mini.is_some() {
-            // 小窗是「从主窗口分出去」的，Esc 表示收回它。
-            self.close_mini(cx);
+            // 小窗是「从主窗口分出去」的，Esc 表示收回来。
+            self.dismiss_mini(cx);
         } else if self.settings.show_playlist {
             self.set_playlist_visible(false);
         } else if window.is_fullscreen() {
@@ -2687,15 +3061,6 @@ impl PlayerApp {
 
     fn progress_value(&self) -> f64 {
         self.dragging.unwrap_or(self.snapshot.position)
-    }
-
-    /// 播放进度 0~1，给小窗底部那条细线用。时长未知时当 0。
-    fn progress_ratio(&self) -> f32 {
-        let duration = self.snapshot.duration;
-        if duration <= 0.0 {
-            return 0.0;
-        }
-        (self.progress_value() / duration).clamp(0.0, 1.0) as f32
     }
 
     // -- 渲染 --------------------------------------------------------------
