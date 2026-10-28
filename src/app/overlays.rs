@@ -285,6 +285,9 @@ impl PlayerApp {
                 .child(
                     div()
                         .w(px(560.0))
+                        // 窗口被拖窄时面板不能顶出画面，否则右上角的关闭按钮会落到
+                        // 窗口外，用户只能按 Esc 关。
+                        .max_w(gpui_kit::relative(0.92))
                         .p(px(20.0))
                         .rounded(px(14.0))
                         .bg(surface())
@@ -302,6 +305,9 @@ impl PlayerApp {
                                 .child(
                                     div()
                                         .flex_1()
+                                        // 课程视频的文件名常常一整行放不下；没有 min_w(0)
+                                        // 时这一列会被文字撑宽，把右边的关闭按钮顶出面板。
+                                        .min_w(px(0.0))
                                         .flex()
                                         .flex_col()
                                         .gap(px(2.0))
@@ -309,7 +315,7 @@ impl PlayerApp {
                                             div()
                                                 .text_size(px(15.0))
                                                 .text_color(text())
-                                                .child(name),
+                                                .child(ui::ellipsis(name)),
                                         )
                                         .child(
                                             div()
