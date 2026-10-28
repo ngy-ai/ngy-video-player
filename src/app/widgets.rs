@@ -54,7 +54,7 @@ pub(super) fn picture_option(
         .into_any_element()
 }
 
-/// 一组单选设置：小标题 + 若干行。「画面设置」和「视频渲染与解码」共用。
+/// 一组单选设置：小标题 + 若干行。设置窗口的各页共用。
 pub(super) fn option_group(title: &'static str, rows: Vec<AnyElement>) -> AnyElement {
     div()
         .flex()
@@ -134,6 +134,54 @@ pub(super) fn engine_option(
         // 圆点和第一行标题对齐，说明多一行也不会把它拽到中间。
         .child(div().h(px(18.0)).flex().items_center().child(indicator))
         .child(texts)
+        .into_any_element()
+}
+
+/// 设置窗口里的一个按钮：描边 + 文字，宽度跟着文字走。
+///
+/// 不用控制条上那套图标按钮：那一排是「一直摆在画面上」的开关，尺寸要小；设置窗口
+/// 里的按钮是「点一次就发生一件不可撤销的事」，得长成按钮的样子，也留出更大的点击面。
+pub(super) fn settings_button(
+    id: impl Into<ElementId>,
+    label: &'static str,
+    enabled: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .justify_center()
+        .h(px(32.0))
+        .px(px(12.0))
+        .flex_none()
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(ui::track())
+        .bg(ui::surface_hover())
+        .text_size(px(12.0))
+        .text_color(if enabled { text() } else { text_faint() })
+        .when(enabled, |this| {
+            this.cursor(CursorStyle::PointingHand)
+                .hover(|style| style.bg(ui::surface_active()))
+                .on_click(
+                    move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
+                        // 窗口浮在画面上：不截断的话同一次点击会漏到视频区暂停播放。
+                        cx.stop_propagation();
+                        on_click(event, window, cx);
+                    },
+                )
+        })
+        .child(label)
+        .into_any_element()
+}
+
+/// 设置窗口里的一段说明文字。
+pub(super) fn settings_note(message: impl Into<SharedString>) -> AnyElement {
+    div()
+        .text_size(px(11.0))
+        .text_color(text_faint())
+        .child(message.into())
         .into_any_element()
 }
 

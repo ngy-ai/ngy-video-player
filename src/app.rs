@@ -62,7 +62,7 @@ actions!(
         SpeedDown,
         StopPlayback,
         ToggleHelp,
-        TogglePicture,
+        OpenPictureSettings,
         ExitOverlay,
         DeleteSelected,
     ]
@@ -78,13 +78,13 @@ mod menu_bar;
 mod menus;
 mod mini;
 mod overlays;
-mod panels;
 mod picture;
 mod playback;
 mod playlist_ops;
 mod playlist_ui;
 mod render;
 mod session;
+mod settings_panel;
 mod video_area;
 mod widgets;
 mod window;
@@ -92,6 +92,7 @@ mod window;
 use self::constants::*;
 use self::format::*;
 use self::mini::MiniPlayer;
+use self::settings_panel::SettingsTab;
 use self::widgets::*;
 
 #[derive(Clone, Debug, Default)]
@@ -236,12 +237,10 @@ pub struct PlayerApp {
     /// 最近一张截图的操作卡片；`None` 表示没显示。
     screenshot_card: Option<ScreenshotCard>,
     error: Option<Banner>,
-    show_help: bool,
-    /// 「画面设置」面板是否展开。比例/旋转/镜像都直接写在 `settings` 里，
-    /// 这里只记「面板开着没有」。
-    show_picture: bool,
-    /// 「视频渲染与解码」面板是否展开。解码方式和显卡同样直接写在 `settings` 里。
-    show_engine: bool,
+    /// 设置窗口是否打开。所有偏好都收在那一个窗口里，这里只记开合。
+    show_settings: bool,
+    /// 设置窗口当前停在哪个标签页。收起再打开时回到上次看的那一页。
+    settings_tab: SettingsTab,
     /// 悬浮菜单（字幕 / 音轨 / 循环）当前展开的是哪一个。
     menu: Option<Menu>,
     /// 顶部菜单栏当前展开的是哪一个。
@@ -405,8 +404,8 @@ enum BarAction {
     ToggleFullscreen,
     ToggleMini,
     ToggleHelp,
-    TogglePicture,
-    ToggleEngine,
+    /// 打开设置窗口；`Some` 表示直接切到那一页。
+    OpenSettings(Option<SettingsTab>),
     TakeScreenshot,
     SetAsDefaultPlayer,
     OpenDefaultApps,
@@ -463,7 +462,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("m", ToggleMute, None),
         KeyBinding::new("f", ToggleFullscreen, None),
         KeyBinding::new("t", ToggleMini, None),
-        KeyBinding::new("a", TogglePicture, None),
+        KeyBinding::new("a", OpenPictureSettings, None),
         KeyBinding::new("l", TogglePlaylist, None),
         KeyBinding::new("o", OpenFile, None),
         KeyBinding::new("n", NextFile, None),

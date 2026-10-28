@@ -59,9 +59,8 @@ impl PlayerApp {
             osd: None,
             screenshot_card: None,
             error: None,
-            show_help: false,
-            show_picture: false,
-            show_engine: false,
+            show_settings: false,
+            settings_tab: SettingsTab::default(),
             menu: None,
             menu_bar: None,
             mini: None,
@@ -287,19 +286,12 @@ impl PlayerApp {
             || self.menu_bar.is_some()
             || self.dragging.is_some()
             || self.volume_dragging
-            || self.show_help
-            || self.show_picture
-            || self.show_engine
+            || self.show_settings
             || self.playlist().is_empty()
     }
 
     pub(super) fn poke(&mut self) {
         self.last_activity = Instant::now();
-    }
-
-    pub(super) fn toggle_help(&mut self, cx: &mut Context<Self>) {
-        self.show_help = !self.show_help;
-        cx.notify();
     }
 
     /// 播放列表面板的开合。关掉时顺手清掉选择：再打开时不该有一批

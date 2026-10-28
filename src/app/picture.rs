@@ -3,15 +3,6 @@
 use super::*;
 
 impl PlayerApp {
-    /// 面板开合。和帮助面板一样是模态的，所以顺手关掉菜单，免得两者叠在一起。
-    pub(super) fn set_picture_visible(&mut self, visible: bool) {
-        self.show_picture = visible;
-        if visible {
-            self.menu = None;
-            self.menu_bar = None;
-        }
-    }
-
     pub(super) fn set_video_aspect(&mut self, mode: VideoAspect) {
         if self.settings.video_aspect == mode {
             return;
@@ -89,15 +80,6 @@ impl PlayerApp {
     }
 
     // -- 视频渲染与解码 ----------------------------------------------------
-
-    /// 面板开合。和「画面设置」一样是模态的，打开时顺手收掉菜单。
-    pub(super) fn set_engine_visible(&mut self, visible: bool) {
-        self.show_engine = visible;
-        if visible {
-            self.menu = None;
-            self.menu_bar = None;
-        }
-    }
 
     /// 渲染模式只影响「按多大尺寸渲染」：改动落在渲染目标上，下一次布局就生效。
     pub(super) fn set_render_mode(&mut self, mode: RenderMode) {

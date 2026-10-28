@@ -153,13 +153,9 @@ impl PlayerApp {
                 let supported = platform::associations::supported();
                 let status = &self.association_status;
 
+                // 所有偏好都收在同一个窗口里，菜单只留一个入口；分页功能在窗口左侧。
                 items.push(BarItem::Entry(
-                    BarEntry::new("视频渲染与解码…", ToggleEngine).checked(self.show_engine),
-                ));
-                items.push(BarItem::Entry(
-                    BarEntry::new("画面设置…", TogglePicture)
-                        .hint("A")
-                        .checked(self.show_picture),
+                    BarEntry::new("设置…", OpenSettings(None)).checked(self.show_settings),
                 ));
                 items.push(BarItem::Separator);
                 items.push(BarItem::Entry(
@@ -190,7 +186,7 @@ impl PlayerApp {
                 items.push(BarItem::Entry(
                     BarEntry::new("键盘快捷键", ToggleHelp)
                         .hint("?")
-                        .checked(self.show_help),
+                        .checked(self.show_settings && self.settings_tab == SettingsTab::Shortcuts),
                 ));
                 items.push(BarItem::Separator);
                 items.push(BarItem::Entry(BarEntry::new(
@@ -225,9 +221,8 @@ impl PlayerApp {
             }
             BarAction::ToggleFullscreen => self.toggle_fullscreen(window),
             BarAction::ToggleMini => self.toggle_mini(window, cx),
-            BarAction::ToggleHelp => self.show_help = !self.show_help,
-            BarAction::TogglePicture => self.set_picture_visible(!self.show_picture),
-            BarAction::ToggleEngine => self.set_engine_visible(!self.show_engine),
+            BarAction::ToggleHelp => self.toggle_settings(SettingsTab::Shortcuts),
+            BarAction::OpenSettings(tab) => self.open_settings(tab),
             BarAction::TakeScreenshot => self.take_screenshot(cx),
             BarAction::SetAsDefaultPlayer => self.set_default_player(),
             BarAction::OpenDefaultApps => self.open_default_apps(),

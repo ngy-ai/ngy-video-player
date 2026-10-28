@@ -86,9 +86,13 @@ impl Render for PlayerApp {
                 this.send(Command::Stop);
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &ToggleHelp, _window, cx| this.toggle_help(cx)))
-            .on_action(cx.listener(|this, _: &TogglePicture, _window, cx| {
-                this.set_picture_visible(!this.show_picture);
+            // 帮助和画面设置现在都落在设置窗口里，只是打开时停的标签页不同。
+            .on_action(cx.listener(|this, _: &ToggleHelp, _window, cx| {
+                this.toggle_settings(SettingsTab::Shortcuts);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &OpenPictureSettings, _window, cx| {
+                this.toggle_settings(SettingsTab::Picture);
                 cx.notify();
             }))
             .on_action(
@@ -108,7 +112,8 @@ impl Render for PlayerApp {
                 // `?`），而且不同键盘布局上 `?` 落在哪个键也不一样。直接看实际
                 // 打出来的字符，`shift-/`、法语 AZERTY、德语 QWERTZ 都能命中。
                 if event.keystroke.key_char.as_deref() == Some("?") {
-                    this.toggle_help(cx);
+                    this.toggle_settings(SettingsTab::Shortcuts);
+                    cx.notify();
                 }
             }))
             .on_mouse_down(
@@ -224,9 +229,7 @@ impl Render for PlayerApp {
             .children(self.render_error(panel_width, cx))
             // 右键菜单在普通浮层之上、模态面板之下。
             .children(self.render_item_menu(cx))
-            .children(self.render_help(cx))
-            .children(self.render_picture(cx))
-            .children(self.render_engine(cx))
+            .children(self.render_settings(window, cx))
             .children(self.render_file_info(cx))
     }
 }

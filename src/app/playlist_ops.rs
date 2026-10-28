@@ -5,12 +5,8 @@ use super::*;
 impl PlayerApp {
     /// Esc 的语义：一层一层往回退，而不是直接全关。
     pub(super) fn exit_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.show_help {
-            self.show_help = false;
-        } else if self.show_picture {
-            self.show_picture = false;
-        } else if self.show_engine {
-            self.show_engine = false;
+        if self.show_settings {
+            self.show_settings = false;
         } else if self.file_info.is_some() {
             self.file_info = None;
         } else if self.item_menu.is_some() {
