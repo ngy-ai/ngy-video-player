@@ -93,10 +93,15 @@ impl PlayerApp {
 
         // 小窗模式的不变式：同一时刻只有主窗口或小窗之一可见。
         //
-        // 主窗口重新可见——最典型的是用户点了任务栏上那一条——并不表示「退出
-        // 小窗」：用户想看的是播放器，而此刻播放器就是那个小窗。所以把它重新
-        // 收起来，再把小窗抬到前台，让这个手势落在小窗上。真正退出小窗只有
-        // 小窗上的还原按钮 / Esc / T，那几条路径会先置上 `main_restoring`。
+        // 主窗口变可见并不表示「退出小窗」：用户想看的是播放器，而此刻播放器就是
+        // 那个小窗。所以把它重新收起来，再把小窗抬到前台，让这个手势落在小窗上。
+        // 真正退出小窗只有小窗上的还原按钮 / Esc / T，那几条路径会先置上
+        // `main_restoring`。
+        //
+        // 正常情况下这条路径根本不会触发：主窗口进入小窗模式时就被藏起来了，任务栏
+        // 上属于小窗（见 `open_mini` 与 `platform::window::can_hide`），没有哪个按钮
+        // 能把主窗口叫出来。藏不起来的那两个平台上它仍是「点任务栏」的兜底：那里
+        // 只能事后纠正，主窗口会闪一下。
         // 注册时会立刻回调一次，那时还没有小窗，是空操作。
         cx.observe_window_visibility(window, |app, visibility, window, cx| {
             if !matches!(visibility, WindowVisibility::Visible)
@@ -105,7 +110,7 @@ impl PlayerApp {
             {
                 return;
             }
-            if !platform::window::minimize(window) {
+            if !platform::window::hide(window) {
                 window.minimize_window();
             }
             app.focus_mini(cx);

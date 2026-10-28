@@ -46,6 +46,8 @@ pub(super) struct MiniPlayer {
     pub(super) dismissed: bool,
     /// 主窗口已经被释放，跟着退出。
     pub(super) app_gone: bool,
+    /// 已经下发给窗口的标题。任务栏按钮显示的就是它，变了才重设。
+    pub(super) window_title: String,
     pub(super) focus: FocusHandle,
 }
 
@@ -76,6 +78,7 @@ impl MiniPlayer {
             last_width: 0.0,
             dismissed: false,
             app_gone: false,
+            window_title: String::new(),
             focus: cx.focus_handle(),
         }
     }
@@ -141,9 +144,12 @@ impl MiniPlayer {
 
     /// 小窗被系统收起来时把自己叫回来。
     ///
-    /// 小窗模式下屏幕上只该有小窗。用户点任务栏那一条时，系统可能直接对「整个
-    /// 应用」下手：主窗口本来就最小化着，于是唯一的变化就是小窗一起消失——播放器
-    /// 看起来凭空没了，点任务栏反而成了关掉它的开关。这里把它拉回前台。
+    /// **只在「小窗没有任务栏入口」的平台注册**（见 `open_mini`）。小窗是工具窗口
+    /// 时，系统对「整个应用」下手——最小化的主窗口本来就收着，唯一的变化就是小窗
+    /// 一起消失——屏幕上于是什么都不剩，点任务栏反而成了关掉播放器的开关。
+    ///
+    /// Windows 上不注册：那里小窗自己就是任务栏那一条，收起/还原都归用户说了算，
+    /// 再插手只会让「点任务栏最小化」「显示桌面」变成一眨眼就弹回来的闪烁。
     ///
     /// 三条主动退出的路径（还原按钮 / T / Esc）会先置上 `dismissed`，应用退出时
     /// `app_gone` 会置上，两者都不召回，不会和销毁过程抢窗口。
@@ -674,6 +680,19 @@ impl Render for MiniPlayer {
         self.swap_frame(window);
         self.sync_on_top(window, cx);
         self.remember_width(window, cx);
+
+        // 任务栏按钮上写的就是窗口标题，小窗现在承担那一条（见 `open_mini` 的
+        // `kind`），所以标题得跟着片子走。变了才下发：`SetWindowText` 每次都
+        // 会通知外壳，每帧一次纯属浪费。
+        let title = if self.state.empty {
+            "小窗".to_string()
+        } else {
+            format!("{} · 小窗", self.state.title)
+        };
+        if self.window_title != title {
+            self.window_title = title.clone();
+            window.set_window_title(&title);
+        }
 
         // 这里不去读 `PlayerApp`：小窗的第一次绘制发生在主窗口的回调里，
         // 那时主窗口正被可变借用。标题和进度由观察回调提前拉进 `state`（见 `pull_state`）。
