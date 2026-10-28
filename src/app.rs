@@ -410,9 +410,15 @@ enum BarAction {
 
 /// 小窗要显示的那点状态。
 ///
-/// **由主窗口推过来，而不是小窗在 render 里自己去读 `PlayerApp`**：小窗的第一次
-/// 绘制就发生在主窗口的点击回调里（`open_window` 会立刻画一帧），那一刻
-/// `PlayerApp` 正被可变借用，再去 lease 它就会 panic。
+/// **由小窗观察主窗口拉过来，而不是主窗口 push，也不是小窗在 render 里自己去读
+/// `PlayerApp`**。两个方向都会踩同一个坑——`PlayerApp` 和 `MiniPlayer` 互相 lease：
+///
+/// - 小窗 render 里读 `PlayerApp`：小窗的第一次绘制发生在主窗口的点击回调里
+///   （`open_window` 会立刻画一帧），那一刻 `PlayerApp` 正被可变借用。
+/// - 主窗口 push 给小窗：小窗按钮的回调跑在 `MiniPlayer` 的 update 里，
+///   主窗口回手 `mini.update(...)` 就把它 lease 了第二次。
+///
+/// 观察回调在 effect 刷新阶段才跑，两边都没被借用，所以是唯一安全的方向。
 #[derive(Clone, Default)]
 struct MiniState {
     title: SharedString,
@@ -423,6 +429,20 @@ struct MiniState {
     muted: bool,
     /// 播放列表是否为空——空的时候画面区提示「没有正在播放的文件」。
     empty: bool,
+}
+
+impl MiniState {
+    /// 和另一份状态是否「看起来一样」。进度和音量按百分之一内视为没变，
+    /// 免得每帧都判定成变化而白重绘一次小窗。
+    fn same_as(&self, other: &Self) -> bool {
+        self.title == other.title
+            && self.empty == other.empty
+            && self.playing == other.playing
+            && self.muted == other.muted
+            && (self.position - other.position).abs() < 0.005
+            && (self.duration - other.duration).abs() < 0.005
+            && (self.volume - other.volume).abs() < 0.005
+    }
 }
 
 pub fn key_bindings() -> Vec<KeyBinding> {

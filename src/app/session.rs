@@ -165,10 +165,6 @@ impl PlayerApp {
                         if let Some(engine) = &this.engine {
                             this.snapshot = engine.snapshot();
                         }
-                        // 小窗模式下主窗口是最小化的，不会重绘；小窗的标题、进度和
-                        // 播放状态全靠快照变化时推过去。`Dirty` 是快照唯一的变更信号，
-                        // 挂在这里比挂在主窗口 render 上可靠。
-                        this.sync_mini(cx);
                         cx.notify();
                     }
                     PlayerEvent::Frame(image) => {

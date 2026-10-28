@@ -6,7 +6,6 @@ impl PlayerApp {
     pub(super) fn toggle_play(&mut self, cx: &mut Context<Self>) {
         self.send(Command::PlayPause);
         self.poke();
-        self.sync_mini(cx);
         cx.notify();
     }
 
@@ -14,7 +13,6 @@ impl PlayerApp {
         self.send(Command::SeekRelative(delta));
         let arrow = if delta > 0.0 { "⏩" } else { "⏪" };
         self.flash(format!("{arrow} {:.0}s", delta.abs()));
-        self.sync_mini(cx);
         cx.notify();
     }
 
@@ -28,7 +26,6 @@ impl PlayerApp {
         }
         self.send(Command::SetVolume(next));
         self.flash(format!("音量 {next:.0}%"));
-        self.sync_mini(cx);
         cx.notify();
     }
 
@@ -61,7 +58,6 @@ impl PlayerApp {
         self.snapshot.muted = muted;
         self.send(Command::SetMuted(muted));
         self.flash(if muted { "已静音" } else { "取消静音" });
-        self.sync_mini(cx);
         cx.notify();
     }
 

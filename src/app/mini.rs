@@ -99,6 +99,17 @@ impl MiniPlayer {
         });
     }
 
+    /// 从主窗口拉一份显示状态过来。由 `cx.observe` 在主窗口 notify 之后调用，
+    /// 那时两边都没被借用，可以安全 `read`（原因见 `MiniState` 的文档）。
+    pub(super) fn pull_state(&mut self, app: &Entity<PlayerApp>, cx: &mut Context<Self>) {
+        let state = app.read(cx).mini_state();
+        if self.state.same_as(&state) {
+            return;
+        }
+        self.state = state;
+        cx.notify();
+    }
+
     /// 把动作转给主窗口：播放器状态只有一份，小窗自己不持有 mpv 句柄。
     pub(super) fn forward(
         &self,
@@ -498,8 +509,8 @@ impl Render for MiniPlayer {
         self.sync_on_top(window, cx);
         self.remember_width(window, cx);
 
-        // 这里不再去读 `PlayerApp`：小窗的第一次绘制发生在主窗口的回调里，
-        // 那时主窗口正被可变借用。标题和进度都由主窗口推送过来（见 `PlayerApp::sync_mini`）。
+        // 这里不去读 `PlayerApp`：小窗的第一次绘制发生在主窗口的回调里，
+        // 那时主窗口正被可变借用。标题和进度由观察回调提前拉进 `state`（见 `pull_state`）。
         let hint = if self.state.empty {
             "没有正在播放的文件"
         } else {

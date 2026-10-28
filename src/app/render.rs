@@ -8,7 +8,6 @@ impl Render for PlayerApp {
         self.drop_retired_previews(window);
         self.update_render_target(window);
         self.sync_on_top(window, cx);
-        self.sync_mini(cx);
 
         let title = if self.snapshot.media_title.is_empty() {
             "视频播放器".to_string()

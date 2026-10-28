@@ -97,12 +97,18 @@ impl PlayerApp {
                 // 既不能操作，也没有别的办法关掉。
                 let this = cx.entity();
                 if let Some(view) = &self.mini {
+                    let app = this.clone();
                     view.update(cx, |_mini, cx| {
                         cx.observe_release_in(&this, window, |mini, _app, _window, cx| {
                             mini.app_gone = true;
                             cx.notify();
                         })
                         .detach();
+                        // 主窗口每次 notify 之后小窗自己拉一份状态。方向必须是这个：
+                        // 小窗的按钮回调正跑在 `MiniPlayer` 的 update 里，主窗口若
+                        // 反过来 push，就会把它 lease 第二次而 panic。
+                        cx.observe(&app, |mini, app, cx| mini.pull_state(&app, cx))
+                            .detach();
                     });
                 }
                 // 小窗不管是被系统关闭按钮关掉的、还是自己点 X 关的，都会走到这里；
@@ -179,37 +185,10 @@ impl PlayerApp {
         }
     }
 
-    /// 把小窗要显示的状态推过去。小窗自己不读 `PlayerApp`，只收推送（原因见 `MiniState`）。
-    ///
-    /// 不能挂在主窗口的 `render` 上：小窗模式下主窗口是最小化的，它根本不会重绘，
-    /// 那样小窗的标题和进度会当场冻住。所以推进由事件驱动（见各个调用点）。
-    /// 只在真的变了才 `notify`——每帧都推一次，绝大部分时候是空转。
-    pub(super) fn sync_mini(&mut self, cx: &mut Context<Self>) {
-        let Some(mini) = &self.mini else {
-            return;
-        };
-        let state = self.mini_state();
-        mini.update(cx, move |mini, cx| {
-            if mini.state.title == state.title
-                && mini.state.empty == state.empty
-                && mini.state.playing == state.playing
-                && mini.state.muted == state.muted
-                && (mini.state.position - state.position).abs() < 0.005
-                && (mini.state.duration - state.duration).abs() < 0.005
-                && (mini.state.volume - state.volume).abs() < 0.005
-            {
-                return;
-            }
-            mini.state = state;
-            cx.notify();
-        });
-    }
-
     /// 小窗拖进度条：直接跳到某一秒。
     pub(super) fn seek_to(&mut self, position: f64, cx: &mut Context<Self>) {
         self.send(Command::SeekAbsolute(position));
         self.poke();
-        self.sync_mini(cx);
         cx.notify();
     }
 
@@ -220,7 +199,6 @@ impl PlayerApp {
             self.send(Command::SetMuted(false));
         }
         self.set_volume(volume);
-        self.sync_mini(cx);
         cx.notify();
     }
 
