@@ -13,7 +13,7 @@ impl PlayerApp {
             .flex()
             .items_center()
             .gap(px(2.0))
-            .child(icon_button(
+            .child(icon_button_with_tip(
                 "mute",
                 if muted || volume <= 0.0 {
                     IconName::VolumeX
@@ -24,6 +24,13 @@ impl PlayerApp {
                 },
                 muted,
                 false,
+                // 提示跟着当前状态走：已经静音时写「取消静音」，否则容易让人以为
+                // 再点一下会继续静音。
+                Some(if muted {
+                    "取消静音（M）"
+                } else {
+                    "静音（M）"
+                }),
                 cx.listener(|this, _: &ClickEvent, _window, cx| this.toggle_mute(cx)),
             ))
             .child(
@@ -147,15 +154,16 @@ impl PlayerApp {
                     .flex()
                     .items_center()
                     .gap(px(6.0))
-                    // 左：播放控制
-                    .child(icon_button(
+                    // 左：播放控制（提示里带上快捷键，和菜单栏的口径一致）
+                    .child(icon_button_with_tip(
                         "prev",
                         IconName::SkipBack,
                         false,
                         self.playlist().len() <= 1,
+                        Some("上一集（N）"),
                         cx.listener(|this, _: &ClickEvent, _window, cx| this.previous_file(cx)),
                     ))
-                    .child(icon_button(
+                    .child(icon_button_with_tip(
                         "play",
                         if playing {
                             IconName::Pause
@@ -164,13 +172,19 @@ impl PlayerApp {
                         },
                         false,
                         false,
+                        Some(if playing {
+                            "暂停（空格）"
+                        } else {
+                            "播放（空格）"
+                        }),
                         cx.listener(|this, _: &ClickEvent, _window, cx| this.toggle_play(cx)),
                     ))
-                    .child(icon_button(
+                    .child(icon_button_with_tip(
                         "next",
                         IconName::SkipForward,
                         false,
                         self.playlist().len() <= 1,
+                        Some("下一集（P）"),
                         cx.listener(|this, _: &ClickEvent, _window, cx| this.next_file(cx)),
                     ))
                     .child(div().w(px(6.0)))
