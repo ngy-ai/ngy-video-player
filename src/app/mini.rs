@@ -108,14 +108,11 @@ impl MiniPlayer {
             if !platform::topmost::set(window, want) {
                 log_warn!("小窗置顶未生效：当前窗口系统不支持");
             }
-            // 上次关小窗时如果是不置顶的，这次一开出来就得给它任务栏入口，
-            // 否则第一帧就是个找不回来的悬浮窗口。没变化时这一步是空操作。
-            platform::window::set_taskbar_visible(window, !want);
         });
     }
 
     /// 图钉按钮。切完立刻下发，不等下一次 render——置顶是个立刻能感觉到的动作。
-    pub(super) fn toggle_on_top(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn toggle_on_top(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.on_top = !self.on_top;
         let want = self.on_top;
         // 顺手把 `on_top_applied` 记上，免得下一帧的 `sync_on_top` 又下发一遍。
@@ -123,12 +120,6 @@ impl MiniPlayer {
         if !platform::topmost::set(window, want) {
             log_warn!("小窗置顶切换未生效：当前窗口系统不支持");
         }
-        // 取消置顶之后小窗会被别的窗口盖住，而工具窗口不在任务栏也不在 Alt+Tab 里，
-        // 那样就再也找不回来了。这个切换要 hide/show 一次窗口，会重入窗口过程，
-        // 所以推到 defer 里再做。
-        window.defer(cx, move |window, _cx| {
-            platform::window::set_taskbar_visible(window, !want);
-        });
         self.forward(cx, move |app, _cx| {
             app.settings.mini_on_top = want;
             app.settings.save();
