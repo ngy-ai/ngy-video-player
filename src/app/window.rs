@@ -146,7 +146,13 @@ impl PlayerApp {
     /// gpui 的 `activate` 在 Windows 上顺带 `SW_RESTORE`，最小化的窗口会一并恢复。
     pub(super) fn reactivate_main(&mut self, cx: &mut Context<Self>) {
         let handle = self.main_window;
-        let _ = cx.update_window(handle, |_root, window, _cx| window.activate_window());
+        let _ = cx.update_window(handle, |_root, window, _cx| {
+            // gpui 的 `activate_window` 只做线程内的激活，不会把窗口抬到别的进程
+            // 之上，从最小化还原后主窗口会停在别的应用后面。Windows 上走自己的实现。
+            if !platform::window::bring_to_front(window) {
+                window.activate_window();
+            }
+        });
     }
 
     /// 让小窗自己关掉。真正的销毁在它的下一次 render 里做——只有那儿拿得到

@@ -26,9 +26,10 @@ mod imp {
     use gpui_kit::Window;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-    /// `SetWindowPos` 的两个特殊「插入位置」：置顶、取消置顶。
+    /// `SetWindowPos` 的三个特殊「插入位置」：置顶、取消置顶、普通层最前。
     const HWND_TOPMOST: isize = -1;
     const HWND_NOTOPMOST: isize = -2;
+    const HWND_TOP: isize = 0;
     const SWP_NOSIZE: u32 = 0x0001;
     const SWP_NOMOVE: u32 = 0x0002;
     const SWP_NOACTIVATE: u32 = 0x0010;
@@ -65,16 +66,24 @@ mod imp {
             return false;
         };
         // 只改 Z 序：不移动、不缩放、不抢焦点。否则用户正打字时会突然被吞掉一次输入。
+        let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
         unsafe {
-            SetWindowPos(
+            let placed = SetWindowPos(
                 hwnd,
                 if on_top { HWND_TOPMOST } else { HWND_NOTOPMOST } as *mut c_void,
                 0,
                 0,
                 0,
                 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            ) != 0
+                flags,
+            ) != 0;
+            if !on_top {
+                // `HWND_NOTOPMOST` 只保证「不被置顶窗口压住」，落点由系统挑。
+                // 取消置顶是用户主动做的一次可见操作，窗口不该在同时沉到普通层
+                // 的底部去，所以再抬一次到普通层最前。
+                SetWindowPos(hwnd, HWND_TOP as *mut c_void, 0, 0, 0, 0, flags);
+            }
+            placed
         }
     }
 }
