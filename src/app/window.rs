@@ -57,6 +57,10 @@ impl PlayerApp {
         // 窗口一建出来就会立刻画第一帧，那时 `self` 还被可变借用着，
         // 所以初始状态要在这里先算好带进去，而不是让小窗自己去读。
         let state = self.mini_state();
+        // 置顶与否跟着上次的图钉走。窗口本身是 `PopUp`（为了不进任务栏），
+        // 创建时带着 `WS_EX_TOPMOST`；不希望置顶时由小窗第一帧的 `sync_on_top`
+        // 把它摘掉。
+        let on_top = self.settings.mini_on_top;
         let app = cx.weak_entity();
         let mut opened: Option<Entity<MiniPlayer>> = None;
         // 建窗口的回调里要把视图句柄传出来，所以借用而不是 move 进去。
@@ -82,7 +86,7 @@ impl PlayerApp {
                 ..Default::default()
             },
             |_window, cx| {
-                let view = cx.new(|cx| MiniPlayer::new(app, state, cx));
+                let view = cx.new(|cx| MiniPlayer::new(app, state, on_top, cx));
                 *slot = Some(view.clone());
                 view
             },

@@ -35,8 +35,10 @@ pub(super) struct MiniPlayer {
     /// 进度条与音量滑块的 bounds，由 canvas 在 prepaint 阶段写回。
     pub(super) progress_bounds: Rc<Cell<Bounds<Pixels>>>,
     pub(super) volume_bounds: Rc<Cell<Bounds<Pixels>>>,
-    /// 已经下发给窗口系统的置顶状态。
-    pub(super) on_top_applied: bool,
+    /// 用户想不想让小窗置顶。写在偏好里，下次开小窗照它来。
+    pub(super) on_top: bool,
+    /// 已经下发给窗口系统的置顶状态；`None` 表示还没下发过。
+    pub(super) on_top_applied: Option<bool>,
     /// 上一次记下的窗口宽度，用来判断用户有没有拖动过边框（变了才回写偏好）。
     pub(super) last_width: f32,
     /// 主窗口要求关掉小窗（或者是主窗口没了）。真正的关闭要等到下一次 render，
@@ -51,6 +53,7 @@ impl MiniPlayer {
     pub(super) fn new(
         app: WeakEntity<PlayerApp>,
         state: MiniState,
+        on_top: bool,
         cx: &mut Context<Self>,
     ) -> Self {
         Self {
@@ -68,7 +71,8 @@ impl MiniPlayer {
             volume_panel_hovered: false,
             progress_bounds: Rc::new(Cell::new(Bounds::default())),
             volume_bounds: Rc::new(Cell::new(Bounds::default())),
-            on_top_applied: false,
+            on_top,
+            on_top_applied: None,
             last_width: 0.0,
             dismissed: false,
             app_gone: false,
@@ -95,15 +99,32 @@ impl MiniPlayer {
     ///
     /// 与主窗口的 `sync_on_top` 各记各的：这是两个窗口，层级互不相关。
     pub(super) fn sync_on_top(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if self.on_top_applied {
+        let want = self.on_top;
+        if self.on_top_applied == Some(want) {
             return;
         }
-        self.on_top_applied = true;
+        self.on_top_applied = Some(want);
         window.defer(cx, move |window, _cx| {
-            if !platform::topmost::set(window, true) {
+            if !platform::topmost::set(window, want) {
                 log_warn!("小窗置顶未生效：当前窗口系统不支持");
             }
         });
+    }
+
+    /// 图钉按钮。切完立刻下发，不等下一次 render——置顶是个立刻能感觉到的动作。
+    pub(super) fn toggle_on_top(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.on_top = !self.on_top;
+        let want = self.on_top;
+        // 顺手把 `on_top_applied` 记上，免得下一帧的 `sync_on_top` 又下发一遍。
+        self.on_top_applied = Some(want);
+        if !platform::topmost::set(window, want) {
+            log_warn!("小窗置顶切换未生效：当前窗口系统不支持");
+        }
+        self.forward(cx, move |app, _cx| {
+            app.settings.mini_on_top = want;
+            app.settings.save();
+        });
+        cx.notify();
     }
 
     /// 从主窗口拉一份显示状态过来。由 `cx.observe` 在主窗口 notify 之后调用，
@@ -236,7 +257,7 @@ impl MiniPlayer {
         (1.0 - ratio as f64) * 130.0
     }
 
-    /// 顶部悬浮条：标题 + 还原 + 关闭。
+    /// 顶部悬浮条：标题 + 置顶 + 还原 + 关闭。
     pub(super) fn render_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         div()
             .id("mini-bar")
@@ -276,6 +297,21 @@ impl MiniPlayer {
                     )
                     .child(self.state.title.clone()),
             )
+            .child(icon_button(
+                "mini-on-top",
+                // 两个图标而不是同一个图标变色：置顶与否只看颜色的差别太弱，
+                // 尤其在视频画面上什么底色都可能出现。
+                if self.on_top {
+                    IconName::Pin
+                } else {
+                    IconName::PinOff
+                },
+                self.on_top,
+                false,
+                cx.listener(|this, _: &ClickEvent, window, cx| {
+                    this.toggle_on_top(window, cx);
+                }),
+            ))
             .child(icon_button(
                 "mini-restore",
                 IconName::Minimize2,

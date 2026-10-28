@@ -291,6 +291,9 @@ pub struct Settings {
     /// 小窗宽度。用户拖过一次之后按这个值还原。
     #[serde(default = "default_mini_width")]
     pub mini_width: f32,
+    /// 小窗是否置顶。跟着悬浮条上的图钉走，下次开小窗按它还原。
+    #[serde(default = "default_mini_on_top")]
+    pub mini_on_top: bool,
     pub fullscreen: bool,
     /// 解码模式。早期版本这里存的是 mpv 的 `hwdec` 原始字符串，换成枚举后
     /// 仍认旧键（`alias = "hwdec"`），否则整份配置会解析失败、被默认值覆盖。
@@ -332,6 +335,7 @@ impl Default for Settings {
             window_height: 680.0,
             playlist_width: 300.0,
             mini_width: 400.0,
+            mini_on_top: true,
             fullscreen: false,
             decode: DecodeMode::Software,
             render_mode: RenderMode::Performance,
@@ -351,6 +355,10 @@ fn default_playlist_width() -> f32 {
 
 fn default_mini_width() -> f32 {
     400.0
+}
+
+fn default_mini_on_top() -> bool {
+    true
 }
 
 impl Settings {
