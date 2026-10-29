@@ -11,8 +11,8 @@ impl PlayerApp {
             self.file_info = None;
         } else if self.item_menu.is_some() {
             self.item_menu = None;
-        } else if self.sort_menu {
-            self.sort_menu = false;
+        } else if self.panel_menu.is_some() {
+            self.panel_menu = None;
         } else if self.menu_bar.is_some() {
             self.menu_bar = None;
         } else if self.menu == Some(Menu::SpeedCustom) {
@@ -523,13 +523,47 @@ impl PlayerApp {
         .detach();
     }
 
+    /// 选一个文件夹，把它里面能播的文件追加到当前列表。
+    pub(super) fn pick_add_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog_open {
+            return;
+        }
+        self.dialog_open = true;
+
+        let mut dialog = rfd::FileDialog::new().set_parent(window);
+        if let Some(dir) = &self.settings.last_dir {
+            dialog = dialog.set_directory(dir);
+        }
+        let (tx, rx) = futures::channel::oneshot::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(dialog.pick_folder());
+        });
+
+        cx.spawn(async move |this, cx| {
+            let picked = rx.await.ok().flatten();
+            let _ = this.update(cx, |this, cx| {
+                this.dialog_open = false;
+                if let Some(folder) = picked {
+                    this.add_paths(vec![folder], cx);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     /// 把文件追加到当前列表末尾。
     ///
     /// 列表本来是空的话顺手把第一项放起来：点完「添加」画面一点动静都没有，
     /// 会让人以为按钮没生效。
     pub(super) fn add_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        if let Some(file) = paths.iter().find(|path| path.is_file()) {
-            self.settings.last_dir = file.parent().map(|dir| dir.to_path_buf());
+        if let Some(first) = paths.first() {
+            // 选的是文件夹就记它本身，下次对话框直接从这里打开。
+            self.settings.last_dir = if first.is_dir() {
+                Some(first.clone())
+            } else {
+                first.parent().map(|dir| dir.to_path_buf())
+            };
         }
         let was_empty = self.playlist().is_empty();
         let before = self.playlist().len();

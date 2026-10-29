@@ -80,6 +80,7 @@ mod mini;
 mod overlays;
 mod picture;
 mod playback;
+mod playlist_menu;
 mod playlist_ops;
 mod playlist_sort;
 mod playlist_ui;
@@ -93,6 +94,7 @@ mod window;
 use self::constants::*;
 use self::format::*;
 use self::mini::MiniPlayer;
+use self::playlist_menu::PanelMenu;
 use self::settings_panel::SettingsTab;
 use self::widgets::*;
 
@@ -192,8 +194,8 @@ pub struct PlayerApp {
     selection_anchor: Option<usize>,
     /// 正在拖播放列表的左边界。
     playlist_dragging: bool,
-    /// 排序菜单是否展开。
-    sort_menu: bool,
+    /// 面板标题栏上展开着的弹出菜单（添加 / 排序），同一时刻只有一个。
+    panel_menu: Option<PanelMenu>,
     /// 拖动列表行时算出来的插入位置（插到第几项之前）。
     sort_drop: Option<usize>,
     /// 播放列表行的右键菜单。

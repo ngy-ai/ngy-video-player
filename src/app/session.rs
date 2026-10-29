@@ -38,7 +38,7 @@ impl PlayerApp {
             selection: BTreeSet::new(),
             selection_anchor: None,
             playlist_dragging: false,
-            sort_menu: false,
+            panel_menu: None,
             sort_drop: None,
             item_menu: None,
             file_info: None,
@@ -314,7 +314,7 @@ impl PlayerApp {
             self.selection.clear();
             self.selection_anchor = None;
             // 面板收起来时菜单也一起收掉，否则下次展开它还挂在那里。
-            self.sort_menu = false;
+            self.panel_menu = None;
             self.sort_drop = None;
         }
     }

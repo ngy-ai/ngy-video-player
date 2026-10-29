@@ -147,9 +147,9 @@ impl PlayerApp {
             // 面板上的点击（选条目、点关闭）不该漏到画面去。
             .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
                 cx.stop_propagation();
-                if this.menu_bar.is_some() || this.sort_menu {
+                if this.menu_bar.is_some() || this.panel_menu.is_some() {
                     this.menu_bar = None;
-                    this.sort_menu = false;
+                    this.panel_menu = None;
                     cx.notify();
                 }
             }))
@@ -200,19 +200,7 @@ impl PlayerApp {
                             .flex()
                             .items_center()
                             .gap(px(2.0))
-                            // 「添加」是列表为空时唯一还能用的按钮，所以不限条件。
-                            // 用带文件的加号而不是光秃秃的 `+`：页签条上那个 `+`
-                            // 是「新建一份列表」，两颗按钮长得一样会点错。
-                            .child(icon_button_with_tip(
-                                "playlist-add",
-                                IconName::FilePlus,
-                                false,
-                                false,
-                                Some("添加文件到列表"),
-                                cx.listener(|this, _: &ClickEvent, window, cx| {
-                                    this.pick_add_files(window, cx);
-                                }),
-                            ))
+                            .child(self.render_add_button(cx))
                             // 排序按钮放在「清空」左边：它比清空常用，但两颗按钮
                             // 都贴着右上角，删表那一下不该是离手指最近的那个。
                             .when(len > 0, |this| this.child(self.render_sort_button(cx)))
@@ -362,7 +350,7 @@ impl PlayerApp {
                 )
             })
             // 菜单必须是最后一个子节点：GPUI 按树的顺序绘制，排在行后面才盖得住它们。
-            .children(self.render_sort_menu(cx))
+            .children(self.render_panel_menu(cx))
     }
 
     pub(super) fn render_playlist_row(
