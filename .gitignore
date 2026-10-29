@@ -1,5 +1,7 @@
 # 构建产物
 /target
+# 打包落点：bundle-macos.sh 的 .app、CI 与本地打出的发布资产（exe 上百 MB）
+/dist/
 
 # libmpv 动态库：体积大（Windows 版 120MB），不入库。
 # 用 scripts/fetch-libmpv.sh 拉取，或按 README 放到 libs/<平台>/ 下。
