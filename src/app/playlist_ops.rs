@@ -471,20 +471,7 @@ impl PlayerApp {
             return;
         }
         self.dialog_open = true;
-
-        let (label, extensions) = formats::dialog_filter();
-        // 挂到主窗口上：对话框是模态的，打开期间主窗口不接受输入。
-        // 过滤器给的是裸扩展名，`rfd` 自己补 `*.`；另外留一个「所有文件」，
-        // 这样清单里没有的格式也还能手动翻出来打开（mpv 认得的多得多）。
-        let mut dialog = rfd::FileDialog::new()
-            .add_filter(&label, &extensions)
-            .add_filter("视频文件", formats::VIDEO)
-            .add_filter("音频文件", formats::AUDIO)
-            .add_filter("所有文件", &["*"])
-            .set_parent(window);
-        if let Some(dir) = &self.settings.last_dir {
-            dialog = dialog.set_directory(dir);
-        }
+        let dialog = media_dialog(window, self.settings.last_dir.as_ref());
 
         // rfd 的对话框是阻塞的：扔到独立线程，结果通过 oneshot 回来。
         let (tx, rx) = futures::channel::oneshot::channel();
@@ -504,6 +491,62 @@ impl PlayerApp {
             });
         })
         .detach();
+    }
+
+    /// 面板标题栏的「添加」：选几个文件追加到当前列表，不动正在放的那一集。
+    ///
+    /// 和「打开」是两条路：打开会换掉整份队列（那是「我要看这个」），
+    /// 添加只是往队尾补（那是「待会儿再看」）。
+    pub(super) fn pick_add_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog_open {
+            return;
+        }
+        self.dialog_open = true;
+        let dialog = media_dialog(window, self.settings.last_dir.as_ref());
+
+        let (tx, rx) = futures::channel::oneshot::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(dialog.pick_files());
+        });
+
+        cx.spawn(async move |this, cx| {
+            let picked = rx.await.ok().flatten().unwrap_or_default();
+            let _ = this.update(cx, |this, cx| {
+                this.dialog_open = false;
+                if picked.is_empty() {
+                    return;
+                }
+                this.add_paths(picked, cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// 把文件追加到当前列表末尾。
+    ///
+    /// 列表本来是空的话顺手把第一项放起来：点完「添加」画面一点动静都没有，
+    /// 会让人以为按钮没生效。
+    pub(super) fn add_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        if let Some(file) = paths.iter().find(|path| path.is_file()) {
+            self.settings.last_dir = file.parent().map(|dir| dir.to_path_buf());
+        }
+        let was_empty = self.playlist().is_empty();
+        let before = self.playlist().len();
+        self.playlist_mut().append_paths(&paths);
+        let added = self.playlist().len() - before;
+        if added == 0 {
+            self.flash("没有可添加的文件（可能已经在列表里了）");
+            cx.notify();
+            return;
+        }
+        if was_empty {
+            self.play_index(0);
+        }
+        self.playlists.save();
+        self.flash(format!("已添加 {added} 个文件"));
+        self.poke();
+        cx.notify();
     }
 
     pub(super) fn pick_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -573,4 +616,23 @@ impl PlayerApp {
     }
 
     // -- 帧 ----------------------------------------------------------------
+}
+
+/// 「打开」和「添加」共用同一套过滤器，省得两处的清单慢慢长歪。
+///
+/// 对话框挂在主窗口上：它是模态的，打开期间主窗口不接受输入。过滤器给的是裸扩展名，
+/// `rfd` 自己补 `*.`；另外留一个「所有文件」，这样清单里没有的格式也还能手动翻出来
+/// 打开（mpv 认得的多得多）。
+fn media_dialog(window: &Window, dir: Option<&PathBuf>) -> rfd::FileDialog {
+    let (label, extensions) = formats::dialog_filter();
+    let mut dialog = rfd::FileDialog::new()
+        .add_filter(&label, &extensions)
+        .add_filter("视频文件", formats::VIDEO)
+        .add_filter("音频文件", formats::AUDIO)
+        .add_filter("所有文件", &["*"])
+        .set_parent(window);
+    if let Some(dir) = dir {
+        dialog = dialog.set_directory(dir);
+    }
+    dialog
 }

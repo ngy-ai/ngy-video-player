@@ -183,7 +183,14 @@ impl PlayerApp {
                     .pr(px(6.0))
                     .py(px(8.0))
                     .child(
+                        // 标题吃掉剩余宽度并自行省略：面板拖窄时先让标题变短，
+                        // 而不是把右边的按钮挤出面板。
                         div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
                             .text_size(px(13.0))
                             .text_color(text_muted())
                             .child(format!("播放列表 · {len}")),
@@ -193,6 +200,19 @@ impl PlayerApp {
                             .flex()
                             .items_center()
                             .gap(px(2.0))
+                            // 「添加」是列表为空时唯一还能用的按钮，所以不限条件。
+                            // 用带文件的加号而不是光秃秃的 `+`：页签条上那个 `+`
+                            // 是「新建一份列表」，两颗按钮长得一样会点错。
+                            .child(icon_button_with_tip(
+                                "playlist-add",
+                                IconName::FilePlus,
+                                false,
+                                false,
+                                Some("添加文件到列表"),
+                                cx.listener(|this, _: &ClickEvent, window, cx| {
+                                    this.pick_add_files(window, cx);
+                                }),
+                            ))
                             // 排序按钮放在「清空」左边：它比清空常用，但两颗按钮
                             // 都贴着右上角，删表那一下不该是离手指最近的那个。
                             .when(len > 0, |this| this.child(self.render_sort_button(cx)))
@@ -314,7 +334,7 @@ impl PlayerApp {
                             div()
                                 .text_size(px(11.0))
                                 .text_color(text_faint())
-                                .child("拖入文件，或按 O 打开"),
+                                .child("点标题栏的添加按钮，或者拖入文件"),
                         ),
                 )
             })

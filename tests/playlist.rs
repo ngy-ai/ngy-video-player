@@ -306,6 +306,31 @@ fn 删除当前项后索引落回有效位置() {
     assert!(playlist.is_empty());
 }
 
+#[test]
+fn 追加文件跳过重复项() {
+    let dir = scratch("append");
+    let first = touch(&dir, "a.mp4");
+    let second = touch(&dir, "b.mp4");
+    let mut playlist = Playlist::default();
+
+    playlist.append_paths(&[first.clone(), second.clone(), first.clone()]);
+    assert_eq!(
+        names(&playlist),
+        [
+            first.to_string_lossy().to_string(),
+            second.to_string_lossy().to_string()
+        ]
+    );
+
+    // 整个目录再展开一次也不会变成两份。
+    playlist.append_paths(std::slice::from_ref(&dir));
+    assert_eq!(playlist.len(), 2);
+
+    // 追加不动当前项：队首还是原来那一项。
+    assert_eq!(playlist.index(), None, "空列表里追加不会凭空多出当前项");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 // -- 排序 ----------------------------------------------------------------
 
 fn file(dir: &Path, name: &str) -> PathBuf {

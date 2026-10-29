@@ -137,18 +137,25 @@ impl Playlist {
     }
 
     /// 追加文件；目录会被展开成其中可播放的文件（按文件名自然序）。
+    ///
+    /// 已经在列表里的项跳过：同一个文件从目录展开、m3u 和手动挑选三条路进来
+    /// 都可能重复，去重一次比让用户在列表里找重复项省事。
     pub fn append_paths(&mut self, paths: &[PathBuf]) {
         for path in paths {
             if path.is_dir() {
-                self.items
-                    .extend(collect_dir(path).into_iter().map(Item::new));
+                self.push_unique(collect_dir(path));
             } else if formats::is_media(path) {
-                if !self.items.iter().any(|item| &item.path == path) {
-                    self.items.push(Item::new(path.clone()));
-                }
+                self.push_unique(std::iter::once(path.clone()));
             } else if formats::is_playlist(path) {
-                self.items
-                    .extend(parse_playlist(path).into_iter().map(Item::new));
+                self.push_unique(parse_playlist(path));
+            }
+        }
+    }
+
+    fn push_unique(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
+        for path in paths {
+            if !self.items.iter().any(|item| item.path == path) {
+                self.items.push(Item::new(path));
             }
         }
     }
