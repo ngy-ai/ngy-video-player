@@ -1,6 +1,6 @@
 //! 播放列表的确定性行为：目录展开、自然序、m3u 解析、循环推进。
 
-use ngy_video_player::playlist::{Playlist, PlaylistSet, collect_dir, parse_playlist};
+use ngy_video_player::playlist::{Playlist, PlaylistSet, SortMode, collect_dir, parse_playlist};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -122,7 +122,7 @@ fn names(playlist: &Playlist) -> Vec<String> {
     playlist
         .items()
         .iter()
-        .map(|path| path.to_string_lossy().to_string())
+        .map(|item| item.path().to_string_lossy().to_string())
         .collect()
 }
 
@@ -304,4 +304,190 @@ fn 删除当前项后索引落回有效位置() {
     playlist.remove(0);
     assert_eq!(playlist.index(), None);
     assert!(playlist.is_empty());
+}
+
+// -- 排序 ----------------------------------------------------------------
+
+fn file(dir: &Path, name: &str) -> PathBuf {
+    dir.join(name)
+}
+
+#[test]
+fn 按名称排序用自然序() {
+    let mut playlist = sample(&["第10集.mp4", "第2集.mp4", "第1集.mp4"], 0);
+
+    assert!(playlist.sort_items(SortMode::Name));
+    assert_eq!(names(&playlist), ["第1集.mp4", "第2集.mp4", "第10集.mp4"]);
+    assert_eq!(playlist.sort_mode(), SortMode::Name);
+}
+
+#[test]
+fn 排序后当前项跟着文件走() {
+    let mut playlist = sample(&["b.mp4", "a.mp4", "c.mp4"], 0);
+    assert_eq!(playlist.current().unwrap().to_string_lossy(), "b.mp4");
+
+    playlist.sort_items(SortMode::Name);
+    assert_eq!(names(&playlist), ["a.mp4", "b.mp4", "c.mp4"]);
+    assert_eq!(
+        playlist.index(),
+        Some(1),
+        "当前项是跟着文件换位置的，不是钉在原来那个下标上"
+    );
+    assert_eq!(playlist.current().unwrap().to_string_lossy(), "b.mp4");
+}
+
+#[test]
+fn 顺序没变时不占历史() {
+    let mut playlist = sample(&["a.mp4", "b.mp4"], 0);
+
+    assert!(!playlist.sort_items(SortMode::Name), "本来就是有序的");
+    assert!(playlist.history().is_empty());
+    assert_eq!(
+        playlist.sort_mode(),
+        SortMode::Name,
+        "排法仍然记下来给菜单打勾"
+    );
+
+    // 再点一次同样的排序也不该多出一版。
+    assert!(!playlist.sort_items(SortMode::Name));
+    assert!(playlist.history().is_empty());
+}
+
+#[test]
+fn 按修改时间排序_读不到时间的排最后() {
+    let dir = scratch("mtime");
+    let older = file(&dir, "old.mp4");
+    let newer = file(&dir, "new.mp4");
+    touch(&dir, "old.mp4");
+    // 文件系统的时间戳精度至少到秒，睡够一秒才能保证两者的修改时间不同。
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    touch(&dir, "new.mp4");
+    let gone = file(&dir, "gone.mp4");
+
+    let mut playlist = Playlist::default();
+    playlist.replace(vec![newer.clone(), gone, older.clone()], 0);
+    playlist.sort_items(SortMode::Modified);
+
+    assert_eq!(
+        names(&playlist),
+        [
+            older.to_string_lossy().to_string(),
+            newer.to_string_lossy().to_string(),
+            file(&dir, "gone.mp4").to_string_lossy().to_string()
+        ],
+        "旧的在前面；读不到修改时间的排在最后"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn 按添加时间排序回到加入顺序() {
+    // 加入时间只从存档里来（同一秒内加进来的几项会拿到同一个值），
+    // 这里直接给一份「加入顺序」和「当前排列」不一样的列表。
+    let text = r#"{"tabs":[{"name":"t","playlist":{"items":[
+        {"path":"c.mp4","added_at":30},
+        {"path":"a.mp4","added_at":10},
+        {"path":"b.mp4","added_at":20}
+    ],"index":0}}],"active":0}"#;
+    let set = PlaylistSet::from_json(text);
+    let mut playlist = set.tab(0).cloned().expect("第一页");
+
+    assert!(playlist.sort_items(SortMode::Added));
+    assert_eq!(names(&playlist), ["a.mp4", "b.mp4", "c.mp4"]);
+    assert_eq!(playlist.index(), Some(2), "当前项仍然是 c.mp4");
+}
+
+#[test]
+fn 手工拖动重排并记下旧顺序() {
+    let mut playlist = sample(&["a.mp4", "b.mp4", "c.mp4"], 0);
+
+    assert!(playlist.move_item(0, 3), "把第一项拖到末尾");
+    assert_eq!(names(&playlist), ["b.mp4", "c.mp4", "a.mp4"]);
+    assert_eq!(playlist.sort_mode(), SortMode::Manual);
+    assert_eq!(playlist.index(), Some(2), "当前项跟着 a.mp4 走");
+    assert_eq!(playlist.history().len(), 1);
+    assert_eq!(playlist.history()[0].mode(), SortMode::Added);
+
+    // 插回自己所在的位置等于没动，不该再占一格历史。
+    assert!(!playlist.move_item(1, 1));
+    assert!(!playlist.move_item(1, 2));
+    assert_eq!(playlist.history().len(), 1);
+}
+
+#[test]
+fn 历史顺序最多留三版() {
+    let mut playlist = sample(&["c.mp4", "b.mp4", "a.mp4"], 0);
+
+    playlist.sort_items(SortMode::Name); // [a b c]
+    playlist.move_item(0, 3); // [b c a]
+    playlist.sort_items(SortMode::Added); // 全是同一秒加的，顺序不变
+    playlist.move_item(0, 2); // [c b a]
+    playlist.sort_items(SortMode::Name); // [a b c]
+
+    assert_eq!(playlist.history().len(), 3, "只留最近三版");
+    assert_eq!(playlist.history()[0].mode(), SortMode::Manual);
+}
+
+#[test]
+fn 恢复历史顺序() {
+    let mut playlist = sample(&["c.mp4", "a.mp4", "b.mp4"], 0);
+
+    playlist.sort_items(SortMode::Name);
+    assert_eq!(names(&playlist), ["a.mp4", "b.mp4", "c.mp4"]);
+
+    assert!(playlist.restore_version(0));
+    assert_eq!(names(&playlist), ["c.mp4", "a.mp4", "b.mp4"]);
+    assert_eq!(playlist.sort_mode(), SortMode::Added, "恢复的排法一起回来");
+    assert_eq!(
+        playlist.current().unwrap().to_string_lossy(),
+        "c.mp4",
+        "当前项仍然跟着自己的文件"
+    );
+    assert_eq!(
+        playlist.history()[0].mode(),
+        SortMode::Name,
+        "还原本身也进历史，还能再撤销回去"
+    );
+}
+
+#[test]
+fn 存档往返保留排序方式与历史() {
+    let mut set = PlaylistSet::default();
+    let playlist = set.active_playlist_mut();
+    playlist.replace(
+        vec![
+            PathBuf::from("c.mp4"),
+            PathBuf::from("a.mp4"),
+            PathBuf::from("b.mp4"),
+        ],
+        0,
+    );
+    playlist.sort_items(SortMode::Name);
+
+    let text = serde_json::to_string(&set).expect("序列化播放列表");
+    let back = PlaylistSet::from_json(&text);
+    let playlist = back.tab(0).unwrap();
+
+    assert_eq!(names(playlist), ["a.mp4", "b.mp4", "c.mp4"]);
+    assert_eq!(playlist.sort_mode(), SortMode::Name);
+    assert_eq!(playlist.history().len(), 1);
+    assert_eq!(playlist.history()[0].len(), 3);
+}
+
+#[test]
+fn 老存档里的裸路径仍然能读() {
+    let text =
+        r#"{"tabs":[{"name":"旧","playlist":{"items":["a.mp4","b.mp4"],"index":1}}],"active":0}"#;
+    let set = PlaylistSet::from_json(text);
+    let playlist = set.tab(0).unwrap();
+
+    assert_eq!(names(playlist), ["a.mp4", "b.mp4"]);
+    assert_eq!(playlist.index(), Some(1));
+    assert_eq!(playlist.sort_mode(), SortMode::Added);
+    assert!(playlist.history().is_empty());
+    assert_eq!(
+        playlist.items()[0].added_at(),
+        0,
+        "老存档没有加入时间，按添加时间排序时就保持原顺序"
+    );
 }

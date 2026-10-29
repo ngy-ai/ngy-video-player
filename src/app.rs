@@ -81,6 +81,7 @@ mod overlays;
 mod picture;
 mod playback;
 mod playlist_ops;
+mod playlist_sort;
 mod playlist_ui;
 mod render;
 mod session;
@@ -191,6 +192,10 @@ pub struct PlayerApp {
     selection_anchor: Option<usize>,
     /// 正在拖播放列表的左边界。
     playlist_dragging: bool,
+    /// 排序菜单是否展开。
+    sort_menu: bool,
+    /// 拖动列表行时算出来的插入位置（插到第几项之前）。
+    sort_drop: Option<usize>,
     /// 播放列表行的右键菜单。
     item_menu: Option<ItemMenu>,
     /// 「查看格式」面板；`None` 表示没打开。

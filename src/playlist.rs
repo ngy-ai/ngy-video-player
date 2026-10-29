@@ -11,11 +11,75 @@ use crate::formats;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+mod sort;
+
+pub use sort::{OrderVersion, SortMode};
+
+/// 列表里的一项。
+///
+/// 除了路径还记着「什么时候加进来的」：按添加时间排序靠它。老存档里只有裸路径，
+/// 读回来记 0——这样按添加时间排出来的正好还是存档里原来的顺序。
+#[derive(Clone, Debug, Serialize)]
+pub struct Item {
+    path: PathBuf,
+    added_at: i64,
+}
+
+impl Item {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            added_at: now_secs(),
+        }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// 加入列表的时刻（Unix 秒）；从老存档读回来的项是 0。
+    pub fn added_at(&self) -> i64 {
+        self.added_at
+    }
+}
+
+/// 旧存档的列表项是一个裸路径字符串，新存档是对象；两种都认。
+///
+/// 认不出老格式的代价是整份播放列表退回默认值，用户丢的是攒了很久的队列，
+/// 所以这里必须兼容。
+impl<'de> Deserialize<'de> for Item {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Path(PathBuf),
+            Full { path: PathBuf, added_at: i64 },
+        }
+
+        Ok(match Raw::deserialize(deserializer)? {
+            Raw::Path(path) => Self { path, added_at: 0 },
+            Raw::Full { path, added_at } => Self { path, added_at },
+        })
+    }
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs().min(i64::MAX as u64) as i64)
+        .unwrap_or(0)
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Playlist {
-    items: Vec<PathBuf>,
+    items: Vec<Item>,
     index: Option<usize>,
+    /// 最后一次是怎么排的。只用来给菜单打勾：新拖进来的文件一律追加到末尾，
+    /// 不会因为「按名称排过」就自动插到中间去。
+    sort: SortMode,
+    /// 最近几次改顺序之前的排列，最新的在前，最多 3 份。
+    history: Vec<OrderVersion>,
 }
 
 /// 删除若干项之后的结果。界面据此决定是换歌、停播，还是什么都不用做。
@@ -30,7 +94,7 @@ pub struct Removal {
 }
 
 impl Playlist {
-    pub fn items(&self) -> &[PathBuf] {
+    pub fn items(&self) -> &[Item] {
         &self.items
     }
 
@@ -47,17 +111,23 @@ impl Playlist {
     }
 
     pub fn current(&self) -> Option<&PathBuf> {
-        self.index.and_then(|index| self.items.get(index))
+        self.index
+            .and_then(|index| self.items.get(index))
+            .map(|item| &item.path)
     }
 
     pub fn get(&self, index: usize) -> Option<&PathBuf> {
-        self.items.get(index)
+        self.items.get(index).map(|item| &item.path)
     }
 
     /// 整批替换，并把 `start` 设为当前项。
+    ///
+    /// 换的是一整份新队列，旧队列的排序方式和历史顺序都不再适用，一起丢掉。
     pub fn replace(&mut self, items: Vec<PathBuf>, start: usize) {
-        self.items = items;
+        self.items = items.into_iter().map(Item::new).collect();
         self.index = (!self.items.is_empty()).then(|| start.min(self.items.len() - 1));
+        self.sort = SortMode::Added;
+        self.history.clear();
     }
 
     pub fn set_index(&mut self, index: usize) {
@@ -70,15 +140,15 @@ impl Playlist {
     pub fn append_paths(&mut self, paths: &[PathBuf]) {
         for path in paths {
             if path.is_dir() {
-                let mut files = collect_dir(path);
-                self.items.append(&mut files);
+                self.items
+                    .extend(collect_dir(path).into_iter().map(Item::new));
             } else if formats::is_media(path) {
-                if !self.items.iter().any(|existing| existing == path) {
-                    self.items.push(path.clone());
+                if !self.items.iter().any(|item| &item.path == path) {
+                    self.items.push(Item::new(path.clone()));
                 }
             } else if formats::is_playlist(path) {
-                let mut entries = parse_playlist(path);
-                self.items.append(&mut entries);
+                self.items
+                    .extend(parse_playlist(path).into_iter().map(Item::new));
             }
         }
     }
@@ -167,11 +237,16 @@ impl Playlist {
     pub fn clear(&mut self) {
         self.items.clear();
         self.index = None;
+        self.sort = SortMode::Added;
+        self.history.clear();
     }
 
-    /// 从存档读回来之后校正：索引可能指向已经不存在的项。
+    /// 从存档读回来之后校正：索引可能指向已经不存在的项，
+    /// 历史顺序也可能被手改成超过上限份。
     fn sanitize(&mut self) {
         self.index = self.index.filter(|index| *index < self.items.len());
+        self.history.retain(|version| !version.is_empty());
+        self.history.truncate(sort::HISTORY_LIMIT);
     }
 }
 
@@ -197,6 +272,8 @@ pub struct PlaylistSet {
 static EMPTY_PLAYLIST: Playlist = Playlist {
     items: Vec::new(),
     index: None,
+    sort: SortMode::Added,
+    history: Vec::new(),
 };
 
 impl Default for PlaylistSet {

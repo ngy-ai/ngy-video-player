@@ -1,6 +1,8 @@
 //! 播放列表面板：标签页、列表与行渲染。
 
+use super::playlist_sort::{DragGhost, PlaylistDrag};
 use super::*;
+use gpui_kit::DragMoveEvent;
 
 impl PlayerApp {
     /// 面板顶部的页签条：多份列表并排，`+` 新建，`×` 关闭（只剩一页时不显示）。
@@ -125,9 +127,9 @@ impl PlayerApp {
         let len = self.playlist().len();
         let selected = self.selection.len();
         let multi_hint = if cfg!(target_os = "macos") {
-            "⌘ 点击多选 · Shift 连选 · Delete 删除"
+            "⌘ 点击多选 · Shift 连选 · Delete 删除 · 拖动排序"
         } else {
-            "Ctrl 点击多选 · Shift 连选 · Delete 删除"
+            "Ctrl 点击多选 · Shift 连选 · Delete 删除 · 拖动排序"
         };
 
         div()
@@ -145,8 +147,9 @@ impl PlayerApp {
             // 面板上的点击（选条目、点关闭）不该漏到画面去。
             .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
                 cx.stop_propagation();
-                if this.menu_bar.is_some() {
+                if this.menu_bar.is_some() || this.sort_menu {
                     this.menu_bar = None;
+                    this.sort_menu = false;
                     cx.notify();
                 }
             }))
@@ -190,6 +193,9 @@ impl PlayerApp {
                             .flex()
                             .items_center()
                             .gap(px(2.0))
+                            // 排序按钮放在「清空」左边：它比清空常用，但两颗按钮
+                            // 都贴着右上角，删表那一下不该是离手指最近的那个。
+                            .when(len > 0, |this| this.child(self.render_sort_button(cx)))
                             // 用文字而不是垃圾桶图标：标题栏的图标离「关闭」太近，
                             // 而且和行尾的「移除这一项」撞脸，一不留神就清空了整张表。
                             .when(len > 0, |this| {
@@ -321,7 +327,9 @@ impl PlayerApp {
                         .flex()
                         .flex_col()
                         .children(self.playlist().items().iter().enumerate().map(
-                            |(index, path)| self.render_playlist_row(index, path, current, cx),
+                            |(index, item)| {
+                                self.render_playlist_row(index, item.path(), current, cx)
+                            },
                         )),
                 )
                 .child(
@@ -333,6 +341,8 @@ impl PlayerApp {
                         .child(multi_hint),
                 )
             })
+            // 菜单必须是最后一个子节点：GPUI 按树的顺序绘制，排在行后面才盖得住它们。
+            .children(self.render_sort_menu(cx))
     }
 
     pub(super) fn render_playlist_row(
@@ -350,18 +360,30 @@ impl PlayerApp {
         let is_selected = self.selection.contains(&index);
         let group = format!("playlist-row-{index}");
         let row_path = path.to_path_buf();
+        let len = self.playlist().len();
+        // 拖动落点画成一条横线：插在这一行上面，或（最后一行时）整张表的最下面。
+        //
+        // 横线只在真的拖着一个列表行时才画。拖动被半路取消时（松手位置在列表行
+        // 之外）落点没有机会被清掉，靠这个条件保证它不会一直留在界面上。
+        let dragging = cx.has_active_drag();
+        let line_above = dragging && self.sort_drop == Some(index);
+        let line_below = dragging && self.sort_drop == Some(index + 1) && index + 1 == len;
+        let drag_name: SharedString = name.clone().into();
 
         div()
             .id(gpui_kit::ElementId::Name(format!("item-{index}").into()))
             // 行尾的删除按钮只在这一行被指向时出现，靠 group hover 的样式下发；
             // 不用界面状态另存一个 hovered 索引，省掉每次进出都整窗重绘。
             .group(group.clone())
+            .relative()
             .flex()
             .items_center()
             .gap(px(8.0))
             .pl(px(10.0))
             .pr(px(6.0))
             .py(px(8.0))
+            .when(line_above, |this| this.child(drop_line(false)))
+            .when(line_below, |this| this.child(drop_line(true)))
             .when(is_current, |this| this.bg(gpui_kit::rgb(0x1f2a3a)))
             .when(is_selected && !is_current, |this| {
                 this.bg(gpui_kit::rgba(0x5aa9ff1f))
@@ -433,6 +455,48 @@ impl PlayerApp {
                     this.open_item_menu(index, row_path.clone(), event.position, window, cx);
                 }),
             )
+            // 手工排序：整行可以拖，松手时插到那条高亮横线的位置。拖动本身由
+            // GPUI 的拖放机制接管，拖动过的这一次点击不会再触发「换歌」。
+            .on_drag(
+                PlaylistDrag {
+                    from: index,
+                    name: drag_name,
+                },
+                |drag, _, _, cx| {
+                    cx.new(|_| DragGhost {
+                        name: drag.name.clone(),
+                    })
+                },
+            )
+            .on_drag_move(cx.listener(
+                move |this, event: &DragMoveEvent<PlaylistDrag>, _window, cx| {
+                    // 这个回调是全局的：拖动期间每一行都会收到同一次移动，
+                    // 得自己筛出指针真正压着的那一行。
+                    let position = event.event.position;
+                    if !event.bounds.contains(&position) {
+                        return;
+                    }
+                    // 落在行的上半截就插到它前面，下半截插到它后面。
+                    let above = position.y < event.bounds.center().y;
+                    this.set_sort_drop(Some(if above { index } else { index + 1 }), cx);
+                },
+            ))
+            .on_drop(cx.listener(move |this, drag: &PlaylistDrag, _window, cx| {
+                this.drop_on_row(drag.from, index, cx);
+            }))
             .into_any_element()
     }
+}
+
+/// 拖动落点的那条横线。`below` 画在行底，用来表示「插到整张表最后」。
+fn drop_line(below: bool) -> AnyElement {
+    div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .h(px(2.0))
+        .bg(ui::accent())
+        .when(below, |this| this.bottom_0())
+        .when(!below, |this| this.top(px(-1.0)))
+        .into_any_element()
 }

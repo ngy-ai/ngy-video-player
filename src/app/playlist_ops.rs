@@ -11,6 +11,8 @@ impl PlayerApp {
             self.file_info = None;
         } else if self.item_menu.is_some() {
             self.item_menu = None;
+        } else if self.sort_menu {
+            self.sort_menu = false;
         } else if self.menu_bar.is_some() {
             self.menu_bar = None;
         } else if self.menu == Some(Menu::SpeedCustom) {
