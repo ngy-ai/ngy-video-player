@@ -1,0 +1,139 @@
+name: 发布
+
+# 打 tag（v1.2.3）即由 CI 构建并发布到 GitHub Release，不再手工上传 exe。
+# 手动触发（workflow_dispatch）只产出工作流 artifact，方便在改动发布脚本时先验一遍，
+# 不会动 Release 页面。
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Windows x64
+    # 只做 Windows：这一份 libmpv-2.dll 是自包含的（MinGW 全静态），内嵌进 exe 就是
+    # 完整分发包。macOS 要 .app + install_name_tool 改 rpath、Linux 的 libmpv.so 还
+    # 依赖系统里其它共享库，都得靠打包脚本一起搬，别在这里顺手加个半成品产物。
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: always
+      # 不要在这里设 RUSTFLAGS：外部 RUSTFLAGS 会让 .cargo/config.toml 里的
+      # rustflags 失效，+crt-static 一丢，exe 又回去依赖 vcruntime140.dll
+      # （见 docs/adr/0006）。
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 版本号只认 Cargo.toml：tag 与它不一致时打出来的 exe 会带错的 FileVersion，
+      # 早期失败比发布出去再发现便宜。
+      - name: 校验版本号与 tag 一致
+        if: github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
+          tag=${GITHUB_REF_NAME#v}
+          echo "Cargo.toml=$version  tag=$tag"
+          if [ "$version" != "$tag" ]; then
+            echo "::error::Cargo.toml 版本 $version 与 tag $GITHUB_REF_NAME 不一致：先改版本号再打 tag"
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-x86_64
+
+      # 命中缓存就不会再调 GitHub API 找 libmpv 的最新 dev 包，既快也躲开未登录
+      # API 的限流（失败时重跑一次通常就好）。
+      - name: 缓存 libmpv
+        uses: actions/cache@v4
+        with:
+          path: |
+            libs
+            .cache
+          key: libmpv-${{ runner.os }}-v1
+
+      - name: 准备 libmpv
+        run: ./scripts/fetch-libmpv.sh
+
+      - name: 构建 release
+        run: cargo build --release --locked
+
+      - name: 打包并校验产物
+        id: package
+        run: |
+          set -euo pipefail
+          exe=target/release/ngy-video-player.exe
+          [ -f "$exe" ] || { echo "::error::没有生成 $exe"; exit 1; }
+
+          # 没内嵌 libmpv 时产物只有几十 MB，直接发布就是一个「拿到手打不开」的包：
+          # 库缺失时程序仍会启动，但只能在界面里报错，用户看不出是打包漏了。
+          size=$(stat -c%s "$exe")
+          if [ "$size" -lt 100000000 ]; then
+            echo "::error::产物只有 $((size / 1048576)) MB，libmpv 没内嵌进去（先跑 scripts/fetch-libmpv.sh）"
+            exit 1
+          fi
+          echo "产物 $((size / 1048576)) MB"
+          ./"$exe" -V
+
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            label=$GITHUB_REF_NAME
+          else
+            label=edge
+          fi
+          asset=ngy-video-player-$label-windows-x86_64.exe
+          mkdir -p dist
+          cp "$exe" "dist/$asset"
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+
+      # 正文取 docs/releases/<tag>.md，顺带把本次产物的 SHA-256 追加在末尾：
+      # 每次构建的二进制都不完全一样，哈希只能在构建完之后写，不能提前手抄进文档。
+      - name: 准备发布说明
+        if: github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+          notes=docs/releases/${GITHUB_REF_NAME}.md
+          if [ -f "$notes" ]; then
+            cp "$notes" release-notes.md
+          else
+            printf '# 影匣 %s\n\n本版本没有单独的发布说明，变更见提交历史。\n' "$GITHUB_REF_NAME" > release-notes.md
+          fi
+          {
+            printf '\n## 产物校验\n\n```\n'
+            (cd dist && sha256sum ./*.exe)
+            printf '```\n'
+          } >> release-notes.md
+          cat release-notes.md
+
+      - name: 发布到 GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: 影匣 ${{ github.ref_name }}
+          body_path: release-notes.md
+          files: dist/*.exe
+          draft: false
+          prerelease: false
+          make_latest: true
+
+      - name: 上传工作流产物
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.asset }}
+          path: dist/*.exe
+          # exe 已经压过一次（libmpv 内部还压过），再压一遍只浪费 runner 时间。
+          compression-level: 0
+          retention-days: 7
