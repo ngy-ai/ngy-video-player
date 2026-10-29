@@ -7,8 +7,9 @@ pub(super) const VOLUME_STEP: f64 = 5.0;
 /// 倍速菜单里的固定档位。自定义滑块的量程比它宽，两边共用同一套显示格式。
 pub(super) const SPEED_PRESETS: [f64; 9] = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0];
 /// 自定义倍速滑块的量程，与面板上标出的 0.1–5.0 一致。
-pub(super) const SPEED_MIN: f64 = 0.1;
-pub(super) const SPEED_MAX: f64 = 5.0;
+///
+/// 定义在 `settings` 里：配置读入时也要按同一个范围校正，界面层不能有另一份。
+pub(super) use crate::settings::{SPEED_MAX, SPEED_MIN};
 /// 滑块的最小步进：这个宽度下拖到 0.01 也选不准，0.05 已经够用且数字好读。
 pub(super) const SPEED_STEP: f64 = 0.05;
 /// 触控板走的是像素增量，攒够这么远算「一格」，走一帧。

@@ -81,9 +81,9 @@ impl PlayerApp {
             let speed = app.settings.speed;
             app.send(Command::SetVolume(volume));
             app.send(Command::SetMuted(muted));
-            if (speed - 1.0).abs() > f64::EPSILON {
-                app.send(Command::SetSpeed(speed));
-            }
+            // 无条件下发：mpv 的初始值可能来自用户自己的 mpv.conf，不能假设是 1.0。
+            // 速度是全局偏好，所有视频共用这一个值。
+            app.send(Command::SetSpeed(speed));
             // 解码方式与显卡已经在 `Engine::spawn` 里作为选项下发过了。
             app.apply_picture();
         }

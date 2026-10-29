@@ -1,6 +1,9 @@
 //! 首选项读写：置顶策略必须能读懂旧版本写下的配置，不能把整份设置作废。
 
-use ngy_video_player::settings::{DecodeMode, OnTop, RenderMode, Rotation, Settings, VideoAspect};
+use ngy_video_player::settings::{
+    DecodeMode, OnTop, RenderMode, Rotation, SPEED_MAX, SPEED_MIN, Settings, VideoAspect,
+    normalize_speed,
+};
 
 #[test]
 fn 置顶策略能存能读() {
@@ -111,4 +114,21 @@ fn 缺省时用性能模式与智能选择显卡() {
 fn 指定的显卡能存能读() {
     let settings: Settings = serde_json::from_str(r#"{"gpu": "NVIDIA GeForce RTX 3080"}"#).unwrap();
     assert_eq!(settings.gpu.as_deref(), Some("NVIDIA GeForce RTX 3080"));
+}
+
+#[test]
+fn 倍速能存能读() {
+    // 倍速是全局偏好：下次启动要恢复成上次调好的那一档，而不是回到 1.0。
+    let settings: Settings = serde_json::from_str(r#"{"speed": 1.75}"#).unwrap();
+    assert_eq!(settings.speed, 1.75);
+}
+
+#[test]
+fn 倍速收进量程并对齐两位小数() {
+    assert_eq!(normalize_speed(0.05), SPEED_MIN);
+    assert_eq!(normalize_speed(99.0), SPEED_MAX);
+    assert_eq!(normalize_speed(1.23456), 1.23);
+    // 手改配置写进 NaN / inf 时退回正常速度，不能把它交给 mpv。
+    assert_eq!(normalize_speed(f64::NAN), 1.0);
+    assert_eq!(normalize_speed(f64::INFINITY), 1.0);
 }

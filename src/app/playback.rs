@@ -61,10 +61,20 @@ impl PlayerApp {
         cx.notify();
     }
 
+    /// 设置播放速度。
+    ///
+    /// 倍速是全局偏好：所有视频共用一个值，切歌不重置、下次启动照它恢复，
+    /// 所以每次改动都立即落盘，不等窗口关闭——崩溃或被强杀时不能让用户白调。
     pub(super) fn set_speed(&mut self, speed: f64, cx: &mut Context<Self>) {
-        let next = (speed * 100.0).round() / 100.0;
+        let next = normalize_speed(speed);
+        // 已经顶到量程两端时按快捷键不再产生变化：不必重发命令、不必重写配置。
+        if (self.snapshot.speed - next).abs() < 0.001 && (self.settings.speed - next).abs() < 0.001
+        {
+            return;
+        }
         self.snapshot.speed = next;
         self.settings.speed = next;
+        self.settings.save();
         self.send(Command::SetSpeed(next));
         self.flash(format!("{next:.2}× 速度"));
         cx.notify();
@@ -73,6 +83,7 @@ impl PlayerApp {
     /// 把自定义滑块的横坐标换算成倍速。
     ///
     /// 拖动过程里不弹 OSD：数字就在面板的气泡上，再盖一层反而挡住画面。
+    /// 也不写配置：拖动中每移动一像素落一次盘太浪费，松手时才存（见鼠标抬起处）。
     pub(super) fn set_speed_from_x(&mut self, x: Pixels, cx: &mut Context<Self>) {
         let bounds = self.speed_bounds.get();
         let width = f32::from(bounds.size.width) as f64;
@@ -82,8 +93,7 @@ impl PlayerApp {
         let offset = (f32::from(x) - f32::from(bounds.origin.x)) as f64;
         let ratio = (offset / width).clamp(0.0, 1.0);
         let steps = (ratio * (SPEED_MAX - SPEED_MIN) / SPEED_STEP).round();
-        let speed = (SPEED_MIN + steps * SPEED_STEP).clamp(SPEED_MIN, SPEED_MAX);
-        let next = (speed * 100.0).round() / 100.0;
+        let next = normalize_speed(SPEED_MIN + steps * SPEED_STEP);
         // 鼠标在同一个像素里抖动时别反复给 mpv 发同一条命令。
         if (self.snapshot.speed - next).abs() < 0.001 {
             return;

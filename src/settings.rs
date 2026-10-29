@@ -349,6 +349,22 @@ impl Default for Settings {
     }
 }
 
+/// 倍速量程。放在设置这一层而不是界面层：配置文件是手改得动的，
+/// 读入时就得按同一个范围校正，否则菜单、气泡和控制条会各说各话。
+pub const SPEED_MIN: f64 = 0.1;
+pub const SPEED_MAX: f64 = 5.0;
+
+/// 把任意来源的倍速收进量程并对齐到两位小数。
+///
+/// mpv 的 `speed` 是播放器级的全局属性，预设菜单、快捷键和滑块都走这里，
+/// 保证同一个值在界面各处显示一致，也不会把越界值交给配置文件。
+pub fn normalize_speed(speed: f64) -> f64 {
+    if !speed.is_finite() {
+        return 1.0;
+    }
+    (speed.clamp(SPEED_MIN, SPEED_MAX) * 100.0).round() / 100.0
+}
+
 fn default_playlist_width() -> f32 {
     300.0
 }
@@ -366,13 +382,17 @@ impl Settings {
         let Some(path) = config_path() else {
             return Self::default();
         };
-        match std::fs::read_to_string(&path) {
+        let mut settings = match std::fs::read_to_string(&path) {
             Ok(text) => serde_json::from_str(&text).unwrap_or_else(|error| {
                 log_warn!("配置文件解析失败，使用默认值: {error}");
                 Self::default()
             }),
             Err(_) => Self::default(),
-        }
+        };
+        // 配置文件是手改得动的：越界或非法的倍速会让控制条上的数字和 mpv
+        // 实际的播放速度对不上，读进来就收进量程。
+        settings.speed = normalize_speed(settings.speed);
+        settings
     }
 
     pub fn save(&self) {

@@ -16,7 +16,7 @@ use crate::{
         Command, EndReason, Engine, EngineOptions, LoopMode, PlayerEvent, Snapshot, TrackKind,
     },
     playlist::{self, Playlist, PlaylistSet},
-    settings::{DecodeMode, OnTop, RenderMode, Rotation, Settings, VideoAspect},
+    settings::{DecodeMode, OnTop, RenderMode, Rotation, Settings, VideoAspect, normalize_speed},
     ui::{
         self, bg, format_time, icon, icon_button, icon_button_with_tip, pill_button_with_tip,
         surface, text, text_faint, text_muted,
@@ -306,6 +306,8 @@ impl Menu {
 enum MenuAction {
     Command(Command),
     Loop(LoopMode),
+    /// 预设倍速。不能直接发给 mpv：它同时是「记住的偏好」，得走 `set_speed`。
+    Speed(f64),
     /// 从预设列表进入自定义倍速面板。
     SpeedCustom,
 }

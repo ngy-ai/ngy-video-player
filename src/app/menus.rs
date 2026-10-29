@@ -17,7 +17,7 @@ impl PlayerApp {
                     entries.push((
                         format_speed(speed),
                         (self.snapshot.speed - speed).abs() < 0.001,
-                        Some(MenuAction::Command(Command::SetSpeed(speed))),
+                        Some(MenuAction::Speed(speed)),
                     ));
                 }
                 // 用键盘调出来的档位（如 1.15×）不在预设里，直接在这一行标出来，
@@ -137,6 +137,10 @@ impl PlayerApp {
                                             }
                                             MenuAction::Loop(mode) => {
                                                 this.set_loop(mode, cx);
+                                                this.menu = None;
+                                            }
+                                            MenuAction::Speed(speed) => {
+                                                this.set_speed(speed, cx);
                                                 this.menu = None;
                                             }
                                             // 自定义面板是倍速菜单的第二层，不关菜单只换内容。
