@@ -115,6 +115,9 @@ impl PlayerApp {
                     .child("+")
                     .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| this.add_tab(cx))),
             )
+            // 「全部列表」摆在 `+` 旁边：页签一多就横向滚出视野，
+            // 滚出去的那些只能从这里找回。
+            .child(self.render_lists_button(cx))
     }
 
     pub(super) fn render_playlist(

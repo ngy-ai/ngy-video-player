@@ -29,9 +29,9 @@ src/app.rs       主视图入口：状态类型、PlayerApp 字段、快捷键�
 src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  session（初始化/事件循环）、playback、window（迷你窗/置顶）、
                  picture、playlist_ops、video_area、controls、menus、bar、
-                 menu_bar、associations、playlist_ui、playlist_menu（标题栏弹出
-                 菜单：添加/排序）、playlist_sort（排序 + 拖动重排）、overlays、
-                 mini、render、
+                 menu_bar、associations、playlist_ui、playlist_menu（面板上的弹出
+                 菜单：添加/排序/全部列表）、playlist_sort（排序 + 拖动重排）、
+                 overlays、mini、render、
                  settings_panel/（统一设置窗口：tabs + 各标签页 + 恢复默认）
 src/ui.rs        配色、图标按钮、时间格式、等比画面
 src/formats.rs   扩展名清单（文件过滤器 + 拖入判断）

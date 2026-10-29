@@ -1,22 +1,35 @@
-//! 播放列表面板标题栏上的弹出菜单：添加（文件 / 文件夹）与排序。
+//! 播放列表面板上的弹出菜单：添加（文件 / 文件夹）、排序、全部列表。
 //!
-//! 两个菜单共用一套行结构和一个浮层，位置也一样，所以放在同一个模块里；
+//! 几个菜单共用一套行结构和同一个浮层，只是锚点不同，所以放在同一个模块里；
 //! 菜单里真正干活的逻辑还留在各自的模块（添加在 `playlist_ops`，排序在
-//! `playlist_sort`）。
+//! `playlist_sort`，切页在 `playlist_ops`）。
 
 use super::*;
 use crate::playlist::SortMode;
 
-/// 排序菜单离面板顶端的距离。标题行是 34 的按钮加 8+8 的内边距，正好 50，
+/// 标题栏上的菜单离面板顶端的距离：标题行是 34 的按钮加 8+8 的内边距，正好 50，
 /// 再让开 2 像素，菜单就像从按钮下面拉出来的一样。
-const MENU_TOP: f32 = 52.0;
+const HEADER_MENU_TOP: f32 = 52.0;
+/// 「全部列表」挂在页签条下面：标题行 50 加页签条（24 高 + 6 下边距）。
+const TAB_MENU_TOP: f32 = 80.0;
 
-/// 面板标题栏上展开着的是哪个菜单。用 `Option` 而不是两个 bool：
+/// 面板上展开着的是哪个菜单。用 `Option` 而不是几个 bool：
 /// 同一个位置只可能有一个浮层，状态里就不该能表示出「两个都开着」。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PanelMenu {
     Add,
     Sort,
+    /// 页签条上的「全部列表」：页签横向滚出视野时，这里是唯一的全量入口。
+    Lists,
+}
+
+impl PanelMenu {
+    fn top(self) -> f32 {
+        match self {
+            PanelMenu::Add | PanelMenu::Sort => HEADER_MENU_TOP,
+            PanelMenu::Lists => TAB_MENU_TOP,
+        }
+    }
 }
 
 /// 菜单里的一行。
@@ -38,6 +51,7 @@ enum PanelAction {
     AddFolder,
     ApplySort(SortMode),
     Restore(usize),
+    SelectTab(usize),
 }
 
 impl PlayerApp {
@@ -63,6 +77,33 @@ impl PlayerApp {
         cx.notify();
     }
 
+    /// 页签条上的「全部列表」按钮：页签多了会滚出视野，这里是全量入口。
+    pub(super) fn render_lists_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        let open = self.panel_menu == Some(PanelMenu::Lists);
+        div()
+            .id("playlist-all-tabs")
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(22.0))
+            .rounded(px(6.0))
+            .cursor(CursorStyle::PointingHand)
+            .when(open, |this| this.bg(ui::surface_active()))
+            .hover(|style| style.bg(ui::surface_hover()))
+            .child(icon(
+                IconName::List,
+                14.0,
+                if open { ui::accent() } else { text_muted() },
+            ))
+            .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                // 不截断的话这一下还会落到面板的「点空白处收菜单」上，
+                // 刚打开就又被关掉了。
+                cx.stop_propagation();
+                this.toggle_panel_menu(PanelMenu::Lists, cx);
+            }))
+            .into_any_element()
+    }
+
     pub(super) fn render_panel_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let menu = self.panel_menu?;
         // 列表被清空后「排序」按钮就不在了，菜单也跟着收掉，免得留一张空壳。
@@ -72,16 +113,20 @@ impl PlayerApp {
         let rows = match menu {
             PanelMenu::Add => Self::add_rows(),
             PanelMenu::Sort => self.sort_rows(),
+            PanelMenu::Lists => self.list_rows(),
         };
 
         Some(
             div()
                 .id("playlist-panel-menu")
                 .absolute()
-                .top(px(MENU_TOP))
+                .top(px(menu.top()))
                 .right(px(6.0))
                 .w(px(216.0))
                 .py(px(4.0))
+                // 页签特别多时菜单会顶到窗口外面去，封个高度让它自己滚。
+                .max_h(px(420.0))
+                .overflow_y_scroll()
                 .rounded(px(10.0))
                 .bg(surface())
                 .border_1()
@@ -130,7 +175,8 @@ impl PlayerApp {
                                 this.cursor(CursorStyle::PointingHand)
                                     .hover(|style| style.bg(ui::surface_hover()))
                             })
-                            .child(label)
+                            // 列表名可能很长，菜单宽度是定死的，统一省略。
+                            .child(ui::ellipsis(label))
                             .when_some(action, |this, action| {
                                 this.on_click(cx.listener(
                                     move |this, _: &ClickEvent, window, cx| {
@@ -204,6 +250,24 @@ impl PlayerApp {
         rows
     }
 
+    fn list_rows(&self) -> Vec<PanelRow> {
+        let active = self.playlists.active();
+        let mut rows = vec![PanelRow::Title("全部列表")];
+        for (index, tab) in self.playlists.tabs().iter().enumerate() {
+            // 名字后面带上本页有多少项：光看名字分不清哪一页还有内容。
+            let mut label = format!("{}（{} 项）", tab.name, tab.playlist.len());
+            if self.playing_tab == Some(index) {
+                label.push_str(" · 播放中");
+            }
+            rows.push(PanelRow::Entry {
+                label,
+                active: index == active,
+                action: Some(PanelAction::SelectTab(index)),
+            });
+        }
+        rows
+    }
+
     fn run_panel_action(
         &mut self,
         action: PanelAction,
@@ -216,6 +280,7 @@ impl PlayerApp {
             PanelAction::AddFolder => self.pick_add_folder(window, cx),
             PanelAction::ApplySort(mode) => self.apply_sort(mode, cx),
             PanelAction::Restore(index) => self.restore_order(index, cx),
+            PanelAction::SelectTab(index) => self.select_tab(index, cx),
         }
         cx.notify();
     }
