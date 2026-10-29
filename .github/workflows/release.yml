@@ -33,7 +33,10 @@ jobs:
       # （见 docs/adr/0006）。
 
     steps:
-      - uses: actions/checkout@v4
+      # action 的大版本绑着 Node 运行时：v4 那批跑在 Node 20 上，已被 GitHub 弃用
+      # （运行时会被强制切到 24，并刷一行 deprecation warn）。下面统一取原生 node24
+      # 的大版本：checkout v7 / cache v6 / upload-artifact v7 / action-gh-release v3。
+      - uses: actions/checkout@v7
 
       # 版本号只认 Cargo.toml：tag 与它不一致时打出来的 exe 会带错的 FileVersion，
       # 早期失败比发布出去再发现便宜。
@@ -58,7 +61,7 @@ jobs:
       # 命中缓存就不会再调 GitHub API 找 libmpv 的最新 dev 包，既快也躲开未登录
       # API 的限流（失败时重跑一次通常就好）。
       - name: 缓存 libmpv
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             libs
@@ -119,7 +122,7 @@ jobs:
 
       - name: 发布到 GitHub Release
         if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: 影匣 ${{ github.ref_name }}
           body_path: release-notes.md
@@ -130,7 +133,7 @@ jobs:
 
       - name: 上传工作流产物
         if: github.ref_type != 'tag'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.package.outputs.asset }}
           path: dist/*.exe
