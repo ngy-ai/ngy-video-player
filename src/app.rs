@@ -85,6 +85,7 @@ mod playlist_menu;
 mod playlist_ops;
 mod playlist_sort;
 mod playlist_ui;
+mod remux;
 mod render;
 mod session;
 mod settings_panel;
@@ -97,6 +98,7 @@ use self::constants::*;
 use self::format::*;
 use self::mini::MiniPlayer;
 use self::playlist_menu::PanelMenu;
+use self::remux::RemuxDialog;
 use self::settings_panel::SettingsTab;
 use self::widgets::*;
 
@@ -209,6 +211,10 @@ pub struct PlayerApp {
     /// 裁切任务代次。后台任务回来时用它确认事件仍属于当前对话框，
     /// 否则关掉再打开一次，旧任务的完成事件会改写新对话框。
     clip_generation: u64,
+    /// 音轨 / 字幕编辑对话框；`None` 表示没打开。
+    remux: Option<RemuxDialog>,
+    /// 轨道编辑任务代次，作用同 `clip_generation`。
+    remux_generation: u64,
     settings: Settings,
     /// 上一次真正下发给窗口系统的置顶状态。
     ///
@@ -424,6 +430,8 @@ enum BarAction {
     OpenSettings(Option<SettingsTab>),
     TakeScreenshot,
     Trim,
+    /// 换掉 / 删掉内置音轨，或把字幕内嵌进容器。
+    EditTracks,
     SetAsDefaultPlayer,
     OpenDefaultApps,
     RemoveAssociations,

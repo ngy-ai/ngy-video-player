@@ -87,6 +87,8 @@ impl PlayerApp {
             return;
         }
 
+        // 两个对话框都是模态的，叠在一起会互相挡住，也会抢同一份按键。
+        self.close_remux_dialog(cx);
         self.clip_generation += 1;
         self.clip = Some(ClipDialog::new(self.clip_generation, path, duration));
         // 和设置窗口一致：菜单叠在模态面板上只会互相挡住。
@@ -282,65 +284,14 @@ impl PlayerApp {
             ClipState::Done(path) => self.render_clip_done(path, cx),
         };
 
-        Some(
-            div()
-                .id("clip-dialog")
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(gpui_kit::rgba(0x000000b8))
-                // 模态：点遮罩不该穿透去暂停视频。
-                .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
-                    cx.stop_propagation();
-                }))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
-                        cx.stop_propagation();
-                    }),
-                )
-                .child(
-                    div()
-                        .id("clip-card")
-                        .w(px(460.0))
-                        .max_w(gpui_kit::relative(0.92))
-                        .p(px(18.0))
-                        .rounded(px(14.0))
-                        .bg(surface())
-                        .border_1()
-                        .border_color(gpui_kit::rgb(0x2c2c34))
-                        .shadow_lg()
-                        .flex()
-                        .flex_col()
-                        .gap(px(12.0))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .gap(px(12.0))
-                                .child(
-                                    div()
-                                        .text_size(px(14.0))
-                                        .text_color(text())
-                                        .child("裁切片段"),
-                                )
-                                .child(icon_button(
-                                    "clip-close",
-                                    IconName::X,
-                                    false,
-                                    false,
-                                    cx.listener(|this, _: &ClickEvent, _window, cx| {
-                                        this.close_clip_dialog(cx);
-                                    }),
-                                )),
-                        )
-                        .child(body),
-                )
-                .into_any_element(),
-        )
+        Some(modal_card(
+            "clip-dialog",
+            "裁切片段",
+            body,
+            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                this.close_clip_dialog(cx);
+            }),
+        ))
     }
 
     fn render_clip_editor(&self, dialog: &ClipDialog, cx: &mut Context<Self>) -> AnyElement {
@@ -428,7 +379,7 @@ impl PlayerApp {
                         this.close_clip_dialog(cx);
                     }),
                 ))
-                .child(clip_primary_button(
+                .child(primary_button(
                     "clip-start",
                     "开始裁切",
                     can_start,
@@ -606,7 +557,7 @@ impl PlayerApp {
                             this.clip_open_result(cx);
                         }),
                     ))
-                    .child(clip_primary_button(
+                    .child(primary_button(
                         "clip-finish",
                         "完成",
                         true,
@@ -617,41 +568,4 @@ impl PlayerApp {
             )
             .into_any_element()
     }
-}
-
-fn clip_primary_button(
-    id: impl Into<ElementId>,
-    label: &'static str,
-    enabled: bool,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> AnyElement {
-    div()
-        .id(id)
-        .flex()
-        .items_center()
-        .justify_center()
-        .h(px(32.0))
-        .px(px(14.0))
-        .rounded(px(8.0))
-        .bg(if enabled { ui::accent() } else { ui::track() })
-        .text_size(px(12.0))
-        .text_color(if enabled { ui::bg() } else { text_faint() })
-        .when(enabled, |this| {
-            this.cursor(CursorStyle::PointingHand)
-                .hover(|style| style.opacity(0.9))
-                .on_click(
-                    move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
-                        cx.stop_propagation();
-                        on_click(event, window, cx);
-                    },
-                )
-        })
-        .child(label)
-        .into_any_element()
-}
-
-fn file_name(path: &Path) -> String {
-    path.file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string())
 }

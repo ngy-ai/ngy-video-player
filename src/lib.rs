@@ -12,6 +12,7 @@ pub mod formats;
 pub mod platform;
 pub mod player;
 pub mod playlist;
+pub mod remux;
 pub mod screenshot;
 pub mod settings;
 pub mod ui;

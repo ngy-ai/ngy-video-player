@@ -108,9 +108,9 @@ impl Render for PlayerApp {
                 cx.listener(|this, _: &ExitOverlay, window, cx| this.exit_overlay(window, cx)),
             )
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                // 裁切对话框是模态的：按键先交给它。不拦住的话，输入框里的空格、
-                // 方向键会顺带触发播放器的快捷键。
-                if this.on_clip_key(event, cx) {
+                // 裁切 / 轨道编辑对话框是模态的：按键先交给它们。不拦住的话，输入框
+                // 里的空格、方向键会顺带触发播放器的快捷键。
+                if this.on_clip_key(event, cx) || this.on_remux_key(event, cx) {
                     cx.stop_propagation();
                     return;
                 }
@@ -237,6 +237,7 @@ impl Render for PlayerApp {
             .children(self.render_item_menu(cx))
             .children(self.render_settings(window, cx))
             .children(self.render_clip_dialog(cx))
+            .children(self.render_remux_dialog(cx))
             .children(self.render_file_info(cx))
     }
 }

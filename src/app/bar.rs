@@ -3,6 +3,11 @@
 use super::*;
 
 impl PlayerApp {
+    /// 能不能对当前文件动刀（裁切、换轨道）：得有一个本地文件，且时长已经读出来。
+    fn file_editable(&self) -> bool {
+        self.snapshot.path.is_some() && self.snapshot.duration > 0.0
+    }
+
     pub(super) fn bar_entries(&self, menu: BarMenu, window: &Window) -> Vec<BarItem> {
         use BarAction::*;
 
@@ -14,10 +19,13 @@ impl PlayerApp {
                 ));
                 items.push(BarItem::Entry(BarEntry::new("打开文件夹…", OpenFolder)));
                 items.push(BarItem::Separator);
-                // 没有片子、或者时长还没读出来时无从裁切。
-                items.push(BarItem::Entry(BarEntry::new("裁切片段…", Trim).enabled(
-                    self.snapshot.path.is_some() && self.snapshot.duration > 0.0,
-                )));
+                // 没有片子、或者时长还没读出来时无从编辑。
+                items.push(BarItem::Entry(
+                    BarEntry::new("裁切片段…", Trim).enabled(self.file_editable()),
+                ));
+                items.push(BarItem::Entry(
+                    BarEntry::new("编辑音轨与字幕…", EditTracks).enabled(self.file_editable()),
+                ));
                 items.push(BarItem::Separator);
                 items.push(BarItem::Entry(BarEntry::new("退出", Quit)));
             }
@@ -105,6 +113,9 @@ impl PlayerApp {
                     "从文件加载字幕…",
                     LoadSubtitle,
                 )));
+                items.push(BarItem::Entry(
+                    BarEntry::new("把字幕内嵌进文件…", EditTracks).enabled(self.file_editable()),
+                ));
             }
             BarMenu::Audio => {
                 let tracks = self.snapshot.track(TrackKind::Audio);
@@ -123,6 +134,10 @@ impl PlayerApp {
                         .checked(track.selected),
                     ));
                 }
+                items.push(BarItem::Separator);
+                items.push(BarItem::Entry(
+                    BarEntry::new("替换或删除音轨…", EditTracks).enabled(self.file_editable()),
+                ));
             }
             BarMenu::View => {
                 items.push(BarItem::Entry(
@@ -230,6 +245,7 @@ impl PlayerApp {
             BarAction::OpenSettings(tab) => self.open_settings(tab),
             BarAction::TakeScreenshot => self.take_screenshot(cx),
             BarAction::Trim => self.open_clip_dialog(cx),
+            BarAction::EditTracks => self.open_remux_dialog(cx),
             BarAction::SetAsDefaultPlayer => self.set_default_player(),
             BarAction::OpenDefaultApps => self.open_default_apps(),
             BarAction::RemoveAssociations => self.remove_associations(window, cx),

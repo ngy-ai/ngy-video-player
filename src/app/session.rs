@@ -44,6 +44,8 @@ impl PlayerApp {
             file_info: None,
             clip: None,
             clip_generation: 0,
+            remux: None,
+            remux_generation: 0,
             settings,
             on_top_applied: false,
             focus,

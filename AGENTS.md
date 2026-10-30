@@ -35,11 +35,12 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  picture、playlist_ops、video_area、controls、menus、bar、
                  menu_bar、associations、playlist_ui、playlist_menu（面板上的弹出
                  菜单：添加/排序/全部列表）、playlist_sort（排序 + 拖动重排）、
-                 clip（裁切对话框）、overlays、mini、render、
+                 clip（裁切对话框）、remux（音轨/字幕编辑对话框）、overlays、mini、render、
                  settings_panel/（统一设置窗口：tabs + 各标签页 + 恢复默认）
 src/ui.rs        配色、图标按钮、时间格式、等比画面
 src/formats.rs   扩展名清单（文件过滤器 + 拖入判断）
 src/clip.rs      裁切片段：时间解析、区间校验、ffmpeg 任务与进度
+src/remux.rs     轨道编辑：换/删内置音轨、内嵌字幕（画面流复制，单路转码）与进度
 src/embed.rs     内嵌资源（libmpv / ffmpeg）解压到缓存目录
 src/playlist.rs  播放列表、m3u/pls 解析、目录展开、自然序
 src/playlist/sort.rs  按名称/修改时间/添加时间排序、手工重排、最近 3 版顺序历史

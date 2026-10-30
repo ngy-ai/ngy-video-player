@@ -137,6 +137,106 @@ pub(super) fn engine_option(
         .into_any_element()
 }
 
+/// 模态对话的主按钮：强调色底，不可用时退成灰色且不响应点击。
+pub(super) fn primary_button(
+    id: impl Into<ElementId>,
+    label: &'static str,
+    enabled: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .justify_center()
+        .h(px(32.0))
+        .px(px(14.0))
+        .rounded(px(8.0))
+        .bg(if enabled { ui::accent() } else { ui::track() })
+        .text_size(px(12.0))
+        .text_color(if enabled { ui::bg() } else { text_faint() })
+        .when(enabled, |this| {
+            this.cursor(CursorStyle::PointingHand)
+                .hover(|style| style.opacity(0.9))
+                .on_click(
+                    move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
+                        cx.stop_propagation();
+                        on_click(event, window, cx);
+                    },
+                )
+        })
+        .child(label)
+        .into_any_element()
+}
+
+/// 模态对话框的统一外壳：全屏遮罩 + 固定宽度卡片 + 标题行。
+///
+/// 遮罩必须吃掉点击与按下：这是模态面板叠在画面上，漏出去的话点空白处会顺手
+/// 暂停视频。`id` 同时用来派生卡片与关闭按钮的元素 id，调用方只要保证自己唯一。
+pub(super) fn modal_card(
+    id: &'static str,
+    title: &'static str,
+    body: AnyElement,
+    close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    div()
+        .id(id)
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(gpui_kit::rgba(0x000000b8))
+        .on_click(|_: &ClickEvent, _: &mut Window, cx: &mut App| {
+            cx.stop_propagation();
+        })
+        .on_mouse_down(
+            MouseButton::Left,
+            |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
+                cx.stop_propagation();
+            },
+        )
+        .child(
+            div()
+                .id(SharedString::from(format!("{id}-card")))
+                .w(px(460.0))
+                .max_w(gpui_kit::relative(0.92))
+                .p(px(18.0))
+                .rounded(px(14.0))
+                .bg(surface())
+                .border_1()
+                .border_color(gpui_kit::rgb(0x2c2c34))
+                .shadow_lg()
+                .flex()
+                .flex_col()
+                .gap(px(12.0))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(12.0))
+                        .child(div().text_size(px(14.0)).text_color(text()).child(title))
+                        .child(icon_button(
+                            SharedString::from(format!("{id}-close")),
+                            IconName::X,
+                            false,
+                            false,
+                            close,
+                        )),
+                )
+                .child(body),
+        )
+        .into_any_element()
+}
+
+/// 文件名（不含目录），路径没有文件名时退回整条路径。
+pub(super) fn file_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
 /// 设置窗口里的一个按钮：描边 + 文字，宽度跟着文字走。
 ///
 /// 不用控制条上那套图标按钮：那一排是「一直摆在画面上」的开关，尺寸要小；设置窗口
