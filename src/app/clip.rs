@@ -142,7 +142,7 @@ impl PlayerApp {
 
     /// 输入框有焦点时才接管键盘，返回 `true` 表示这次按键已被消费。
     ///
-    /// 面板不再是模态的：没点进输入框时，空格、方向键、Alt+左右这些必须原样
+    /// 面板不再是模态的：没点进输入框时，空格、方向键、Ctrl/⌘+左右这些必须原样
     /// 留给播放器——用户正是一边看画面一边用它们定位。
     pub(super) fn on_clip_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
         let Some(dialog) = self.clip.as_ref() else {
@@ -643,7 +643,7 @@ impl PlayerApp {
                 .whitespace_normal()
                 .child(
                     "用控制条上的进度条定位，停在哪一帧就点「设为开始 / 设为结束」。\
-                     空格播放/暂停，←/→ 5 秒，Alt+←/→ 逐帧。",
+                     空格播放/暂停，←/→ 5 秒，Ctrl/⌘+←/→ 逐帧。",
                 ),
         )
         .child(

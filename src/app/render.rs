@@ -48,6 +48,8 @@ impl Render for PlayerApp {
             .on_action(
                 cx.listener(|this, _: &SeekBackward, _window, cx| this.seek_by(-SEEK_STEP, cx)),
             )
+            .on_action(cx.listener(|this, _: &StepBackward, _window, cx| this.step_frame(-1, cx)))
+            .on_action(cx.listener(|this, _: &StepForward, _window, cx| this.step_frame(1, cx)))
             .on_action(
                 cx.listener(|this, _: &VolumeUp, _window, cx| this.change_volume(VOLUME_STEP, cx)),
             )
@@ -186,11 +188,14 @@ impl Render for PlayerApp {
                 }
                 // Ctrl/⌘ + 滚轮逐帧查看。滚轮按「事件」算，一格走一帧；触控板给的是
                 // 像素增量，攒够一格才走，否则一次轻滑就是几十帧。
+                //
+                // 方向：上滚回到前面的帧、下滚往后的帧。GPUI 里上滚是正 y，
+                // 与「加音量」同向，所以步进要取反。
                 if event.modifiers.secondary() {
                     let steps = match event.delta {
-                        ScrollDelta::Lines(delta) => delta.y.signum() as i32,
+                        ScrollDelta::Lines(delta) => -(delta.y.signum() as i32),
                         ScrollDelta::Pixels(delta) => {
-                            let accumulated = this.frame_scroll + f32::from(delta.y);
+                            let accumulated = this.frame_scroll - f32::from(delta.y);
                             let steps = (accumulated / FRAME_SCROLL_PX).trunc();
                             // 只保留不足一格的余量，换方向时不会先欠着上一次的账。
                             this.frame_scroll = accumulated - steps * FRAME_SCROLL_PX;

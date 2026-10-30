@@ -48,6 +48,8 @@ actions!(
         TogglePlay,
         SeekForward,
         SeekBackward,
+        StepForward,
+        StepBackward,
         VolumeUp,
         VolumeDown,
         ToggleMute,
@@ -509,6 +511,26 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("space", TogglePlay, None),
         KeyBinding::new("right", SeekForward, None),
         KeyBinding::new("left", SeekBackward, None),
+        // Ctrl/⌘ + ←/→：逐帧。macOS 上 Ctrl 是系统级修饰键（切换桌面），
+        // 用 ⌘；其它平台用 Ctrl。
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "cmd-left"
+            } else {
+                "ctrl-left"
+            },
+            StepBackward,
+            None,
+        ),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "cmd-right"
+            } else {
+                "ctrl-right"
+            },
+            StepForward,
+            None,
+        ),
         KeyBinding::new("up", VolumeUp, None),
         KeyBinding::new("down", VolumeDown, None),
         KeyBinding::new("m", ToggleMute, None),
