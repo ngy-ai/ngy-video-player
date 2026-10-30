@@ -1,20 +1,14 @@
-//! 音轨 / 字幕编辑对话框：换成指定文件、整类删掉，或者保持原样。
+//! 轨道编辑对话框：换掉 / 删掉内置音轨，或者把外部字幕内嵌进容器。
 //!
-//! 两件事放在同一个对话框里，因为它们在 ffmpeg 那边是同一次调用：分开做就要把整条
-//! 视频流复制两遍。界面结构也完全一样（看当前几条 → 选文件替换 / 删除 / 恢复），
-//! 拆成两个对话框只会把同一套排版抄两遍。
+//! 音轨和字幕是两个独立入口、两个对话框，各自只显示自己那一路的选项：点「内嵌字幕」
+//! 时不该看见音轨的按钮。两者共用同一个结构——状态机、进度、完成后的操作完全一样，
+//! 差别只在标题、按钮文案和说明，所以按 [`EditTarget`] 参数化，而不是抄两遍。
 
 use super::*;
 use crate::remux::{
     self as remux_core, RemuxEvent, RemuxJob, RemuxOutcome, RemuxRequest, TrackAction,
 };
 use std::path::Path;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RemuxSection {
-    Audio,
-    Subtitle,
-}
 
 /// 对话框当前处在哪一步。
 #[derive(Clone, Debug)]
@@ -29,30 +23,33 @@ enum RemuxState {
 pub(super) struct RemuxDialog {
     /// 任务代次：后台任务回来时用它确认「这个事件还属于当前对话框」。
     generation: u64,
+    /// 这次编辑的是音轨还是字幕。
+    target: EditTarget,
     path: PathBuf,
     duration: f64,
-    /// 原文件内置轨道的摘要，只用来显示「内置几条」。
-    audio_tracks: Vec<String>,
-    subtitle_tracks: Vec<String>,
-    /// 原文件内置字幕轨的编码名，交给 ffmpeg 那边决定保留时怎么处理。
+    /// 原文件这一路的内置轨道摘要，只用来显示「内置几条」。
+    builtin: Vec<String>,
+    /// 原文件内置字幕轨的编码名。编辑音轨时也要带上：字幕按原样保留，
+    /// 但保留成什么编码得由它的原编码决定。
     subtitle_codecs: Vec<String>,
-    audio: TrackAction,
-    subtitle: TrackAction,
+    action: TrackAction,
     state: RemuxState,
     job: Option<Arc<RemuxJob>>,
 }
 
 impl RemuxDialog {
-    fn new(generation: u64, path: PathBuf, snapshot: &Snapshot) -> Self {
+    fn new(generation: u64, target: EditTarget, path: PathBuf, snapshot: &Snapshot) -> Self {
         // 外挂字幕不算「内置」：它们不在容器里，ffmpeg 根本看不到，写进摘要只会误导。
-        let builtin = |kind: TrackKind| -> Vec<String> {
-            snapshot
-                .track(kind)
-                .into_iter()
-                .filter(|track| !track.external)
-                .map(|track| track.display_name())
-                .collect()
+        let kind = match target {
+            EditTarget::Audio => TrackKind::Audio,
+            EditTarget::Subtitle => TrackKind::Subtitle,
         };
+        let builtin = snapshot
+            .track(kind)
+            .into_iter()
+            .filter(|track| !track.external)
+            .map(|track| track.display_name())
+            .collect();
         let subtitle_codecs = snapshot
             .track(TrackKind::Subtitle)
             .into_iter()
@@ -62,13 +59,12 @@ impl RemuxDialog {
 
         Self {
             generation,
+            target,
             path,
             duration: snapshot.duration,
-            audio_tracks: builtin(TrackKind::Audio),
-            subtitle_tracks: builtin(TrackKind::Subtitle),
+            builtin,
             subtitle_codecs,
-            audio: TrackAction::Keep,
-            subtitle: TrackAction::Keep,
+            action: TrackAction::Keep,
             state: RemuxState::Editing,
             job: None,
         }
@@ -78,36 +74,45 @@ impl RemuxDialog {
         matches!(self.state, RemuxState::Editing | RemuxState::Failed(_))
     }
 
-    /// 两项都保持原样时「开始」没有意义：这不是「复制一份文件」的入口。
+    /// 保持原样时「开始」没有意义：这不是「复制一份文件」的入口。
     fn changed(&self) -> bool {
-        !self.audio.is_keep() || !self.subtitle.is_keep()
+        !self.action.is_keep()
     }
 
-    fn action(&self, section: RemuxSection) -> &TrackAction {
-        match section {
-            RemuxSection::Audio => &self.audio,
-            RemuxSection::Subtitle => &self.subtitle,
+    /// 交给 ffmpeg 的两路处置：只有当前这一路可能被改，另一路永远原样保留。
+    fn actions(&self) -> (TrackAction, TrackAction) {
+        match self.target {
+            EditTarget::Audio => (self.action.clone(), TrackAction::Keep),
+            EditTarget::Subtitle => (TrackAction::Keep, self.action.clone()),
         }
     }
+}
 
-    fn action_mut(&mut self, section: RemuxSection) -> &mut TrackAction {
-        match section {
-            RemuxSection::Audio => &mut self.audio,
-            RemuxSection::Subtitle => &mut self.subtitle,
-        }
+/// 按钮文案：(选文件, 删除, 恢复)。
+fn labels(target: EditTarget) -> (&'static str, &'static str, &'static str) {
+    match target {
+        EditTarget::Audio => ("选择音频文件…", "删除音轨", "恢复原音轨"),
+        EditTarget::Subtitle => ("选择字幕文件…", "移除字幕", "恢复原字幕"),
     }
+}
 
-    fn tracks(&self, section: RemuxSection) -> &[String] {
-        match section {
-            RemuxSection::Audio => &self.audio_tracks,
-            RemuxSection::Subtitle => &self.subtitle_tracks,
+/// 卡片底部的说明。
+fn hint(target: EditTarget) -> &'static str {
+    match target {
+        EditTarget::Audio => {
+            "输出为同目录下的新 mkv：画面和字幕直接复制，换上的音轨保持原编码。\
+             原文件不会被改动。"
+        }
+        EditTarget::Subtitle => {
+            "输出为同目录下的新 mkv：画面和音轨直接复制，换上的字幕会转成容器支持的编码。\
+             原文件不会被改动。"
         }
     }
 }
 
 impl PlayerApp {
     /// 打开对话框。没有正在播放的文件、或者时长还没读出来时，只给一条提示。
-    pub(super) fn open_remux_dialog(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn open_remux_dialog(&mut self, target: EditTarget, cx: &mut Context<Self>) {
         let Some(path) = self.snapshot.path.clone() else {
             self.flash("没有正在播放的文件");
             cx.notify();
@@ -124,6 +129,7 @@ impl PlayerApp {
         self.remux_generation += 1;
         self.remux = Some(RemuxDialog::new(
             self.remux_generation,
+            target,
             path,
             &self.snapshot,
         ));
@@ -163,33 +169,31 @@ impl PlayerApp {
         true
     }
 
-    fn set_remux_action(
-        &mut self,
-        section: RemuxSection,
-        action: TrackAction,
-        cx: &mut Context<Self>,
-    ) {
+    fn set_remux_action(&mut self, action: TrackAction, cx: &mut Context<Self>) {
         if let Some(dialog) = self.remux.as_mut() {
-            *dialog.action_mut(section) = action;
+            dialog.action = action;
             cx.notify();
         }
     }
 
     /// 选一个音频 / 字幕文件作为替换来源。
-    fn pick_remux_source(
-        &mut self,
-        section: RemuxSection,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.dialog_open || !self.remux.as_ref().is_some_and(RemuxDialog::editing) {
+    fn pick_remux_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = self
+            .remux
+            .as_ref()
+            .filter(|dialog| dialog.editing())
+            .map(|dialog| dialog.target)
+        else {
+            return;
+        };
+        if self.dialog_open {
             return;
         }
         self.dialog_open = true;
 
-        let dialog = match section {
-            RemuxSection::Audio => rfd::FileDialog::new().add_filter("音频文件", formats::AUDIO),
-            RemuxSection::Subtitle => {
+        let dialog = match target {
+            EditTarget::Audio => rfd::FileDialog::new().add_filter("音频文件", formats::AUDIO),
+            EditTarget::Subtitle => {
                 rfd::FileDialog::new().add_filter("字幕文件", formats::SUBTITLE)
             }
         };
@@ -210,7 +214,7 @@ impl PlayerApp {
             let _ = this.update(cx, |this, cx| {
                 this.dialog_open = false;
                 if let Some(path) = picked {
-                    this.set_remux_action(section, TrackAction::Replace(path), cx);
+                    this.set_remux_action(TrackAction::Replace(path), cx);
                 }
                 cx.notify();
             });
@@ -227,11 +231,12 @@ impl PlayerApp {
             return;
         }
 
+        let (audio, subtitle) = dialog.actions();
         let request = RemuxRequest {
             output: remux_core::output_path(&dialog.path),
             input: dialog.path.clone(),
-            audio: dialog.audio.clone(),
-            subtitle: dialog.subtitle.clone(),
+            audio,
+            subtitle,
             duration: dialog.duration,
             subtitle_codecs: dialog.subtitle_codecs.clone(),
         };
@@ -326,7 +331,7 @@ impl PlayerApp {
 
         Some(modal_card(
             "remux-dialog",
-            "编辑音轨与字幕",
+            dialog.target.title(),
             body,
             cx.listener(|this, _: &ClickEvent, _window, cx| {
                 this.close_remux_dialog(cx);
@@ -361,9 +366,7 @@ impl PlayerApp {
         }
 
         body = body
-            .child(self.render_remux_section(RemuxSection::Audio, dialog, cx))
-            .child(self.render_remux_section(RemuxSection::Subtitle, dialog, cx))
-            // 横线：卡片是竖排的，`card_divider` 那条竖线在这里会变成一个小点。
+            .child(self.render_remux_section(dialog, cx))
             .child(div().h(px(1.0)).w_full().bg(gpui_kit::rgb(0x2c2c34)))
             .child(
                 div()
@@ -393,63 +396,38 @@ impl PlayerApp {
                     .text_size(px(10.0))
                     .text_color(text_faint())
                     .whitespace_normal()
-                    .child(
-                        "输出为同目录下的新 mkv：画面与保留的轨道直接复制，不重新编码；\
-                         换上的字幕会转成容器支持的编码。原文件不会被改动。",
-                    ),
+                    .child(hint(dialog.target)),
             );
         body.into_any_element()
     }
 
-    /// 一组轨道：标题 + 当前处置 + 三个按钮。音频与字幕共用，只有文案不同。
-    fn render_remux_section(
-        &self,
-        section: RemuxSection,
-        dialog: &RemuxDialog,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let (title, pick_label, remove_label, keep_label, pick_id, remove_id, keep_id) =
-            match section {
-                RemuxSection::Audio => (
-                    "音频",
-                    "选择音频文件…",
-                    "删除音轨",
-                    "恢复原音轨",
-                    "remux-audio-pick",
-                    "remux-audio-remove",
-                    "remux-audio-keep",
-                ),
-                RemuxSection::Subtitle => (
-                    "字幕",
-                    "选择字幕文件…",
-                    "移除字幕",
-                    "恢复原字幕",
-                    "remux-subtitle-pick",
-                    "remux-subtitle-remove",
-                    "remux-subtitle-keep",
-                ),
-            };
-
-        let builtin = dialog.tracks(section);
-        let action = dialog.action(section);
-        let (status, color) = match action {
-            TrackAction::Keep if builtin.is_empty() => ("没有内置轨道".to_string(), text_faint()),
+    /// 当前这一路的现状与三个按钮：选文件替换 / 删除 / 恢复原样。
+    fn render_remux_section(&self, dialog: &RemuxDialog, cx: &mut Context<Self>) -> AnyElement {
+        let (pick_label, remove_label, keep_label) = labels(dialog.target);
+        let (status, color) = match &dialog.action {
+            TrackAction::Keep if dialog.builtin.is_empty() => {
+                ("没有内置轨道".to_string(), text_faint())
+            }
             TrackAction::Keep => (
-                format!("内置 {} 条：{}", builtin.len(), builtin.join("、")),
+                format!(
+                    "内置 {} 条：{}",
+                    dialog.builtin.len(),
+                    dialog.builtin.join("、")
+                ),
                 text_muted(),
             ),
             TrackAction::Replace(path) => (format!("将替换为：{}", file_name(path)), ui::accent()),
             TrackAction::Remove => ("将删除全部同类轨道".to_string(), ui::danger()),
         };
 
-        let pick = cx.listener(move |this, _: &ClickEvent, window, cx| {
-            this.pick_remux_source(section, window, cx);
+        let pick = cx.listener(|this, _: &ClickEvent, window, cx| {
+            this.pick_remux_source(window, cx);
         });
-        let remove = cx.listener(move |this, _: &ClickEvent, _window, cx| {
-            this.set_remux_action(section, TrackAction::Remove, cx);
+        let remove = cx.listener(|this, _: &ClickEvent, _window, cx| {
+            this.set_remux_action(TrackAction::Remove, cx);
         });
-        let keep = cx.listener(move |this, _: &ClickEvent, _window, cx| {
-            this.set_remux_action(section, TrackAction::Keep, cx);
+        let keep = cx.listener(|this, _: &ClickEvent, _window, cx| {
+            this.set_remux_action(TrackAction::Keep, cx);
         });
 
         div()
@@ -466,7 +444,7 @@ impl PlayerApp {
                             .flex_none()
                             .text_size(px(12.0))
                             .text_color(text_muted())
-                            .child(title),
+                            .child(dialog.target.label()),
                     )
                     .child(
                         div()
@@ -482,16 +460,16 @@ impl PlayerApp {
                     .flex()
                     .items_center()
                     .gap(px(8.0))
-                    .child(settings_button(pick_id, pick_label, true, pick))
+                    .child(settings_button("remux-pick", pick_label, true, pick))
                     .child(settings_button(
-                        remove_id,
+                        "remux-remove",
                         remove_label,
-                        !matches!(action, TrackAction::Remove),
+                        !matches!(dialog.action, TrackAction::Remove),
                         remove,
                     ))
                     // 「恢复」只在改过之后才有意义，没改过时多一个按钮只是噪音。
-                    .when(!action.is_keep(), |this| {
-                        this.child(settings_button(keep_id, keep_label, true, keep))
+                    .when(!dialog.action.is_keep(), |this| {
+                        this.child(settings_button("remux-keep", keep_label, true, keep))
                     }),
             )
             .into_any_element()

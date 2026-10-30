@@ -24,7 +24,10 @@ impl PlayerApp {
                     BarEntry::new("裁切片段…", Trim).enabled(self.file_editable()),
                 ));
                 items.push(BarItem::Entry(
-                    BarEntry::new("编辑音轨与字幕…", EditTracks).enabled(self.file_editable()),
+                    BarEntry::new("替换或删除音轨…", EditAudio).enabled(self.file_editable()),
+                ));
+                items.push(BarItem::Entry(
+                    BarEntry::new("内嵌字幕…", EditSubtitle).enabled(self.file_editable()),
                 ));
                 items.push(BarItem::Separator);
                 items.push(BarItem::Entry(BarEntry::new("退出", Quit)));
@@ -114,7 +117,7 @@ impl PlayerApp {
                     LoadSubtitle,
                 )));
                 items.push(BarItem::Entry(
-                    BarEntry::new("把字幕内嵌进文件…", EditTracks).enabled(self.file_editable()),
+                    BarEntry::new("内嵌字幕到文件…", EditSubtitle).enabled(self.file_editable()),
                 ));
             }
             BarMenu::Audio => {
@@ -136,7 +139,7 @@ impl PlayerApp {
                 }
                 items.push(BarItem::Separator);
                 items.push(BarItem::Entry(
-                    BarEntry::new("替换或删除音轨…", EditTracks).enabled(self.file_editable()),
+                    BarEntry::new("替换或删除音轨…", EditAudio).enabled(self.file_editable()),
                 ));
             }
             BarMenu::View => {
@@ -245,7 +248,8 @@ impl PlayerApp {
             BarAction::OpenSettings(tab) => self.open_settings(tab),
             BarAction::TakeScreenshot => self.take_screenshot(cx),
             BarAction::Trim => self.open_clip_dialog(cx),
-            BarAction::EditTracks => self.open_remux_dialog(cx),
+            BarAction::EditAudio => self.open_remux_dialog(EditTarget::Audio, cx),
+            BarAction::EditSubtitle => self.open_remux_dialog(EditTarget::Subtitle, cx),
             BarAction::SetAsDefaultPlayer => self.set_default_player(),
             BarAction::OpenDefaultApps => self.open_default_apps(),
             BarAction::RemoveAssociations => self.remove_associations(window, cx),

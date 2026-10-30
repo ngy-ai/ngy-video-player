@@ -410,6 +410,31 @@ impl BarEntry {
     }
 }
 
+/// 轨道编辑对话框处理哪一路。音轨与字幕分开成两个入口、两个对话框，
+/// 共用同一套状态机与后台任务，只是标题、按钮和说明各按自己那一路来。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditTarget {
+    Audio,
+    Subtitle,
+}
+
+impl EditTarget {
+    fn title(self) -> &'static str {
+        match self {
+            EditTarget::Audio => "编辑音轨",
+            EditTarget::Subtitle => "内嵌字幕",
+        }
+    }
+
+    /// 对话框里那一行的小标题。
+    fn label(self) -> &'static str {
+        match self {
+            EditTarget::Audio => "音轨",
+            EditTarget::Subtitle => "字幕",
+        }
+    }
+}
+
 /// 菜单动作必须是 `Clone`：点击回调是 `Fn`，可能被多次调用，不能把动作 move 走。
 #[derive(Clone)]
 enum BarAction {
@@ -430,8 +455,10 @@ enum BarAction {
     OpenSettings(Option<SettingsTab>),
     TakeScreenshot,
     Trim,
-    /// 换掉 / 删掉内置音轨，或把字幕内嵌进容器。
-    EditTracks,
+    /// 换掉 / 删掉内置音轨。
+    EditAudio,
+    /// 把外部字幕内嵌进容器。
+    EditSubtitle,
     SetAsDefaultPlayer,
     OpenDefaultApps,
     RemoveAssociations,
