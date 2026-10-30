@@ -483,6 +483,10 @@ impl PlayerApp {
             Err(error) => Some((error.message().to_string(), false)),
         };
 
+        // 当前进度用和「全长」同一套格式：拖完进度条、逐帧微调以后，眼睛要能
+        // 立刻核对停在哪一帧，控制条上的 mm:ss 精度不够。
+        let position = self.snapshot.position.clamp(0.0, dialog.duration.max(0.0));
+
         let mut body = div().flex().flex_col().gap(px(12.0)).child(
             div()
                 .flex()
@@ -499,6 +503,12 @@ impl PlayerApp {
                         .text_size(px(11.0))
                         .text_color(text_muted())
                         .child(format!("全长 {}", clip_core::format_time(dialog.duration))),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(text_muted())
+                        .child(format!("当前 {}", clip_core::format_time(position))),
                 ),
         );
 
