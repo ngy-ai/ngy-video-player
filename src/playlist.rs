@@ -4,33 +4,72 @@
 //! 会和界面各记一份，两边一旦不同步就很难查。这里 UI 是唯一事实来源，mpv 每次只
 //! 负责「放这一个文件」。
 //!
+//! 列表是**一棵树**：添加文件夹时连同子文件夹一起收进来，文件夹行可以折叠，
+//! 也可以把别的行拖进去。树用「扁平数组 + 层级」表示（见 [`tree`]），播放顺序
+//! 就是数组顺序，所以翻页、去重、存档不需要在两套结构之间同步。
+//!
 //! 面板上可以有多个列表（一页一个），整组列表连同各自的位置一起存盘，
 //! 下次启动原样恢复——「记住上次在听哪张专辑」比记住窗口大小更贴近使用习惯。
 
 use crate::formats;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+mod scan;
 mod sort;
+mod tree;
 
+pub use scan::{collect_dir, parse_playlist};
 pub use sort::{OrderVersion, SortMode};
+pub use tree::{DropSpot, collect_tree};
 
-/// 列表里的一项。
+/// 列表里的一项：一个文件，或者一个文件夹。
 ///
 /// 除了路径还记着「什么时候加进来的」：按添加时间排序靠它。老存档里只有裸路径，
 /// 读回来记 0——这样按添加时间排出来的正好还是存档里原来的顺序。
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Item {
     path: PathBuf,
     added_at: i64,
+    /// 缩进层级：0 是顶层，文件夹里的项是 1，更深层依次加一。
+    depth: u16,
+    /// 文件夹节点：自己不能播，只用来折叠和接住拖进来的项。
+    dir: bool,
+    /// 文件夹是否收起。收起后子项不渲染，也不参与「下一集」。
+    collapsed: bool,
 }
 
 impl Item {
-    fn new(path: PathBuf) -> Self {
+    /// 一个可播放的文件，放在列表顶层。
+    pub fn file(path: PathBuf) -> Self {
         Self {
             path,
             added_at: now_secs(),
+            depth: 0,
+            dir: false,
+            collapsed: false,
         }
+    }
+
+    /// 一个文件夹节点。
+    pub(super) fn folder(path: PathBuf) -> Self {
+        Self {
+            path,
+            added_at: now_secs(),
+            depth: 0,
+            dir: true,
+            collapsed: false,
+        }
+    }
+
+    pub(super) fn with_depth(mut self, depth: u16) -> Self {
+        self.depth = depth;
+        self
+    }
+
+    pub(super) fn set_depth(&mut self, depth: u16) {
+        self.depth = depth;
     }
 
     pub fn path(&self) -> &Path {
@@ -41,24 +80,73 @@ impl Item {
     pub fn added_at(&self) -> i64 {
         self.added_at
     }
+
+    pub fn depth(&self) -> u16 {
+        self.depth
+    }
+
+    pub fn is_dir(&self) -> bool {
+        self.dir
+    }
+
+    pub fn collapsed(&self) -> bool {
+        self.collapsed
+    }
+
+    pub(super) fn toggle_collapsed(&mut self) {
+        self.collapsed = !self.collapsed;
+    }
+
+    pub(super) fn set_collapsed(&mut self, collapsed: bool) {
+        self.collapsed = collapsed;
+    }
 }
 
 /// 旧存档的列表项是一个裸路径字符串，新存档是对象；两种都认。
 ///
 /// 认不出老格式的代价是整份播放列表退回默认值，用户丢的是攒了很久的队列，
-/// 所以这里必须兼容。
+/// 所以这里必须兼容。层级/文件夹/折叠三个新字段缺失时都取默认值，老存档
+/// 读出来就是一张没有文件夹的平铺列表，行为和以前完全一样。
 impl<'de> Deserialize<'de> for Item {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
         #[serde(untagged)]
         enum Raw {
             Path(PathBuf),
-            Full { path: PathBuf, added_at: i64 },
+            Full {
+                path: PathBuf,
+                #[serde(default)]
+                added_at: i64,
+                #[serde(default)]
+                depth: u16,
+                #[serde(default)]
+                dir: bool,
+                #[serde(default)]
+                collapsed: bool,
+            },
         }
 
         Ok(match Raw::deserialize(deserializer)? {
-            Raw::Path(path) => Self { path, added_at: 0 },
-            Raw::Full { path, added_at } => Self { path, added_at },
+            Raw::Path(path) => Self {
+                path,
+                added_at: 0,
+                depth: 0,
+                dir: false,
+                collapsed: false,
+            },
+            Raw::Full {
+                path,
+                added_at,
+                depth,
+                dir,
+                collapsed,
+            } => Self {
+                path,
+                added_at,
+                depth,
+                dir,
+                collapsed,
+            },
         })
     }
 }
@@ -85,8 +173,10 @@ pub struct Playlist {
 /// 删除若干项之后的结果。界面据此决定是换歌、停播，还是什么都不用做。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Removal {
-    /// 实际删掉的项数：越界索引和重复索引不计。
+    /// 实际删掉的项数（含被一起带走的子项）：越界索引和重复索引不计。
     pub removed: usize,
+    /// 其中有多少个是文件。提示语按这个说，免得把文件夹也算成「个文件」。
+    pub removed_files: usize,
     /// 被删掉的项里包含当时正在播的那一项。
     pub current_removed: bool,
     /// 删除后应当看作当前项的索引；`None` 表示列表已经空了。
@@ -98,12 +188,22 @@ impl Playlist {
         &self.items
     }
 
+    pub(super) fn items_mut(&mut self) -> &mut Vec<Item> {
+        &mut self.items
+    }
+
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
 
+    /// 全部行数，文件夹行也算：标题栏显示的是「列表有多长」。
     pub fn len(&self) -> usize {
         self.items.len()
+    }
+
+    /// 可播放的文件数，不含文件夹行。
+    pub fn file_count(&self) -> usize {
+        self.items.iter().filter(|item| !item.dir).count()
     }
 
     pub fn index(&self) -> Option<usize> {
@@ -111,76 +211,154 @@ impl Playlist {
     }
 
     pub fn current(&self) -> Option<&PathBuf> {
-        self.index
-            .and_then(|index| self.items.get(index))
-            .map(|item| &item.path)
+        self.index.and_then(|index| self.playable_path(index))
     }
 
     pub fn get(&self, index: usize) -> Option<&PathBuf> {
         self.items.get(index).map(|item| &item.path)
     }
 
+    /// 第 `index` 行指向的可播放文件；文件夹行返回 `None`。
+    pub fn playable_path(&self, index: usize) -> Option<&PathBuf> {
+        self.items
+            .get(index)
+            .filter(|item| !item.dir)
+            .map(|item| &item.path)
+    }
+
+    /// 第一项能播的东西。空列表、或者只加了空文件夹时是 `None`。
+    pub fn first_playable(&self) -> Option<usize> {
+        self.playable_indices().next()
+    }
+
     /// 整批替换，并把 `start` 设为当前项。
     ///
     /// 换的是一整份新队列，旧队列的排序方式和历史顺序都不再适用，一起丢掉。
     pub fn replace(&mut self, items: Vec<PathBuf>, start: usize) {
-        self.items = items.into_iter().map(Item::new).collect();
-        self.index = (!self.items.is_empty()).then(|| start.min(self.items.len() - 1));
+        self.items = items.into_iter().map(Item::file).collect();
         self.sort = SortMode::Added;
         self.history.clear();
+        self.index = (!self.items.is_empty())
+            .then(|| start.min(self.items.len() - 1))
+            .filter(|index| !self.items[*index].dir);
+    }
+
+    /// 整批替换成一棵已经展开好的树，并把焦点放到 `focus` 上。
+    ///
+    /// 「打开文件夹」走这条路：列表里留下文件夹本身和它的内容，而不是一堆
+    /// 看不出出处的平铺文件。
+    pub fn replace_entries(&mut self, entries: Vec<Item>, focus: Option<&Path>) {
+        self.items = entries;
+        self.sort = SortMode::Added;
+        self.history.clear();
+        self.index = focus
+            .and_then(|target| {
+                self.items
+                    .iter()
+                    .position(|item| !item.dir && item.path == target)
+            })
+            .or_else(|| self.first_playable());
     }
 
     pub fn set_index(&mut self, index: usize) {
-        if index < self.items.len() {
+        if self.items.get(index).is_some_and(|item| !item.dir) {
             self.index = Some(index);
         }
     }
 
-    /// 追加文件；目录会被展开成其中可播放的文件（按文件名自然序）。
+    /// 追加文件；目录会连同子文件夹一起展开成子树。返回新增的可播放文件数。
     ///
     /// 已经在列表里的项跳过：同一个文件从目录展开、m3u 和手动挑选三条路进来
     /// 都可能重复，去重一次比让用户在列表里找重复项省事。
-    pub fn append_paths(&mut self, paths: &[PathBuf]) {
+    pub fn append_paths(&mut self, paths: &[PathBuf]) -> usize {
+        let mut added = 0;
         for path in paths {
             if path.is_dir() {
-                self.push_unique(collect_dir(path));
+                added += self.push_entries(collect_tree(path));
             } else if formats::is_media(path) {
-                self.push_unique(std::iter::once(path.clone()));
+                added += usize::from(self.push_file(path.clone()));
             } else if formats::is_playlist(path) {
-                self.push_unique(parse_playlist(path));
+                for entry in parse_playlist(path) {
+                    added += usize::from(self.push_file(entry));
+                }
             }
         }
+        added
     }
 
-    fn push_unique(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
-        for path in paths {
-            if !self.items.iter().any(|item| item.path == path) {
-                self.items.push(Item::new(path));
-            }
+    fn push_file(&mut self, path: PathBuf) -> bool {
+        if self.items.iter().any(|item| item.path == path) {
+            return false;
         }
+        self.items.push(Item::file(path));
+        true
     }
 
+    /// 把一棵展开好的子树并进列表：已经在列表里的项连同它的子树一起跳过。
+    fn push_entries(&mut self, entries: Vec<Item>) -> usize {
+        let mut known: HashSet<PathBuf> = self.items.iter().map(|item| item.path.clone()).collect();
+        // 一个新文件都没有时整棵跳过：把一个空壳文件夹塞进列表，用户点开
+        // 也只会看到一堆「已经有了」的东西。
+        if !entries
+            .iter()
+            .any(|item| !item.dir && !known.contains(&item.path))
+        {
+            return 0;
+        }
+        let mut added = 0;
+        let mut skip_depth: Option<u16> = None;
+        for item in entries {
+            if let Some(depth) = skip_depth {
+                if item.depth > depth {
+                    continue;
+                }
+                skip_depth = None;
+            }
+            if known.contains(&item.path) {
+                if item.dir {
+                    skip_depth = Some(item.depth);
+                }
+                continue;
+            }
+            if !item.dir {
+                added += 1;
+            }
+            known.insert(item.path.clone());
+            self.items.push(item);
+        }
+        added
+    }
+
+    /// 下一项。文件夹和收起的子树都不参与播放——收起就是「这段先不看了」。
     pub fn next_index(&self, wrap: bool) -> Option<usize> {
         let current = self.index?;
-        let next = current + 1;
-        if next < self.items.len() {
-            Some(next)
-        } else if wrap && !self.items.is_empty() {
-            Some(0)
-        } else {
-            None
+        let playable: Vec<usize> = self.playable_indices().collect();
+        if let Some(next) = playable.iter().copied().find(|index| *index > current) {
+            return Some(next);
         }
+        wrap.then(|| playable.first().copied()).flatten()
     }
 
     pub fn previous_index(&self, wrap: bool) -> Option<usize> {
         let current = self.index?;
-        if current > 0 {
-            Some(current - 1)
-        } else if wrap && !self.items.is_empty() {
-            Some(self.items.len() - 1)
-        } else {
-            None
+        let playable: Vec<usize> = self.playable_indices().collect();
+        if let Some(previous) = playable
+            .iter()
+            .rev()
+            .copied()
+            .find(|index| *index < current)
+        {
+            return Some(previous);
         }
+        wrap.then(|| playable.last().copied()).flatten()
+    }
+
+    /// 参与播放的行：是文件，而且没有藏在收起的文件夹里。
+    fn playable_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        let items = &self.items;
+        self.visible_indices()
+            .into_iter()
+            .filter(move |index| !items[*index].dir)
     }
 
     /// 删除一项，等价于 `remove_many(&[index])`。
@@ -188,26 +366,33 @@ impl Playlist {
         self.remove_many(&[index])
     }
 
-    /// 批量删除。`indexes` 用的是**删除前**的索引。
+    /// 批量删除。`indexes` 用的是**删除前**的索引；删文件夹会连同里面的项一起删。
     ///
     /// 当前项被删掉时不是简单地停住：它落到后面第一个幸存者，后面没有了就退回
     /// 前面最后一个——和用户点「下一集」的直觉一致。列表被删空时不留当前项。
     pub fn remove_many(&mut self, indexes: &[usize]) -> Removal {
-        let mut targets: Vec<usize> = indexes
-            .iter()
-            .copied()
-            .filter(|index| *index < self.items.len())
-            .collect();
+        // 目录要连带子树一起删：只删掉那一行的话，子项会变成没有父项的孤儿行。
+        let mut targets: Vec<usize> = Vec::new();
+        for index in indexes {
+            if *index < self.items.len() {
+                targets.extend(*index..self.subtree_end(*index));
+            }
+        }
         targets.sort_unstable();
         targets.dedup();
         if targets.is_empty() {
             return Removal {
                 removed: 0,
+                removed_files: 0,
                 current_removed: false,
                 current: self.index,
             };
         }
 
+        let removed_files = targets
+            .iter()
+            .filter(|index| !self.items[**index].dir)
+            .count();
         let current = self.index;
         let current_removed = current.is_some_and(|value| targets.binary_search(&value).is_ok());
         // 先按旧索引挑好接班人，再动列表：删完之后所有下标都变了，那时再找会错位。
@@ -231,10 +416,11 @@ impl Playlist {
         } else {
             current.map(shift)
         }
-        .filter(|index| *index < self.items.len());
+        .filter(|index| self.items.get(*index).is_some_and(|item| !item.dir));
 
         Removal {
             removed: targets.len(),
+            removed_files,
             current_removed,
             current: self.index,
         }
@@ -248,10 +434,30 @@ impl Playlist {
         self.history.clear();
     }
 
-    /// 从存档读回来之后校正：索引可能指向已经不存在的项，
-    /// 历史顺序也可能被手改成超过上限份。
+    /// 当前项跟着它自己的文件走，而不是留在原来的下标上。
+    pub(super) fn follow(&mut self, path: Option<PathBuf>) {
+        self.index = path.and_then(|path| {
+            self.items
+                .iter()
+                .position(|item| !item.dir && item.path == path)
+        });
+    }
+
+    /// 从存档读回来之后校正：索引可能指向已经不存在的项，层级可能被手改成
+    /// 跳过一整层，历史顺序也可能超过上限份。
     fn sanitize(&mut self) {
-        self.index = self.index.filter(|index| *index < self.items.len());
+        self.index = self
+            .index
+            .filter(|index| self.items.get(*index).is_some_and(|item| !item.dir));
+        // 子项最多比前一项深一层，而且前一项必须是文件夹。跳跃的层级会让
+        // 「子树到哪儿结束」算错，进而把行画到别人的缩进里。
+        let mut max_depth = 0u16;
+        for item in &mut self.items {
+            if item.depth > max_depth {
+                item.depth = max_depth;
+            }
+            max_depth = if item.dir { item.depth + 1 } else { item.depth };
+        }
         self.history.retain(|version| !version.is_empty());
         self.history.truncate(sort::HISTORY_LIMIT);
     }
@@ -443,114 +649,4 @@ impl PlaylistSet {
         }
         self.active = self.active.min(self.tabs.len() - 1);
     }
-}
-
-/// 目录里所有看起来能播的文件，按文件名排序。
-pub fn collect_dir(dir: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| formats::is_media(path))
-        .collect();
-    files.sort_by(|a, b| natural_cmp(a, b));
-    files
-}
-
-/// 自然序比较：`第2集` 排在 `第10集` 前面。
-fn natural_cmp(a: &Path, b: &Path) -> std::cmp::Ordering {
-    let left = a
-        .file_name()
-        .map(|n| n.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-    let right = b
-        .file_name()
-        .map(|n| n.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-
-    let mut left_chars = left.chars().peekable();
-    let mut right_chars = right.chars().peekable();
-
-    loop {
-        match (left_chars.peek().copied(), right_chars.peek().copied()) {
-            (None, None) => return std::cmp::Ordering::Equal,
-            (None, Some(_)) => return std::cmp::Ordering::Less,
-            (Some(_), None) => return std::cmp::Ordering::Greater,
-            (Some(l), Some(r)) => {
-                if l.is_ascii_digit() && r.is_ascii_digit() {
-                    let left_number = take_number(&mut left_chars);
-                    let right_number = take_number(&mut right_chars);
-                    match left_number.cmp(&right_number) {
-                        std::cmp::Ordering::Equal => continue,
-                        other => return other,
-                    }
-                } else {
-                    left_chars.next();
-                    right_chars.next();
-                    match l.cmp(&r) {
-                        std::cmp::Ordering::Equal => continue,
-                        other => return other,
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn take_number(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> u64 {
-    let mut value: u64 = 0;
-    while let Some(c) = chars.peek().copied() {
-        if c.is_ascii_digit() {
-            value = value
-                .saturating_mul(10)
-                .saturating_add(c as u64 - '0' as u64);
-            chars.next();
-        } else {
-            break;
-        }
-    }
-    value
-}
-
-/// 解析 m3u/m3u8/pls。相对路径按列表文件所在目录解析。
-pub fn parse_playlist(path: &Path) -> Vec<PathBuf> {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    let base = path.parent().unwrap_or_else(|| Path::new("."));
-    let is_pls = formats::extension(path).as_deref() == Some("pls");
-
-    let mut result = Vec::new();
-    for raw in text.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let candidate = if is_pls {
-            // PLS 的条目形如 File1=/path/to/a.mp4
-            match line.split_once('=') {
-                Some((key, value)) if key.trim().to_lowercase().starts_with("file") => {
-                    value.trim().to_string()
-                }
-                _ => continue,
-            }
-        } else {
-            line.to_string()
-        };
-
-        if candidate.contains("://") {
-            // 网络流不是文件路径，播放列表这一层先跳过（可通过命令行直接打开）。
-            continue;
-        }
-        let resolved = if Path::new(&candidate).is_absolute() {
-            PathBuf::from(&candidate)
-        } else {
-            base.join(&candidate)
-        };
-        if resolved.exists() {
-            result.push(resolved);
-        }
-    }
-    result
 }

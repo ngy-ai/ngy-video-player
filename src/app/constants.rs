@@ -44,6 +44,8 @@ pub(super) const CONTROLS_MIN_WIDTH: f32 = 18.0 * 2.0 // 左右内边距
     + 56.0 // 循环 pill
     + 6.0 * 13.0; // 行内间距
 pub(super) const PLAYLIST_RESIZER_WIDTH: f32 = 6.0;
+/// 树形列表每深一层的缩进。太窄看不出层级，太宽会把长文件名挤没。
+pub(super) const PLAYLIST_INDENT: f32 = 14.0;
 /// 行右键菜单的尺寸，只用来把弹窗往窗口里收。
 pub(super) const ITEM_MENU_WIDTH: f32 = 168.0;
 pub(super) const ITEM_MENU_HEIGHT: f32 = 118.0;

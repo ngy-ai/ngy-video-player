@@ -186,6 +186,7 @@ impl PlayerApp {
     pub(super) fn render_item_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let menu = self.item_menu.as_ref()?;
         let index = menu.index;
+        let is_dir = menu.dir;
         let reveal_path = menu.path.clone();
         let info_path = menu.path.clone();
 
@@ -228,23 +229,42 @@ impl PlayerApp {
                 .child(item_menu_entry(
                     "item-menu-reveal",
                     IconName::FolderOpen,
-                    "定位文件",
+                    if is_dir {
+                        "在文件夹中定位"
+                    } else {
+                        "定位文件"
+                    },
                     text(),
                     cx.listener(move |this, _: &ClickEvent, _window, cx| {
                         cx.stop_propagation();
                         this.reveal_item(reveal_path.clone(), cx);
                     }),
                 ))
-                .child(item_menu_entry(
-                    "item-menu-info",
-                    IconName::Info,
-                    "查看格式",
-                    text(),
-                    cx.listener(move |this, _: &ClickEvent, _window, cx| {
-                        cx.stop_propagation();
-                        this.show_file_info(info_path.clone(), cx);
-                    }),
-                )),
+                // 文件夹没有格式可看，换成折叠开关——这是它最常用的操作。
+                .child(if is_dir {
+                    item_menu_entry(
+                        "item-menu-toggle",
+                        IconName::FolderOpen,
+                        "展开 / 收起",
+                        text(),
+                        cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                            cx.stop_propagation();
+                            this.item_menu = None;
+                            this.toggle_dir(index, cx);
+                        }),
+                    )
+                } else {
+                    item_menu_entry(
+                        "item-menu-info",
+                        IconName::Info,
+                        "查看格式",
+                        text(),
+                        cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                            cx.stop_propagation();
+                            this.show_file_info(info_path.clone(), cx);
+                        }),
+                    )
+                }),
         )
     }
 

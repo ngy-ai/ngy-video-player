@@ -15,7 +15,7 @@ use crate::{
     player::{
         Command, EndReason, Engine, EngineOptions, LoopMode, PlayerEvent, Snapshot, TrackKind,
     },
-    playlist::{self, Playlist, PlaylistSet},
+    playlist::{self, DropSpot, Playlist, PlaylistSet},
     settings::{DecodeMode, OnTop, RenderMode, Rotation, Settings, VideoAspect, normalize_speed},
     ui::{
         self, bg, format_time, icon, icon_button, icon_button_with_tip, pill_button_with_tip,
@@ -130,6 +130,8 @@ impl Banner {
 struct ItemMenu {
     index: usize,
     path: PathBuf,
+    /// 这一行是文件夹。菜单项不同：文件夹没有「查看格式」，多一项展开/收起。
+    dir: bool,
     position: Point<Pixels>,
 }
 
@@ -202,8 +204,8 @@ pub struct PlayerApp {
     playlist_dragging: bool,
     /// 面板标题栏上展开着的弹出菜单（添加 / 排序），同一时刻只有一个。
     panel_menu: Option<PanelMenu>,
-    /// 拖动列表行时算出来的插入位置（插到第几项之前）。
-    sort_drop: Option<usize>,
+    /// 拖动列表行时算出来的落点：插到哪一行前面/后面，或者放进哪个文件夹。
+    drop_spot: Option<DropSpot>,
     /// 播放列表行的右键菜单。
     item_menu: Option<ItemMenu>,
     /// 「查看格式」面板；`None` 表示没打开。

@@ -1,15 +1,21 @@
-//! 排序、手工拖动重排与顺序历史。
+//! 排序与顺序历史。
 //!
 //! 排序是「点一次执行一次」的动作，不是一直生效的规则：排完之后再拖进来一个文件，
 //! 它一律追加到末尾——按名字插到中间会让人找不到刚放进来的那一项。当前用的是哪种
 //! 排法只记下来给菜单打勾。
 //!
+//! 树形列表按层排：每一层的兄弟节点各自排序，文件夹排在文件前面，子层跟着父项
+//! 一起走。所以排完一遍，目录结构还是原来那个目录结构。
+//!
 //! 每次改顺序之前，先把当时的排列存一份进历史（最多 [`HISTORY_LIMIT`] 份），
-//! 排错了能一键退回去。历史存路径而不是下标：文件删掉之后下标会全部错位。
+//! 排错了能一键退回去。历史存完整条目而不是下标：文件删掉之后下标会全部错位，
+//! 而层级也得跟着一起回来，否则还原出来会是一张散架的树。
 
-use super::{Item, Playlist, natural_cmp};
+use super::scan::natural_cmp;
+use super::{Item, Playlist};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 /// 历史顺序最多留几份。
 pub(super) const HISTORY_LIMIT: usize = 3;
@@ -79,12 +85,15 @@ impl Serialize for SortMode {
     }
 }
 
-/// 一版旧顺序：改之前是按什么排的、当时都有哪些文件、怎么排的。
+/// 一版旧顺序：改之前是按什么排的、当时都有哪些项、各自在第几层。
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OrderVersion {
     mode: SortMode,
+    /// 老存档只留了路径。写盘时不再输出，只用于读回旧存档。
+    #[serde(skip_serializing)]
     paths: Vec<PathBuf>,
+    entries: Vec<Item>,
 }
 
 impl OrderVersion {
@@ -95,12 +104,38 @@ impl OrderVersion {
 
     /// 这一版有多少项。
     pub fn len(&self) -> usize {
-        self.paths.len()
+        if self.entries.is_empty() {
+            self.paths.len()
+        } else {
+            self.entries.len()
+        }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.paths.is_empty()
+        self.entries.is_empty() && self.paths.is_empty()
     }
+
+    /// 这一版记下的条目。旧存档只有路径，按顶层文件补出来。
+    fn items(&self) -> Vec<Item> {
+        if self.entries.is_empty() {
+            self.paths.iter().cloned().map(Item::file).collect()
+        } else {
+            self.entries.clone()
+        }
+    }
+
+    /// 判断「顺序变没变」用的指纹：只看路径和层级，折叠状态与加入时间不算。
+    fn key(&self) -> Vec<(PathBuf, u16)> {
+        order_key(&self.items())
+    }
+}
+
+/// 一组条目的排列指纹。
+pub(super) fn order_key(items: &[Item]) -> Vec<(PathBuf, u16)> {
+    items
+        .iter()
+        .map(|item| (item.path().to_path_buf(), item.depth()))
+        .collect()
 }
 
 impl Playlist {
@@ -120,46 +155,21 @@ impl Playlist {
         if mode == SortMode::Manual {
             return false;
         }
+        let snapshot = self.items.clone();
         let current = self.current().cloned();
-        let before = self.order();
-        match mode {
-            SortMode::Name => self
-                .items
-                .sort_by(|left, right| natural_cmp(&left.path, &right.path)),
-            SortMode::Added => self.items.sort_by_key(|item| item.added_at),
-            SortMode::Modified => self.sort_by_modified(),
-            SortMode::Manual => unreachable!("上面已经挡掉手工排序"),
-        }
-        let after = self.order();
-        self.restore_current(current);
-        if before == after {
+
+        let mut tree = build_tree(std::mem::take(&mut self.items));
+        let mut stamps = HashMap::new();
+        sort_level(&mut tree, mode, &mut stamps);
+        self.items = flatten(tree);
+
+        self.follow(current);
+        if order_key(&snapshot) == order_key(&self.items) {
             self.sort = mode;
             return false;
         }
-        self.push_history(self.sort, before);
+        self.push_history(self.sort, snapshot);
         self.sort = mode;
-        true
-    }
-
-    /// 把第 `from` 项挪到 `insert_at`（插入点按**移动前**的下标算）。
-    ///
-    /// 插在自己前面和后面都等于没动，这时返回 `false`，也不会占用一格历史。
-    pub fn move_item(&mut self, from: usize, insert_at: usize) -> bool {
-        if from >= self.items.len() {
-            return false;
-        }
-        let target = insert_at.min(self.items.len());
-        if target == from || target == from + 1 {
-            return false;
-        }
-        let current = self.current().cloned();
-        let before = self.order();
-        let item = self.items.remove(from);
-        let target = if target > from { target - 1 } else { target };
-        self.items.insert(target, item);
-        self.restore_current(current);
-        self.push_history(self.sort, before);
-        self.sort = SortMode::Manual;
         true
     }
 
@@ -170,73 +180,153 @@ impl Playlist {
         let Some(version) = self.history.get(index).cloned() else {
             return false;
         };
-        let before = self.order();
-        if !self.apply_order(&version.paths) {
+        let snapshot = self.items.clone();
+        if !self.apply_version(&version) {
             return false;
         }
-        self.push_history(self.sort, before);
+        self.push_history(self.sort, snapshot);
         self.sort = version.mode;
         true
     }
 
-    /// 当前的路径排列，用来判断「顺序到底变没变」。
-    fn order(&self) -> Vec<PathBuf> {
-        self.items.iter().map(|item| item.path.clone()).collect()
-    }
-
-    /// 当前项跟着它自己的文件走，而不是留在原来的下标上。
-    fn restore_current(&mut self, path: Option<PathBuf>) {
-        self.index = path.and_then(|path| self.items.iter().position(|item| item.path == path));
-    }
-
     /// 记一版旧顺序。同一个排列只留一份，最多留 [`HISTORY_LIMIT`] 份。
-    fn push_history(&mut self, mode: SortMode, paths: Vec<PathBuf>) {
-        self.history.retain(|version| version.paths != paths);
-        self.history.insert(0, OrderVersion { mode, paths });
+    pub(super) fn push_history(&mut self, mode: SortMode, entries: Vec<Item>) {
+        let key = order_key(&entries);
+        self.history.retain(|version| version.key() != key);
+        self.history.insert(
+            0,
+            OrderVersion {
+                mode,
+                paths: Vec::new(),
+                entries,
+            },
+        );
         self.history.truncate(HISTORY_LIMIT);
     }
 
-    /// 按 `order` 重排。快照里没有的项（之后才加进来的）接在末尾，保持它们之间
+    /// 按旧版本重排。快照里没有的项（之后才加进来的）接在末尾，保持它们之间
     /// 原有的先后。返回顺序是否真的变了。
-    fn apply_order(&mut self, order: &[PathBuf]) -> bool {
-        let before = self.order();
+    fn apply_version(&mut self, version: &OrderVersion) -> bool {
+        let before = order_key(&self.items);
         let current = self.current().cloned();
         let mut pool = std::mem::take(&mut self.items);
         let mut ordered = Vec::with_capacity(pool.len());
-        for path in order {
-            if let Some(position) = pool.iter().position(|item| &item.path == path) {
-                ordered.push(pool.remove(position));
+        for entry in version.items() {
+            if let Some(position) = pool.iter().position(|item| item.path == entry.path) {
+                let mut item = pool.remove(position);
+                // 层级跟着旧版本回来，否则还原出来是一张散架的树。
+                item.set_depth(entry.depth());
+                ordered.push(item);
             }
         }
         ordered.append(&mut pool);
         self.items = ordered;
-        self.restore_current(current);
-        !before.iter().eq(self.items.iter().map(|item| &item.path))
-    }
-
-    /// 先取一遍修改时间再排：`sort_by` 的比较函数会被调用很多次，
-    /// 每次都 `metadata` 一遍在机械盘和网络盘上慢得能看出来。
-    fn sort_by_modified(&mut self) {
-        let mut decorated: Vec<(Item, Option<i64>)> = std::mem::take(&mut self.items)
-            .into_iter()
-            .map(|item| {
-                let stamp = modified_secs(&item.path);
-                (item, stamp)
-            })
-            .collect();
-        decorated.sort_by(|left, right| match (left.1, right.1) {
-            (Some(left), Some(right)) => left.cmp(&right),
-            // 读不到修改时间（文件被移走、权限不足）的排在最后，而不是挤到最前面。
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        });
-        self.items = decorated.into_iter().map(|(item, _)| item).collect();
+        self.follow(current);
+        before != order_key(&self.items)
     }
 }
 
+// -- 树内排序 --------------------------------------------------------------
+
+/// 排序用的嵌套结构：一层排完再看下一层。
+struct Branch {
+    item: Item,
+    children: Vec<Branch>,
+}
+
+/// 把「扁平数组 + 层级」还原成嵌套结构。
+///
+/// 层级跳跃（手工改坏的存档）按当前层收下，而不是把这一项丢掉——宁可行画在
+/// 浅一层，也不能让用户的文件凭空消失。
+fn build_tree(items: Vec<Item>) -> Vec<Branch> {
+    build_level(&items, 0, 0).0
+}
+
+fn build_level(items: &[Item], start: usize, depth: u16) -> (Vec<Branch>, usize) {
+    let mut level = Vec::new();
+    let mut pos = start;
+    while pos < items.len() {
+        let mut item = items[pos].clone();
+        if item.depth() < depth {
+            break;
+        }
+        item.set_depth(depth);
+        pos += 1;
+        let mut branch = Branch {
+            item,
+            children: Vec::new(),
+        };
+        if branch.item.is_dir() {
+            let (children, next) = build_level(items, pos, depth + 1);
+            branch.children = children;
+            pos = next;
+        }
+        level.push(branch);
+    }
+    (level, pos)
+}
+
+fn flatten(branches: Vec<Branch>) -> Vec<Item> {
+    let mut out = Vec::new();
+    push_branches(branches, &mut out);
+    out
+}
+
+fn push_branches(branches: Vec<Branch>, out: &mut Vec<Item>) {
+    for branch in branches {
+        out.push(branch.item);
+        push_branches(branch.children, out);
+    }
+}
+
+/// 逐层排序：先把这一层排好，再递归子层——子项永远跟着父项走。
+fn sort_level(branches: &mut [Branch], mode: SortMode, stamps: &mut HashMap<PathBuf, Option<i64>>) {
+    branches.sort_by(|left, right| compare(mode, left, right, stamps));
+    for branch in branches.iter_mut() {
+        sort_level(&mut branch.children, mode, stamps);
+    }
+}
+
+fn compare(
+    mode: SortMode,
+    left: &Branch,
+    right: &Branch,
+    stamps: &mut HashMap<PathBuf, Option<i64>>,
+) -> std::cmp::Ordering {
+    // 文件夹排在文件前面：和资源管理器一致，找剧集时先看到目录。
+    let by_kind = right.item.is_dir().cmp(&left.item.is_dir());
+    if by_kind != std::cmp::Ordering::Equal {
+        return by_kind;
+    }
+    match mode {
+        SortMode::Name => natural_cmp(left.item.path(), right.item.path()),
+        SortMode::Added => left.item.added_at().cmp(&right.item.added_at()),
+        SortMode::Modified => {
+            let left_stamp = modified_rank(left.item.path(), stamps);
+            let right_stamp = modified_rank(right.item.path(), stamps);
+            match (left_stamp, right_stamp) {
+                (Some(left), Some(right)) => left.cmp(&right),
+                // 读不到修改时间（文件被移走、权限不足）的排在最后，而不是挤到最前面。
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
+        }
+        // 手工顺序只能靠拖动得到，调用方已经挡掉了。
+        SortMode::Manual => std::cmp::Ordering::Equal,
+    }
+}
+
+/// 取一次修改时间就缓存住：比较函数会被调用很多次，每次都 `metadata` 一遍
+/// 在机械盘和网络盘上慢得能看出来。
+fn modified_rank(path: &Path, stamps: &mut HashMap<PathBuf, Option<i64>>) -> Option<i64> {
+    *stamps
+        .entry(path.to_path_buf())
+        .or_insert_with(|| modified_secs(path))
+}
+
 /// 文件最后修改时间（Unix 秒）。读不到就是 `None`。
-fn modified_secs(path: &std::path::Path) -> Option<i64> {
+fn modified_secs(path: &Path) -> Option<i64> {
     std::fs::metadata(path)
         .and_then(|meta| meta.modified())
         .ok()

@@ -43,8 +43,10 @@ src/formats.rs   扩展名清单（文件过滤器 + 拖入判断）
 src/clip.rs      裁切片段：时间解析、区间校验、ffmpeg 任务与进度
 src/remux.rs     轨道编辑：换/删内置音轨、内嵌字幕（画面流复制，单路转码）与进度
 src/embed.rs     内嵌资源（libmpv / ffmpeg）解压到缓存目录
-src/playlist.rs  播放列表、m3u/pls 解析、目录展开、自然序
-src/playlist/sort.rs  按名称/修改时间/添加时间排序、手工重排、最近 3 版顺序历史
+src/playlist.rs  播放列表：树形条目（扁平数组 + depth）、多页签、存档
+src/playlist/scan.rs  目录扫描、自然序、m3u/pls 解析
+src/playlist/tree.rs  文件夹递归展开、折叠、拖放移动（DropSpot）
+src/playlist/sort.rs  逐层排序（名称/修改时间/添加时间）、最近 3 版顺序历史
 src/screenshot.rs 截图落点与文件名
 src/settings.rs  偏好持久化
 src/logging.rs   终端 + 滚动日志文件
@@ -92,6 +94,8 @@ src/player/engine/    state（对外类型）、event_loop、dispatch、render_l
     + `tests/foo/<主题>.rs`。Cargo 只把 `tests/` 顶层文件当测试目标，
     子模块文件本身不是独立目标，所以子模块不加 `_test` 后缀，
     顶层文件名保持与源码模块同名（`playlist.rs` 对应 `src/playlist.rs`）。
+    注意 `tests/foo.rs` 是 crate root，`mod` 默认只在 `tests/` 同层找文件，
+    必须写成 `#[path = "foo/<主题>.rs"] mod <主题>;`（见 `tests/playlist.rs`）。
   - 单元测试就近放在源码文件内的 `#[cfg(test)] mod tests`；超过约 150 行就移到
     同目录的 `tests.rs`（`src/foo/tests.rs`），并在 `foo.rs` 里声明
     `#[cfg(test)] mod tests;`。

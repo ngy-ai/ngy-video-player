@@ -4,6 +4,11 @@ use ngy_video_player::playlist::{Playlist, PlaylistSet, SortMode, collect_dir, p
 use std::fs;
 use std::path::{Path, PathBuf};
 
+// 集成测试的根文件是 crate root，`mod` 默认只在 `tests/` 同层找文件；
+// 显式写 path 才能按「根文件 + 同名目录」的布局组织子模块。
+#[path = "playlist/tree.rs"]
+mod tree;
+
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("ngy-vp-test-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);

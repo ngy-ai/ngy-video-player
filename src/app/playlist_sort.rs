@@ -6,18 +6,21 @@
 
 use super::playlist_menu::PanelMenu;
 use super::*;
-use crate::playlist::SortMode;
+use crate::playlist::{DropSpot, SortMode};
 
 /// 拖动中的一行。GPUI 的拖放按值的类型分发，用专用类型就不会和「从资源管理器
 /// 拖文件进来」混在一起。
 pub(super) struct PlaylistDrag {
     pub(super) from: usize,
     pub(super) name: SharedString,
+    /// 拖的是文件夹。拖动预览上标出来，拖一整个文件夹时心里有数。
+    pub(super) dir: bool,
 }
 
-/// 跟着鼠标走的拖动预览：一颗只显示文件名的胶囊。
+/// 跟着鼠标走的拖动预览：一颗只显示名字的胶囊。
 pub(super) struct DragGhost {
     pub(super) name: SharedString,
+    pub(super) dir: bool,
 }
 
 impl Render for DragGhost {
@@ -30,12 +33,23 @@ impl Render for DragGhost {
             .bg(gpui_kit::rgba(0x232330f2))
             .border_1()
             .border_color(ui::accent())
+            .flex()
+            .items_center()
+            .gap(px(6.0))
             .overflow_hidden()
             .text_size(px(12.0))
             .text_color(text())
-            .whitespace_nowrap()
-            .text_ellipsis()
-            .child(self.name.clone())
+            .when(self.dir, |this| {
+                this.child(icon(IconName::Folder, 12.0, ui::accent()))
+            })
+            .child(
+                div()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(self.name.clone()),
+            )
     }
 }
 
@@ -59,6 +73,7 @@ impl PlayerApp {
         let changed = self.playlist_mut().sort_items(mode);
         self.selection.clear();
         self.selection_anchor = None;
+        self.drop_spot = None;
         self.playlists.save();
         self.flash(if changed {
             format!("已{}排序", mode.label())
@@ -73,6 +88,7 @@ impl PlayerApp {
         let restored = self.playlist_mut().restore_version(index);
         self.selection.clear();
         self.selection_anchor = None;
+        self.drop_spot = None;
         self.playlists.save();
         self.flash(if restored {
             "已恢复到选定的顺序".to_string()
@@ -83,34 +99,32 @@ impl PlayerApp {
         cx.notify();
     }
 
-    /// 拖动落点：`Some(n)` 表示松手时插到原列表第 `n` 项之前。
-    pub(super) fn set_sort_drop(&mut self, target: Option<usize>, cx: &mut Context<Self>) {
-        if self.sort_drop == target {
+    /// 拖动落点。相同落点直接返回，避免整窗重绘。
+    pub(super) fn set_drop_spot(&mut self, spot: Option<DropSpot>, cx: &mut Context<Self>) {
+        if self.drop_spot == spot {
             return;
         }
-        self.sort_drop = target;
+        self.drop_spot = spot;
         cx.notify();
     }
 
-    /// 松手：只在落点确实挨着这一行时才动列表。
+    /// 松手：只在落点确实落在这一行上时才动列表。
     ///
-    /// 拖动被半路取消（松手时已经在面板外）时 `sort_drop` 会留着上一轮的值，
-    /// 「落点必须和当前行相邻」这条把过期数据挡掉了。
+    /// 拖动被半路取消（松手时已经在面板外）时落点会留着上一轮的值，
+    /// 「落点必须锚定当前行」这条把过期数据挡掉了。
     pub(super) fn drop_on_row(&mut self, from: usize, row: usize, cx: &mut Context<Self>) {
-        let target = self
-            .sort_drop
-            .filter(|target| *target == row || *target == row + 1);
-        self.sort_drop = None;
-        let Some(target) = target else {
+        let spot = self.drop_spot.filter(|spot| spot.anchor() == row);
+        self.drop_spot = None;
+        let Some(spot) = spot else {
             cx.notify();
             return;
         };
-        self.reorder_item(from, target, cx);
+        self.reorder_item(from, spot, cx);
     }
 
-    /// 手工拖动重排：把第 `from` 项插到 `insert_at`（移动前的下标）之前。
-    pub(super) fn reorder_item(&mut self, from: usize, insert_at: usize, cx: &mut Context<Self>) {
-        if !self.playlist_mut().move_item(from, insert_at) {
+    /// 手工拖动：把第 `from` 项（连它的子树）搬到 `spot`。
+    pub(super) fn reorder_item(&mut self, from: usize, spot: DropSpot, cx: &mut Context<Self>) {
+        if !self.playlist_mut().move_to(from, spot) {
             cx.notify();
             return;
         }

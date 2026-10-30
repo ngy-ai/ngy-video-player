@@ -126,13 +126,13 @@ impl PlayerApp {
         width: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let current = self.playlist().index();
-        let len = self.playlist().len();
+        let empty = self.playlist().is_empty();
+        let count = self.playlist().file_count();
         let selected = self.selection.len();
         let multi_hint = if cfg!(target_os = "macos") {
-            "⌘ 点击多选 · Shift 连选 · Delete 删除 · 拖动排序"
+            "⌘ 点击多选 · Shift 连选 · Delete 删除 · 拖动排序、拖进文件夹"
         } else {
-            "Ctrl 点击多选 · Shift 连选 · Delete 删除 · 拖动排序"
+            "Ctrl 点击多选 · Shift 连选 · Delete 删除 · 拖动排序、拖进文件夹"
         };
 
         div()
@@ -196,7 +196,7 @@ impl PlayerApp {
                             .text_ellipsis()
                             .text_size(px(13.0))
                             .text_color(text_muted())
-                            .child(format!("播放列表 · {len}")),
+                            .child(format!("播放列表 · {count}")),
                     )
                     .child(
                         div()
@@ -206,10 +206,10 @@ impl PlayerApp {
                             .child(self.render_add_button(cx))
                             // 排序按钮放在「清空」左边：它比清空常用，但两颗按钮
                             // 都贴着右上角，删表那一下不该是离手指最近的那个。
-                            .when(len > 0, |this| this.child(self.render_sort_button(cx)))
+                            .when(!empty, |this| this.child(self.render_sort_button(cx)))
                             // 用文字而不是垃圾桶图标：标题栏的图标离「关闭」太近，
                             // 而且和行尾的「移除这一项」撞脸，一不留神就清空了整张表。
-                            .when(len > 0, |this| {
+                            .when(!empty, |this| {
                                 this.child(
                                     div()
                                         .id("playlist-clear")
@@ -305,7 +305,7 @@ impl PlayerApp {
                         ),
                 )
             })
-            .when(len == 0, |this| {
+            .when(empty, |this| {
                 this.child(
                     div()
                         .flex_1()
@@ -329,7 +329,7 @@ impl PlayerApp {
                         ),
                 )
             })
-            .when(len > 0, |this| {
+            .when(!empty, |this| {
                 this.child(
                     div()
                         .id("playlist-scroll")
@@ -337,11 +337,14 @@ impl PlayerApp {
                         .overflow_y_scroll()
                         .flex()
                         .flex_col()
-                        .children(self.playlist().items().iter().enumerate().map(
-                            |(index, item)| {
-                                self.render_playlist_row(index, item.path(), current, cx)
-                            },
-                        )),
+                        // 收起文件夹时它后面那棵子树整段跳过，所以这里画的不是
+                        // 数组的每一项，而是「界面上真正存在的行」。
+                        .children(
+                            self.playlist()
+                                .visible_indices()
+                                .into_iter()
+                                .map(|index| self.render_playlist_row(index, cx)),
+                        ),
                 )
                 .child(
                     div()
@@ -356,29 +359,49 @@ impl PlayerApp {
             .children(self.render_panel_menu(cx))
     }
 
-    pub(super) fn render_playlist_row(
-        &self,
-        index: usize,
-        path: &std::path::Path,
-        current: Option<usize>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    /// 一行：一个文件，或者一个可以折叠的文件夹。
+    pub(super) fn render_playlist_row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let playlist = self.playlist();
+        let Some(item) = playlist.items().get(index) else {
+            return div().into_any_element();
+        };
+        let path = item.path().to_path_buf();
+        let depth = item.depth();
+        let is_dir = item.is_dir();
+        let folded = item.collapsed();
         let name = path
             .file_name()
             .map(|value| value.to_string_lossy().to_string())
             .unwrap_or_else(|| path.display().to_string());
-        let is_current = current == Some(index);
+        let current = playlist.index();
+        let is_current = !is_dir && current == Some(index);
+        // 正在播的那一项藏在收起的文件夹里时，把标记挪到文件夹行上：
+        // 否则列表上根本找不到「现在放的是哪个」。
+        let holds_current = is_dir
+            && folded
+            && current.is_some_and(|playing| playlist.is_descendant(playing, index));
+        let subtitle = if is_dir {
+            let files = playlist.dir_file_count(index);
+            if holds_current {
+                format!("播放中 · {files} 项")
+            } else {
+                format!("{files} 项")
+            }
+        } else {
+            formats::kind_label(&path).to_string()
+        };
+
         let is_selected = self.selection.contains(&index);
         let group = format!("playlist-row-{index}");
-        let row_path = path.to_path_buf();
-        let len = self.playlist().len();
-        // 拖动落点画成一条横线：插在这一行上面，或（最后一行时）整张表的最下面。
+        let row_path = path.clone();
+        // 拖动落点：横线表示插到这一行前面/后面，整行高亮表示放进这个文件夹。
         //
-        // 横线只在真的拖着一个列表行时才画。拖动被半路取消时（松手位置在列表行
+        // 只在真的拖着一个列表行时才画。拖动被半路取消时（松手位置在列表行
         // 之外）落点没有机会被清掉，靠这个条件保证它不会一直留在界面上。
         let dragging = cx.has_active_drag();
-        let line_above = dragging && self.sort_drop == Some(index);
-        let line_below = dragging && self.sort_drop == Some(index + 1) && index + 1 == len;
+        let line_above = dragging && self.drop_spot == Some(DropSpot::Before(index));
+        let line_below = dragging && self.drop_spot == Some(DropSpot::After(index));
+        let drop_into = dragging && self.drop_spot == Some(DropSpot::Into(index));
         let drag_name: SharedString = name.clone().into();
 
         div()
@@ -390,16 +413,24 @@ impl PlayerApp {
             .flex()
             .items_center()
             .gap(px(8.0))
-            .pl(px(10.0))
+            // 缩进就是层级本身：子项比父项多缩进一格。
+            .pl(px(10.0 + f32::from(depth) * PLAYLIST_INDENT))
             .pr(px(6.0))
-            .py(px(8.0))
+            .py(px(7.0))
             .when(line_above, |this| this.child(drop_line(false)))
             .when(line_below, |this| this.child(drop_line(true)))
-            .when(is_current, |this| this.bg(gpui_kit::rgb(0x1f2a3a)))
-            .when(is_selected && !is_current, |this| {
+            .when(drop_into, |this| {
+                this.bg(gpui_kit::rgba(0x5aa9ff26))
+                    .border_1()
+                    .border_color(ui::accent())
+            })
+            .when(is_current || holds_current, |this| {
+                this.bg(gpui_kit::rgb(0x1f2a3a))
+            })
+            .when(is_selected && !is_current && !holds_current, |this| {
                 this.bg(gpui_kit::rgba(0x5aa9ff1f))
             })
-            .when(!is_current, |this| {
+            .when(!is_current && !holds_current, |this| {
                 this.hover(|style| style.bg(ui::surface_hover()))
             })
             .cursor(CursorStyle::PointingHand)
@@ -413,9 +444,35 @@ impl PlayerApp {
                         this.child(icon(IconName::Check, 12.0, ui::accent()))
                     }),
             )
+            .when(is_dir, |this| {
+                // 折叠三角 + 文件夹图标占的宽度和文件行对齐，展开收起时文字不跳。
+                this.child(div().w(px(12.0)).flex().justify_center().child(icon(
+                    if folded {
+                        IconName::ChevronRight
+                    } else {
+                        IconName::ChevronDown
+                    },
+                    12.0,
+                    text_muted(),
+                )))
+                .child(icon(
+                    if folded {
+                        IconName::Folder
+                    } else {
+                        IconName::FolderOpen
+                    },
+                    14.0,
+                    if holds_current {
+                        ui::accent()
+                    } else {
+                        text_muted()
+                    },
+                ))
+            })
             .child(
                 div()
                     .flex_1()
+                    .min_w(px(0.0))
                     .overflow_hidden()
                     .flex()
                     .flex_col()
@@ -423,14 +480,20 @@ impl PlayerApp {
                     .child(
                         div()
                             .text_size(px(13.0))
-                            .text_color(if is_current { ui::accent() } else { text() })
+                            .text_color(if is_current || holds_current {
+                                ui::accent()
+                            } else if is_dir {
+                                text_muted()
+                            } else {
+                                text()
+                            })
                             .child(ui::ellipsis(name)),
                     )
                     .child(
                         div()
                             .text_size(px(11.0))
                             .text_color(text_faint())
-                            .child(formats::kind_label(path).to_string()),
+                            .child(subtitle),
                     ),
             )
             .child(
@@ -463,19 +526,28 @@ impl PlayerApp {
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     // 右键只弹菜单：不选中、不换歌，也不让点击漏到画面上。
                     cx.stop_propagation();
-                    this.open_item_menu(index, row_path.clone(), event.position, window, cx);
+                    this.open_item_menu(
+                        index,
+                        row_path.clone(),
+                        is_dir,
+                        event.position,
+                        window,
+                        cx,
+                    );
                 }),
             )
-            // 手工排序：整行可以拖，松手时插到那条高亮横线的位置。拖动本身由
-            // GPUI 的拖放机制接管，拖动过的这一次点击不会再触发「换歌」。
+            // 整行可以拖：拖到别的行前面/后面是改顺序，落到文件夹中间是放进去。
+            // 拖动本身由 GPUI 的拖放机制接管，拖动过的这一次点击不会再触发「换歌」。
             .on_drag(
                 PlaylistDrag {
                     from: index,
                     name: drag_name,
+                    dir: is_dir,
                 },
                 |drag, _, _, cx| {
                     cx.new(|_| DragGhost {
                         name: drag.name.clone(),
+                        dir: drag.dir,
                     })
                 },
             )
@@ -487,9 +559,25 @@ impl PlayerApp {
                     if !event.bounds.contains(&position) {
                         return;
                     }
-                    // 落在行的上半截就插到它前面，下半截插到它后面。
-                    let above = position.y < event.bounds.center().y;
-                    this.set_sort_drop(Some(if above { index } else { index + 1 }), cx);
+                    // 文件行：上半截插到它前面，下半截插到它后面。
+                    // 文件夹行：上下两截同样是改顺序，中间那一截是「放进去」。
+                    let top = f32::from(event.bounds.origin.y);
+                    let height = f32::from(event.bounds.size.height).max(1.0);
+                    let ratio = (f32::from(position.y) - top) / height;
+                    let spot = if is_dir {
+                        if ratio < 0.3 {
+                            DropSpot::Before(index)
+                        } else if ratio > 0.7 {
+                            DropSpot::After(index)
+                        } else {
+                            DropSpot::Into(index)
+                        }
+                    } else if ratio < 0.5 {
+                        DropSpot::Before(index)
+                    } else {
+                        DropSpot::After(index)
+                    };
+                    this.set_drop_spot(Some(spot), cx);
                 },
             ))
             .on_drop(cx.listener(move |this, drag: &PlaylistDrag, _window, cx| {
@@ -499,7 +587,7 @@ impl PlayerApp {
     }
 }
 
-/// 拖动落点的那条横线。`below` 画在行底，用来表示「插到整张表最后」。
+/// 拖动落点的那条横线。`below` 画在行底，表示「插到这一行后面」。
 fn drop_line(below: bool) -> AnyElement {
     div()
         .absolute()

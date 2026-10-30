@@ -93,7 +93,10 @@ impl PlayerApp {
     // -- 列表与打开 --------------------------------------------------------
 
     pub(super) fn open_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        let mut files: Vec<PathBuf> = Vec::new();
+        // 只有「单独打开一个文件」才把同目录的其它集一起排队。打开的是文件夹
+        // 时不能这么干：那个文件夹里可能就一个文件，替换成父目录会完全跑题。
+        let single_file = paths.len() == 1 && !paths[0].is_dir();
+        let mut entries: Vec<playlist::Item> = Vec::new();
         let mut focus: Option<PathBuf> = None;
         // 单独打开一个 .m3u/.pls 时新开一页：它本来就是一份独立列表，
         // 直接覆盖当前页会把用户正在看的那一页顶掉。
@@ -102,13 +105,21 @@ impl PlayerApp {
 
         for path in paths {
             if path.is_dir() {
-                let mut collected = playlist::collect_dir(&path);
-                focus = focus.or_else(|| collected.first().cloned());
-                files.append(&mut collected);
+                // 文件夹连同子文件夹一起收进来，列表里留下能折叠的树。
+                let mut tree = playlist::collect_tree(&path);
+                focus = focus.or_else(|| {
+                    tree.iter()
+                        .find(|item| !item.is_dir())
+                        .map(|item| item.path().to_path_buf())
+                });
+                entries.append(&mut tree);
             } else if formats::is_playlist(&path) {
-                let mut entries = playlist::parse_playlist(&path);
-                focus = focus.or_else(|| entries.first().cloned());
-                files.append(&mut entries);
+                let mut items: Vec<playlist::Item> = playlist::parse_playlist(&path)
+                    .into_iter()
+                    .map(playlist::Item::file)
+                    .collect();
+                focus = focus.or_else(|| items.first().map(|item| item.path().to_path_buf()));
+                entries.append(&mut items);
             } else if formats::is_subtitle(&path) {
                 if let Some(engine) = &self.engine {
                     engine.open_subtitle(&path);
@@ -120,33 +131,28 @@ impl PlayerApp {
                 cx.notify();
                 return;
             } else {
-                files.push(path.clone());
+                focus.get_or_insert_with(|| path.clone());
+                entries.push(playlist::Item::file(path));
             }
         }
 
-        if files.is_empty() {
+        if entries.is_empty() {
             self.flash("没有找到可播放的文件");
             cx.notify();
             return;
         }
 
         // 只拖进来一个文件时，把同目录的其它媒体一起排队 —— 看剧集时这是默认期待。
-        let single = files.len() == 1;
-        if single {
-            let path = files[0].clone();
+        if single_file && entries.len() == 1 {
+            let path = entries[0].path().to_path_buf();
             focus = Some(path.clone());
             if let Some(parent) = path.parent() {
-                let mut siblings = playlist::collect_dir(parent);
+                let siblings = playlist::collect_dir(parent);
                 if siblings.len() > 1 {
-                    files = std::mem::take(&mut siblings);
+                    entries = siblings.into_iter().map(playlist::Item::file).collect();
                 }
             }
         }
-
-        let start = focus
-            .as_ref()
-            .and_then(|target| files.iter().position(|path| path == target))
-            .unwrap_or(0);
 
         if let Some(path) = &focus {
             self.settings.last_dir = path.parent().map(|p| p.to_path_buf());
@@ -163,10 +169,13 @@ impl PlayerApp {
                 self.playlists.rename_active(name);
             }
         }
-        self.playlist_mut().replace(files, start);
+        self.playlist_mut()
+            .replace_entries(entries, focus.as_deref());
         self.selection.clear();
         self.selection_anchor = None;
-        self.play_index(start);
+        if let Some(index) = self.playlist().index() {
+            self.play_index(index);
+        }
     }
 
     /// 播放**当前显示页**里的第 `index` 项。
@@ -176,17 +185,23 @@ impl PlayerApp {
     }
 
     /// 播放某一页里的第 `index` 项：页内位置、播放归属、引擎三者一起对齐。
+    ///
+    /// 文件夹行没有可播的东西，点它只会展开/收起（见 `select_item`），走到这里
+    /// 直接忽略。
     pub(super) fn play_tab_index(&mut self, tab: usize, index: usize) {
-        {
-            let Some(playlist) = self.playlists.tab_mut(tab) else {
-                return;
-            };
+        let Some(path) = self
+            .playlists
+            .tab(tab)
+            .and_then(|playlist| playlist.playable_path(index))
+            .cloned()
+        else {
+            return;
+        };
+        if let Some(playlist) = self.playlists.tab_mut(tab) {
             playlist.set_index(index);
         }
         self.playing_tab = Some(tab);
-        if let Some(path) = self.playlists.tab(tab).and_then(|p| p.get(index)).cloned() {
-            self.load_file(&path);
-        }
+        self.load_file(&path);
         self.playlists.save();
     }
 
@@ -264,6 +279,18 @@ impl PlayerApp {
         modifiers: Modifiers,
         cx: &mut Context<Self>,
     ) {
+        // 文件夹行的普通点击是展开/收起：它没有东西可播，拿去换歌只会
+        // 变成「点一下没反应」。多选仍然要能选到文件夹，整棵一起删。
+        let is_dir = self
+            .playlist()
+            .items()
+            .get(index)
+            .is_some_and(|item| item.is_dir());
+        if is_dir && !modifiers.shift && !modifiers.secondary() {
+            self.toggle_dir(index, cx);
+            return;
+        }
+
         if modifiers.shift {
             let anchor = self.selection_anchor.unwrap_or(index);
             let (start, end) = if anchor <= index {
@@ -298,7 +325,20 @@ impl PlayerApp {
         cx.notify();
     }
 
-    /// 删除当前页里的若干项。
+    /// 展开或收起一个文件夹。
+    pub(super) fn toggle_dir(&mut self, index: usize, cx: &mut Context<Self>) {
+        if !self.playlist_mut().toggle_dir(index) {
+            return;
+        }
+        // 收起会让一批行消失，旧的选择和落点都指向了不存在的位置。
+        self.selection.clear();
+        self.selection_anchor = None;
+        self.drop_spot = None;
+        self.playlists.save();
+        cx.notify();
+    }
+
+    /// 删除当前页里的若干项。删文件夹会连同里面的项一起删。
     ///
     /// 只改列表，不动引擎：正在放的文件早就装进去解码了，删掉列表里的条目不该让
     /// 画面黑一下。页内位置由 `remove_many` 顺延到后继项，这一集放完从那里接着走。
@@ -316,7 +356,14 @@ impl PlayerApp {
         self.selection.clear();
         self.selection_anchor = None;
         self.playlists.save();
-        self.flash(format!("已移除 {} 个文件", removal.removed));
+        self.flash(if removal.removed_files == removal.removed {
+            format!("已移除 {} 个文件", removal.removed)
+        } else {
+            format!(
+                "已移除 {} 项（含 {} 个文件）",
+                removal.removed, removal.removed_files
+            )
+        });
         self.poke();
         cx.notify();
     }
@@ -330,10 +377,10 @@ impl PlayerApp {
     }
 
     pub(super) fn clear_playlist(&mut self, cx: &mut Context<Self>) {
-        let count = self.playlist().len();
-        if count == 0 {
+        if self.playlist().is_empty() {
             return;
         }
+        let count = self.playlist().file_count();
         // 只清列表，播放和磁盘上的文件都不动，所以不做二次确认——重新拖进来就行。
         self.playlist_mut().clear();
         self.selection.clear();
@@ -398,6 +445,7 @@ impl PlayerApp {
         &mut self,
         index: usize,
         path: PathBuf,
+        dir: bool,
         position: Point<Pixels>,
         window: &Window,
         cx: &mut Context<Self>,
@@ -413,6 +461,7 @@ impl PlayerApp {
         self.item_menu = Some(ItemMenu {
             index,
             path,
+            dir,
             position,
         });
         // 右键菜单和悬浮菜单/菜单栏互斥，免得两层浮层叠在一起。
@@ -570,16 +619,15 @@ impl PlayerApp {
             };
         }
         let was_empty = self.playlist().is_empty();
-        let before = self.playlist().len();
-        self.playlist_mut().append_paths(&paths);
-        let added = self.playlist().len() - before;
+        let added = self.playlist_mut().append_paths(&paths);
         if added == 0 {
             self.flash("没有可添加的文件（可能已经在列表里了）");
             cx.notify();
             return;
         }
-        if was_empty {
-            self.play_index(0);
+        // 第一项可能是文件夹行，从第一个真正能播的开始。
+        if was_empty && let Some(index) = self.playlist().first_playable() {
+            self.play_index(index);
         }
         self.playlists.save();
         self.flash(format!("已添加 {added} 个文件"));
@@ -625,10 +673,8 @@ impl PlayerApp {
             .add_filter("字幕文件", formats::SUBTITLE)
             .add_filter("所有文件", &["*"])
             .set_parent(window);
-        if let Some(path) = self.playlist().current() {
-            if let Some(dir) = path.parent() {
-                dialog = dialog.set_directory(dir);
-            }
+        if let Some(dir) = self.playlist().current().and_then(|path| path.parent()) {
+            dialog = dialog.set_directory(dir);
         }
         let (tx, rx) = futures::channel::oneshot::channel();
         std::thread::spawn(move || {

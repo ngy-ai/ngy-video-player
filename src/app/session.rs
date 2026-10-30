@@ -39,7 +39,7 @@ impl PlayerApp {
             selection_anchor: None,
             playlist_dragging: false,
             panel_menu: None,
-            sort_drop: None,
+            drop_spot: None,
             item_menu: None,
             file_info: None,
             clip: None,
@@ -340,7 +340,7 @@ impl PlayerApp {
             self.selection_anchor = None;
             // 面板收起来时菜单也一起收掉，否则下次展开它还挂在那里。
             self.panel_menu = None;
-            self.sort_drop = None;
+            self.drop_spot = None;
         }
     }
 }

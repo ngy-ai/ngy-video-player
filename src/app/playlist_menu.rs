@@ -195,7 +195,8 @@ impl PlayerApp {
     fn add_rows() -> Vec<PanelRow> {
         [
             ("添加文件…", PanelAction::AddFiles),
-            ("添加文件夹…", PanelAction::AddFolder),
+            // 说明「含子文件夹」：不然用户会以为它和以前一样只收一层。
+            ("添加文件夹（含子文件夹）…", PanelAction::AddFolder),
         ]
         .into_iter()
         .map(|(label, action)| PanelRow::Entry {
