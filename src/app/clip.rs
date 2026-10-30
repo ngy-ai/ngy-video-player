@@ -661,7 +661,7 @@ impl PlayerApp {
         field: ClipField,
         label: &'static str,
         value: &str,
-        placeholder: &'static str,
+        hint: &'static str,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let active = self
@@ -680,11 +680,26 @@ impl PlayerApp {
             .flex()
             .flex_col()
             .gap(px(5.0))
+            // 提示放在标题行右侧，不再塞进输入框：框里留着占位文字时，光标一进去
+            // 就成了「留空 = 从头|」，看着像已经输入了内容，又退不掉。
             .child(
                 div()
-                    .text_size(px(11.0))
-                    .text_color(text_muted())
-                    .child(label),
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(text_muted())
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(text_faint())
+                            .child(hint),
+                    ),
             )
             .child(
                 div()
@@ -710,18 +725,10 @@ impl PlayerApp {
                             cx.notify();
                         }),
                     )
-                    .child(if value.is_empty() {
-                        div()
-                            .text_size(px(13.0))
-                            .text_color(text_faint())
-                            .child(placeholder)
-                            .into_any_element()
-                    } else {
-                        div()
-                            .text_size(px(13.0))
-                            .text_color(text())
-                            .child(value)
-                            .into_any_element()
+                    // 空就是空：留空的含义已经在标题行，框里只放真正输入的内容，
+                    // 光标才有地方落。
+                    .when(!value.is_empty(), |this| {
+                        this.child(div().text_size(px(13.0)).text_color(text()).child(value))
                     })
                     // 光标固定画在末尾：这里不做左右移动与选区，输入永远是追加/退格。
                     .when(active, |this| {
