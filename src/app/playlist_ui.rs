@@ -97,6 +97,22 @@ impl PlayerApp {
                                             this.select_tab(index, cx);
                                         },
                                     ))
+                                    // 右键：重命名 / 删除这一页。左键会冒泡到面板的
+                                    // 「点空白处收菜单」，所以右键必须先截断。
+                                    .on_mouse_down(
+                                        MouseButton::Right,
+                                        cx.listener(
+                                            move |this, event: &MouseDownEvent, window, cx| {
+                                                cx.stop_propagation();
+                                                this.open_tab_menu(
+                                                    index,
+                                                    event.position,
+                                                    window,
+                                                    cx,
+                                                );
+                                            },
+                                        ),
+                                    )
                             }),
                     ),
             )
@@ -150,9 +166,10 @@ impl PlayerApp {
             // 面板上的点击（选条目、点关闭）不该漏到画面去。
             .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
                 cx.stop_propagation();
-                if this.menu_bar.is_some() || this.panel_menu.is_some() {
+                if this.menu_bar.is_some() || this.panel_menu.is_some() || this.tab_menu.is_some() {
                     this.menu_bar = None;
                     this.panel_menu = None;
+                    this.tab_menu = None;
                     cx.notify();
                 }
             }))

@@ -49,6 +49,11 @@ pub(super) const PLAYLIST_INDENT: f32 = 14.0;
 /// 行右键菜单的尺寸，只用来把弹窗往窗口里收。
 pub(super) const ITEM_MENU_WIDTH: f32 = 168.0;
 pub(super) const ITEM_MENU_HEIGHT: f32 = 118.0;
+/// 页签右键菜单的尺寸，同样只用来把弹窗往窗口里收。
+pub(super) const TAB_MENU_WIDTH: f32 = 152.0;
+pub(super) const TAB_MENU_HEIGHT: f32 = 82.0;
+/// 列表名的长度上限。页签只显示 140 像素，再长也只能省略，不如早点截断。
+pub(super) const MAX_TAB_NAME_CHARS: usize = 40;
 
 /// 小窗宽度的上下限：太窄看不清，太宽就失去「小」的意义了。
 pub(super) const MINI_MIN_WIDTH: f32 = 320.0;

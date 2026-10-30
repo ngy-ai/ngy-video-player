@@ -135,6 +135,21 @@ struct ItemMenu {
     position: Point<Pixels>,
 }
 
+/// 播放列表页签的右键菜单。位置是窗口坐标，弹窗按它绝对定位。
+struct TabMenu {
+    index: usize,
+    position: Point<Pixels>,
+}
+
+/// 正在重命名的列表页：改的是哪一页、已经输入了什么。
+struct TabRename {
+    index: usize,
+    text: String,
+    /// 用户已经动过键盘。预填的名字只是让人知道正在改哪一页，第一次敲字
+    /// 就把它整个换掉——列表名基本是整条重写，不是接着往后补。
+    typed: bool,
+}
+
 /// 「查看格式」面板。探测要读文件，所以先开一个 Loading 状态再填内容。
 struct FileInfoPanel {
     path: PathBuf,
@@ -208,6 +223,10 @@ pub struct PlayerApp {
     drop_spot: Option<DropSpot>,
     /// 播放列表行的右键菜单。
     item_menu: Option<ItemMenu>,
+    /// 播放列表页签的右键菜单（重命名 / 删除）。
+    tab_menu: Option<TabMenu>,
+    /// 正在重命名的那一页；`None` 表示没有打开输入框。
+    tab_rename: Option<TabRename>,
     /// 「查看格式」面板；`None` 表示没打开。
     file_info: Option<FileInfoPanel>,
     /// 裁切片段对话框；`None` 表示没打开。

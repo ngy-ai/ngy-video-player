@@ -5,7 +5,11 @@ use super::*;
 impl PlayerApp {
     /// Esc 的语义：一层一层往回退，而不是直接全关。
     pub(super) fn exit_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.clip.is_some() {
+        if self.tab_rename.is_some() {
+            // 输入框自己会吃掉 Esc（见 `on_rename_key`），这里兜住「焦点不在
+            // 根视图」的那一次，保证 Esc 总能关掉它。
+            self.tab_rename = None;
+        } else if self.clip.is_some() {
             // 输入框有焦点时 Esc 被 `on_clip_key` 截走（只退出焦点）；这里处理
             // 「焦点已经在播放器上」的那一次，把面板收起来。
             self.close_clip_dialog(cx);
@@ -15,6 +19,8 @@ impl PlayerApp {
             self.file_info = None;
         } else if self.item_menu.is_some() {
             self.item_menu = None;
+        } else if self.tab_menu.is_some() {
+            self.tab_menu = None;
         } else if self.panel_menu.is_some() {
             self.panel_menu = None;
         } else if self.menu_bar.is_some() {
@@ -437,6 +443,159 @@ impl PlayerApp {
         self.flash(format!("已关闭列表「{name}」"));
         self.poke();
         cx.notify();
+    }
+
+    /// 页签右键：在鼠标位置弹出菜单。越界就往窗口里收，别飘到屏幕外。
+    pub(super) fn open_tab_menu(
+        &mut self,
+        index: usize,
+        position: Point<Pixels>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        if index >= self.playlists.len() {
+            return;
+        }
+        let viewport = window.viewport_size();
+        let max_x = (f32::from(viewport.width) - TAB_MENU_WIDTH - 8.0).max(8.0);
+        let max_y = (f32::from(viewport.height) - TAB_MENU_HEIGHT - 8.0).max(8.0);
+        let position = point(
+            px(f32::from(position.x).clamp(8.0, max_x)),
+            px(f32::from(position.y).clamp(8.0, max_y)),
+        );
+
+        self.tab_menu = Some(TabMenu { index, position });
+        // 同一时刻只留一层右键菜单。
+        self.item_menu = None;
+        self.panel_menu = None;
+        self.menu = None;
+        self.menu_bar = None;
+        self.poke();
+        cx.notify();
+    }
+
+    /// 打开重命名输入框，预填当前名字。
+    pub(super) fn begin_rename(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.tab_menu = None;
+        let Some(tab) = self.playlists.tabs().get(index) else {
+            return;
+        };
+        let text = tab.name.clone();
+        self.tab_rename = Some(TabRename {
+            index,
+            text,
+            typed: false,
+        });
+        self.poke();
+        cx.notify();
+    }
+
+    /// 确认改名。名字为空时保留原名，等于什么也没发生。
+    pub(super) fn finish_rename(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.tab_rename.take() else {
+            return;
+        };
+        let name = dialog.text.trim().to_string();
+        if name.is_empty() {
+            // 空名字会让页签看起来像丢了标题；退回原名，比留个空白页签好。
+            self.flash("列表名不能为空，已保留原名");
+            cx.notify();
+            return;
+        }
+        let Some(current) = self
+            .playlists
+            .tabs()
+            .get(dialog.index)
+            .map(|tab| tab.name.clone())
+        else {
+            // 页签在输入过程中被关掉了：没有可改的对象，静默收场。
+            cx.notify();
+            return;
+        };
+        if current == name {
+            cx.notify();
+            return;
+        }
+        self.playlists.rename(dialog.index, name.clone());
+        self.playlists.save();
+        self.flash(format!("已改名为「{name}」"));
+        self.poke();
+        cx.notify();
+    }
+
+    /// 重命名输入框的键盘：Enter 确认、Esc 取消、退格删除、其余可打印字符追加。
+    pub(super) fn on_rename_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        if self.tab_rename.is_none() {
+            return false;
+        }
+        let modifiers = event.keystroke.modifiers;
+        // 粘贴：输入框走的是按键转换，中文字符进不来（没有输入法处理器），
+        // 想用中文名只能从别处复制进来。
+        if (modifiers.control || modifiers.platform) && event.keystroke.key == "v" {
+            if let Some(text) = cx
+                .read_from_clipboard()
+                .and_then(|item| item.text().map(|text| text.to_string()))
+            {
+                if let Some(dialog) = self.tab_rename.as_mut() {
+                    let clipped: String = text
+                        .chars()
+                        .filter(|ch| !ch.is_control())
+                        .take(MAX_TAB_NAME_CHARS)
+                        .collect();
+                    dialog.text = clipped.trim().to_string();
+                    dialog.typed = true;
+                }
+                cx.notify();
+            }
+            return true;
+        }
+        // 其余组合键留给播放器：输入框只吃纯文本和编辑键。
+        if modifiers.control || modifiers.platform || modifiers.alt {
+            return false;
+        }
+
+        match event.keystroke.key.as_str() {
+            "enter" => {
+                self.finish_rename(cx);
+                true
+            }
+            "escape" => {
+                self.tab_rename = None;
+                cx.notify();
+                true
+            }
+            "backspace" => {
+                if let Some(dialog) = self.tab_rename.as_mut() {
+                    // 退格也算「动过键盘」：之后不能再把预填的名字整个清掉。
+                    dialog.typed = true;
+                    dialog.text.pop();
+                }
+                cx.notify();
+                true
+            }
+            _ => {
+                let Some(typed) = event.keystroke.key_char.as_deref() else {
+                    // 方向键、功能键这些没有字符的按键：对话框开着时一律吞掉。
+                    // 漏下去会让方向键去 seek，用户以为自己只是在挪光标。
+                    return true;
+                };
+                if typed.is_empty() || typed.chars().any(|ch| ch.is_control()) {
+                    return false;
+                }
+                if let Some(dialog) = self.tab_rename.as_mut() {
+                    // 第一次敲字就整个替换：预填只是告诉用户正在改哪一页。
+                    if !dialog.typed {
+                        dialog.text.clear();
+                        dialog.typed = true;
+                    }
+                    if dialog.text.chars().count() < MAX_TAB_NAME_CHARS {
+                        dialog.text.push_str(typed);
+                    }
+                }
+                cx.notify();
+                true
+            }
+        }
     }
 
     // -- 行右键菜单 --------------------------------------------------------

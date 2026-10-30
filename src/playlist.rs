@@ -548,11 +548,17 @@ impl PlaylistSet {
         &mut self.tabs[index].playlist
     }
 
-    pub fn rename_active(&mut self, name: impl Into<String>) {
-        let index = self.active();
+    /// 给某一页改名。页签和「全部列表」菜单都按这个名字显示。
+    pub fn rename(&mut self, index: usize, name: impl Into<String>) {
         if let Some(tab) = self.tabs.get_mut(index) {
             tab.name = name.into();
         }
+    }
+
+    /// 给当前显示的那一页改名。
+    pub fn rename_active(&mut self, name: impl Into<String>) {
+        let index = self.active();
+        self.rename(index, name);
     }
 
     /// 新建一页并切过去，返回新页的下标。

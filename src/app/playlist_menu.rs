@@ -73,6 +73,8 @@ impl PlayerApp {
 
     pub(super) fn toggle_panel_menu(&mut self, menu: PanelMenu, cx: &mut Context<Self>) {
         self.panel_menu = (self.panel_menu != Some(menu)).then_some(menu);
+        // 面板菜单和页签菜单是两层浮层，同时开着会互相盖住。
+        self.tab_menu = None;
         self.poke();
         cx.notify();
     }

@@ -108,9 +108,13 @@ impl Render for PlayerApp {
                 cx.listener(|this, _: &ExitOverlay, window, cx| this.exit_overlay(window, cx)),
             )
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                // 裁切面板只在输入框有焦点时接管键盘；轨道编辑对话框是模态的。
-                // 不拦住的话，输入框里的数字会顺带触发播放器的快捷键。
-                if this.on_clip_key(event, cx) || this.on_remux_key(event, cx) {
+                // 重命名输入框在最上层；裁切面板只在输入框有焦点时接管键盘；
+                // 轨道编辑对话框是模态的。不拦住的话，输入框里的字符会顺带
+                // 触发播放器的快捷键。
+                if this.on_rename_key(event, cx)
+                    || this.on_clip_key(event, cx)
+                    || this.on_remux_key(event, cx)
+                {
                     cx.stop_propagation();
                     return;
                 }
@@ -127,7 +131,8 @@ impl Render for PlayerApp {
                 cx.listener(|this, _: &MouseDownEvent, _window, cx| {
                     // 点任意别处先收起右键菜单；菜单项自己的点击会截断冒泡。
                     let lost_focus = this.clear_clip_focus();
-                    if this.item_menu.take().is_some() || lost_focus {
+                    let closed = this.item_menu.take().is_some() | this.tab_menu.take().is_some();
+                    if closed || lost_focus {
                         cx.notify();
                     }
                 }),
@@ -135,8 +140,9 @@ impl Render for PlayerApp {
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, _: &MouseDownEvent, _window, cx| {
-                    // 空白处右键同样收起菜单（行上的右键会截断，转去弹新菜单）。
-                    if this.item_menu.take().is_some() {
+                    // 空白处右键同样收起菜单（行上/页签上的右键会截断，转去弹新菜单）。
+                    let closed = this.item_menu.take().is_some() | this.tab_menu.take().is_some();
+                    if closed {
                         cx.notify();
                     }
                 }),
@@ -231,9 +237,12 @@ impl Render for PlayerApp {
             .children(self.render_error(panel_width, cx))
             // 右键菜单在普通浮层之上、模态面板之下。
             .children(self.render_item_menu(cx))
+            .children(self.render_tab_menu(cx))
             .children(self.render_settings(window, cx))
             .children(self.render_remux_dialog(cx))
             .children(self.render_file_info(cx))
+            // 重命名是模态的，压在所有东西上面。
+            .children(self.render_tab_rename(cx))
     }
 }
 

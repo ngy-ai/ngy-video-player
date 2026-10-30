@@ -41,6 +41,8 @@ impl PlayerApp {
             panel_menu: None,
             drop_spot: None,
             item_menu: None,
+            tab_menu: None,
+            tab_rename: None,
             file_info: None,
             clip: None,
             clip_generation: 0,

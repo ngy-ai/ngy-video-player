@@ -521,3 +521,36 @@ fn 老存档里的裸路径仍然能读() {
         "老存档没有加入时间，按添加时间排序时就保持原顺序"
     );
 }
+
+#[test]
+fn 列表页可以重命名() {
+    let mut set = PlaylistSet::default();
+    set.add("第二页");
+    assert_eq!(set.active(), 1);
+
+    set.rename(0, "剧集");
+    assert_eq!(set.tabs()[0].name, "剧集");
+
+    set.rename_active("综艺");
+    assert_eq!(set.tabs()[1].name, "综艺");
+    assert_eq!(set.tabs()[0].name, "剧集", "只改当前页，别的页不动");
+
+    // 越界索引静默忽略：右键菜单弹出后页签可能刚好被关掉了。
+    set.rename(9, "不存在");
+    assert_eq!(set.len(), 2);
+}
+
+#[test]
+fn 页签可以新建和关闭且至少留一页() {
+    let mut set = PlaylistSet::default();
+    set.add("第二页");
+    set.add("第三页");
+    assert_eq!(set.len(), 3);
+
+    assert!(set.remove(2));
+    assert_eq!(set.active(), 1);
+    assert!(set.remove(0));
+    assert_eq!(set.len(), 1);
+    assert!(!set.remove(0), "最后一页不让关");
+    assert_eq!(set.len(), 1);
+}
