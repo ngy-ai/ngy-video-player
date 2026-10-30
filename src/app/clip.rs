@@ -39,6 +39,13 @@ pub(super) struct ClipDialog {
     field: ClipField,
     state: ClipState,
     job: Option<Arc<ClipJob>>,
+    /// 拖动时间轴时的临时位置（秒）；`None` 表示没在拖。
+    ///
+    /// 拖动过程里不逐像素 seek：mpv 每次 seek 都要重新解码，拖快了画面会追不上，
+    /// 也让进度事件挤成一团。松手才真正跳过去（与主控制条的进度条一致）。
+    scrub: Option<f64>,
+    /// 时间轴的 bounds，由 canvas 在 prepaint 阶段写回。
+    bounds: Rc<Cell<Bounds<Pixels>>>,
 }
 
 impl ClipDialog {
@@ -52,7 +59,15 @@ impl ClipDialog {
             field: ClipField::Start,
             state: ClipState::Editing,
             job: None,
+            scrub: None,
+            bounds: Rc::new(Cell::new(Bounds::default())),
         }
+    }
+
+    /// 时间轴当前显示的位置：拖动时跟手，否则跟随播放进度。
+    fn scrub_position(&self, playing: f64) -> f64 {
+        let position = self.scrub.unwrap_or(playing);
+        position.clamp(0.0, self.duration.max(0.0))
     }
 
     fn editing(&self) -> bool {
@@ -136,6 +151,20 @@ impl PlayerApp {
                 self.start_clip(cx);
                 true
             }
+            // 选点要能看画面：编辑输入框时也放开播放控制的几个键。
+            // 空格在时间输入里没有意义，左右键也不用作文本光标（输入永远是追加/退格）。
+            "space" => {
+                self.toggle_play(cx);
+                true
+            }
+            "left" => {
+                self.seek_by(-5.0, cx);
+                true
+            }
+            "right" => {
+                self.seek_by(5.0, cx);
+                true
+            }
             "backspace" => {
                 if let Some(dialog) = self.clip.as_mut() {
                     dialog.active_text_mut().pop();
@@ -173,6 +202,68 @@ impl PlayerApp {
             (ClipField::Start, false) | (ClipField::End, true) => ClipField::End,
             (ClipField::End, false) | (ClipField::Start, true) => ClipField::Start,
         };
+        cx.notify();
+    }
+
+    /// 时间轴上的横坐标换算成秒。拿不到宽度时退回当前播放位置。
+    fn clip_position_for_x(&self, x: Pixels) -> f64 {
+        let Some(dialog) = self.clip.as_ref() else {
+            return self.snapshot.position;
+        };
+        let bounds = dialog.bounds.get();
+        let width = f32::from(bounds.size.width) as f64;
+        if width <= 1.0 || dialog.duration <= 0.0 {
+            return self.snapshot.position;
+        }
+        let offset = f32::from(x) - f32::from(bounds.origin.x);
+        let ratio = (offset as f64 / width).clamp(0.0, 1.0);
+        ratio * dialog.duration
+    }
+
+    fn clip_begin_seek(&mut self, x: Pixels, cx: &mut Context<Self>) {
+        let position = self.clip_position_for_x(x);
+        if let Some(dialog) = self.clip.as_mut() {
+            dialog.scrub = Some(position);
+        }
+        cx.notify();
+    }
+
+    fn clip_update_seek(&mut self, x: Pixels, cx: &mut Context<Self>) {
+        let position = self.clip_position_for_x(x);
+        let Some(dialog) = self.clip.as_mut() else {
+            return;
+        };
+        if dialog.scrub.is_some() {
+            dialog.scrub = Some(position);
+            cx.notify();
+        }
+    }
+
+    fn clip_end_seek(&mut self, cx: &mut Context<Self>) {
+        let Some(position) = self.clip.as_mut().and_then(|dialog| dialog.scrub.take()) else {
+            return;
+        };
+        // 松手才真正跳过去：拖动中逐像素 seek 会让画面一直追不上手指。
+        self.send(Command::SeekAbsolute(position));
+        self.poke();
+        cx.notify();
+    }
+
+    /// 把时间轴当前的位置写进开始/结束输入框。
+    fn clip_mark(&mut self, field: ClipField, cx: &mut Context<Self>) {
+        let playing = self.snapshot.position;
+        let Some(dialog) = self.clip.as_mut() else {
+            return;
+        };
+        let position = dialog.scrub_position(playing);
+        let text = clip_core::format_time(position);
+        let text: String = text.chars().take(MAX_INPUT_CHARS).collect();
+        match field {
+            ClipField::Start => dialog.start = text,
+            ClipField::End => dialog.end = text,
+        }
+        // 焦点跟到刚填的字段，接着用键盘微调或直接改都顺手。
+        dialog.field = field;
         cx.notify();
     }
 
@@ -338,63 +429,202 @@ impl PlayerApp {
             );
         }
 
-        body.child(
-            div()
-                .flex()
-                .gap(px(10.0))
-                .child(self.render_clip_field(
-                    ClipField::Start,
-                    "开始",
-                    &dialog.start,
-                    "留空 = 从头",
-                    cx,
-                ))
-                .child(self.render_clip_field(
-                    ClipField::End,
-                    "结束",
-                    &dialog.end,
-                    "留空 = 到最后",
-                    cx,
-                )),
-        )
-        .when_some(hint, |this, (text, ok)| {
-            this.child(
+        body.child(self.render_clip_scrubber(dialog, cx))
+            .child(
                 div()
-                    .text_size(px(11.0))
-                    .text_color(if ok { ui::accent() } else { ui::danger() })
-                    .child(text),
+                    .flex()
+                    .gap(px(10.0))
+                    .child(self.render_clip_field(
+                        ClipField::Start,
+                        "开始",
+                        &dialog.start,
+                        "留空 = 从头",
+                        cx,
+                    ))
+                    .child(self.render_clip_field(
+                        ClipField::End,
+                        "结束",
+                        &dialog.end,
+                        "留空 = 到最后",
+                        cx,
+                    )),
             )
-        })
-        .child(
+            .when_some(hint, |this, (text, ok)| {
+                this.child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(if ok { ui::accent() } else { ui::danger() })
+                        .child(text),
+                )
+            })
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap(px(8.0))
+                    .child(settings_button(
+                        "clip-cancel",
+                        "取消",
+                        true,
+                        cx.listener(|this, _: &ClickEvent, _window, cx| {
+                            this.close_clip_dialog(cx);
+                        }),
+                    ))
+                    .child(primary_button(
+                        "clip-start",
+                        "开始裁切",
+                        can_start,
+                        cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                            this.start_clip(cx);
+                        }),
+                    )),
+            )
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(text_faint())
+                    .child("精确重编码为 H.264 + AAC 的 mkv，耗时与片长相关；开始后可随时取消。"),
+            )
+            .into_any_element()
+    }
+
+    /// 时间轴：拖动定位、松手 seek，并把当前位置一键填进开始/结束。
+    ///
+    /// 轨道上还会压一层浅色标出已选的区间。输入框里的数字是精确值，但「这段在
+    /// 片子的哪个位置」看图更直接。
+    fn render_clip_scrubber(&self, dialog: &ClipDialog, cx: &mut Context<Self>) -> AnyElement {
+        let duration = dialog.duration.max(0.001);
+        let position = dialog.scrub_position(self.snapshot.position);
+        let ratio = (position / duration).clamp(0.0, 1.0) as f32;
+        let dragging = dialog.scrub.is_some();
+        let slot = dialog.bounds.clone();
+        let selected = dialog.range().ok().flatten();
+
+        let mut track = div()
+            .relative()
+            .h(px(6.0))
+            .w_full()
+            .rounded(px(3.0))
+            .bg(ui::track());
+        if let Some(range) = selected {
+            let left = (range.start / duration).clamp(0.0, 1.0) as f32;
+            let width = (range.duration() / duration).clamp(0.0, 1.0) as f32;
+            track = track.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(gpui_kit::relative(left))
+                    .w(gpui_kit::relative(width))
+                    .rounded(px(3.0))
+                    .bg(gpui_kit::rgba(0x5aa9ff4d)),
+            );
+        }
+        track = track.child(
             div()
-                .flex()
-                .items_center()
-                .justify_end()
-                .gap(px(8.0))
-                .child(settings_button(
-                    "clip-cancel",
-                    "取消",
-                    true,
-                    cx.listener(|this, _: &ClickEvent, _window, cx| {
-                        this.close_clip_dialog(cx);
-                    }),
-                ))
-                .child(primary_button(
-                    "clip-start",
-                    "开始裁切",
-                    can_start,
-                    cx.listener(move |this, _: &ClickEvent, _window, cx| {
-                        this.start_clip(cx);
-                    }),
-                )),
-        )
-        .child(
-            div()
-                .text_size(px(10.0))
-                .text_color(text_faint())
-                .child("精确重编码为 H.264 + AAC 的 mkv，耗时与片长相关；开始后可随时取消。"),
-        )
-        .into_any_element()
+                .absolute()
+                .left_0()
+                .top_0()
+                .bottom_0()
+                .w(gpui_kit::relative(ratio))
+                .rounded(px(3.0))
+                .bg(ui::accent())
+                .child(
+                    div()
+                        .absolute()
+                        .right(px(-4.5))
+                        .top(px(-2.5))
+                        .size(px(if dragging { 13.0 } else { 11.0 }))
+                        .rounded_full()
+                        .bg(ui::accent()),
+                ),
+        );
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(text_muted())
+                            .child("播放位置"),
+                    )
+                    .child(div().text_size(px(11.0)).text_color(text()).child(format!(
+                        "{} / {}",
+                        clip_core::format_time(position),
+                        clip_core::format_time(dialog.duration)
+                    ))),
+            )
+            .child(
+                div()
+                    .id("clip-scrub")
+                    .relative()
+                    .h(px(18.0))
+                    .w_full()
+                    .cursor(CursorStyle::PointingHand)
+                    .child(
+                        gpui_kit::canvas(
+                            move |bounds, _window, _cx| slot.set(bounds),
+                            |_bounds, (), _window, _cx| {},
+                        )
+                        .absolute()
+                        .inset_0(),
+                    )
+                    .child(track)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                            cx.stop_propagation();
+                            this.clip_begin_seek(event.position.x, cx);
+                        }),
+                    )
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                            this.clip_end_seek(cx);
+                        }),
+                    )
+                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                        this.clip_update_seek(event.position.x, cx);
+                    })),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(settings_button(
+                        "clip-mark-start",
+                        "设为开始",
+                        true,
+                        cx.listener(|this, _: &ClickEvent, _window, cx| {
+                            this.clip_mark(ClipField::Start, cx);
+                        }),
+                    ))
+                    .child(settings_button(
+                        "clip-mark-end",
+                        "设为结束",
+                        true,
+                        cx.listener(|this, _: &ClickEvent, _window, cx| {
+                            this.clip_mark(ClipField::End, cx);
+                        }),
+                    ))
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(text_faint())
+                            .child("空格播放/暂停，← → 微调 5 秒"),
+                    ),
+            )
+            .into_any_element()
     }
 
     fn render_clip_field(
