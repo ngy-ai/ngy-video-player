@@ -104,6 +104,31 @@ impl PlayerApp {
         self.set_volume(volume);
     }
 
+    /// 结束所有「按住拖动」的手势：进度条、音量、倍速、播放列表宽度。
+    ///
+    /// 松手落在窗口外时鼠标下面是空的，元素上的 `on_mouse_up` 一个都不会触发
+    /// （它们要 `is_hovered` 为真），拖动状态就会一直在：进度条保持加粗、继续
+    /// 跟着指针走，直到下一次在窗口里随手点一下。窗口级的抬起与「抬起在窗口外」
+    /// 两路共用一个出口，才不会各自漏一半。
+    pub(super) fn release_drags(&mut self, cx: &mut Context<Self>) {
+        if self.dragging.is_some() {
+            self.end_progress_drag(cx);
+        }
+        if self.volume_dragging {
+            self.volume_dragging = false;
+            self.settings.volume = self.snapshot.volume;
+        }
+        if self.speed_dragging {
+            self.speed_dragging = false;
+            self.settings.save();
+        }
+        if self.playlist_dragging {
+            // 宽度只在松手时落盘：拖动过程里每移动一像素写一次太浪费。
+            self.playlist_dragging = false;
+            self.settings.save();
+        }
+    }
+
     pub(super) fn render_controls(&self, panel: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let snapshot = &self.snapshot;
         let playing = !snapshot.paused;

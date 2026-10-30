@@ -159,24 +159,14 @@ impl Render for PlayerApp {
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _: &MouseUpEvent, _window, cx| {
-                    if this.dragging.is_some() {
-                        this.end_progress_drag(cx);
-                    }
-                    if this.volume_dragging {
-                        this.volume_dragging = false;
-                        this.settings.volume = this.snapshot.volume;
-                    }
-                    if this.speed_dragging {
-                        this.speed_dragging = false;
-                        this.settings.save();
-                    }
-                    if this.playlist_dragging {
-                        // 宽度只在松手时落盘：拖动过程里每移动一像素写一次太浪费。
-                        this.playlist_dragging = false;
-                        this.settings.save();
-                    }
-                }),
+                cx.listener(|this, _: &MouseUpEvent, _window, cx| this.release_drags(cx)),
+            )
+            // 拖到窗口外再松手时命中测试是空的，窗口里一个 hitbox 都没有，
+            // 上面那个 `on_mouse_up` 永远不会执行，拖动状态就卡住了。
+            // `on_mouse_up_out` 只在抬起时指针不在本元素范围内触发，正好兜住这一路。
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _window, cx| this.release_drags(cx)),
             )
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, cx| {
                 let delta = match event.delta {

@@ -243,6 +243,15 @@ impl MiniPlayer {
         .detach();
     }
 
+    /// 松开进度条：把拖到的位置真正 seek 过去。
+    pub(super) fn end_progress_drag(&mut self, cx: &mut Context<Self>) {
+        let Some(position) = self.dragging.take() else {
+            return;
+        };
+        self.forward(cx, |app, cx| app.seek_to(position, cx));
+        cx.notify();
+    }
+
     /// 指针横坐标换算成片内秒数。
     pub(super) fn time_for_x(&self, x: Pixels) -> f64 {
         let bounds = self.progress_bounds.get();
@@ -490,11 +499,16 @@ impl MiniPlayer {
                     .on_mouse_up(
                         MouseButton::Left,
                         cx.listener(|this, _: &MouseUpEvent, _window, cx| {
-                            let Some(position) = this.dragging.take() else {
-                                return;
-                            };
-                            this.forward(cx, |app, cx| app.seek_to(position, cx));
-                            cx.notify();
+                            this.end_progress_drag(cx)
+                        }),
+                    )
+                    // 小窗又矮又窄，拖进度条时指针很容易跑到窗外；那种情况下抬起
+                    // 落在空的命中区里，上面的 `on_mouse_up` 收不到。和主窗口一样
+                    // 补一条「抬起在本元素之外」的路径。
+                    .on_mouse_up_out(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                            this.end_progress_drag(cx)
                         }),
                     ),
             )
