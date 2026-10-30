@@ -6,7 +6,8 @@ impl PlayerApp {
     /// Esc 的语义：一层一层往回退，而不是直接全关。
     pub(super) fn exit_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.clip.is_some() {
-            // 裁切对话框通常由 `on_clip_key` 直接处理 Esc；这里兜住仍走 action 的路径。
+            // 输入框有焦点时 Esc 被 `on_clip_key` 截走（只退出焦点）；这里处理
+            // 「焦点已经在播放器上」的那一次，把面板收起来。
             self.close_clip_dialog(cx);
         } else if self.show_settings {
             self.show_settings = false;

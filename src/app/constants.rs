@@ -26,6 +26,10 @@ pub(super) const MENUBAR_HEIGHT: f32 = 32.0;
 /// 见 `PlayerApp::playlist_max_width`。
 pub(super) const PLAYLIST_MIN_WIDTH: f32 = 220.0;
 pub(super) const PLAYLIST_MAX_WIDTH: f32 = 760.0;
+/// 裁切面板的宽度。它和播放列表一样贴右侧，视频与控制条按它让位。
+///
+/// 固定宽度而不给拖动条：裁切面板的内容都是定宽控件，拖宽只会让中间空出一片。
+pub(super) const CLIP_PANEL_WIDTH: f32 = 340.0;
 /// 控制条一行排下全部按钮所需的宽度。
 ///
 /// 控制条按「窗口宽 - 面板宽」定宽，面板一旦把这一条压窄，右侧的倍速、

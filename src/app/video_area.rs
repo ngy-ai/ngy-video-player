@@ -44,11 +44,7 @@ impl PlayerApp {
         let viewport = window.viewport_size();
         let scale = window.scale_factor();
         // 面板占掉的那一条不算视频区域，否则缩画面时会被拉伸。
-        let panel = if self.settings.show_playlist {
-            self.playlist_width(window)
-        } else {
-            0.0
-        };
+        let panel = self.side_panel_width(window);
         let area_width = (f32::from(viewport.width) - panel).max(2.0) * scale;
         // 窗口模式下菜单栏占掉了顶部一条，渲染目标要扣掉，否则画面会被裁掉一截。
         let chrome = if window.is_fullscreen() {

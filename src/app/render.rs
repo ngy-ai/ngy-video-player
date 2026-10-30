@@ -6,6 +6,7 @@ impl Render for PlayerApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.swap_frame(window);
         self.drop_retired_previews(window);
+        self.sync_clip_source(cx);
         self.poll_clip_preview(cx);
         self.update_render_target(window);
         self.sync_on_top(window, cx);
@@ -31,11 +32,7 @@ impl Render for PlayerApp {
             px(MENUBAR_HEIGHT + 16.0)
         };
         // 面板宽度只算一次：画面、控制条、面板本身都按同一个数让位。
-        let panel_width = if self.settings.show_playlist {
-            self.playlist_width(window)
-        } else {
-            0.0
-        };
+        let panel_width = self.side_panel_width(window);
 
         div()
             .id("root")
@@ -109,8 +106,8 @@ impl Render for PlayerApp {
                 cx.listener(|this, _: &ExitOverlay, window, cx| this.exit_overlay(window, cx)),
             )
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                // 裁切 / 轨道编辑对话框是模态的：按键先交给它们。不拦住的话，输入框
-                // 里的空格、方向键会顺带触发播放器的快捷键。
+                // 裁切面板只在输入框有焦点时接管键盘；轨道编辑对话框是模态的。
+                // 不拦住的话，输入框里的数字会顺带触发播放器的快捷键。
                 if this.on_clip_key(event, cx) || this.on_remux_key(event, cx) {
                     cx.stop_propagation();
                     return;
@@ -127,7 +124,8 @@ impl Render for PlayerApp {
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, _window, cx| {
                     // 点任意别处先收起右键菜单；菜单项自己的点击会截断冒泡。
-                    if this.item_menu.take().is_some() {
+                    let lost_focus = this.clear_clip_focus();
+                    if this.item_menu.take().is_some() || lost_focus {
                         cx.notify();
                     }
                 }),
@@ -221,7 +219,9 @@ impl Render for PlayerApp {
                 cx.notify();
             }))
             .child(self.render_video_area(video_top, panel_width, cx))
-            .when(self.settings.show_playlist, |this| {
+            // 裁切面板与播放列表互斥，占同一条右侧通道；裁切开着时优先它。
+            .children(self.render_clip_panel(video_top, panel_width, cx))
+            .when(self.settings.show_playlist && self.clip.is_none(), |this| {
                 this.child(self.render_playlist(video_top, panel_width, cx))
             })
             .when(self.controls_visible(), |this| {
@@ -237,7 +237,6 @@ impl Render for PlayerApp {
             // 右键菜单在普通浮层之上、模态面板之下。
             .children(self.render_item_menu(cx))
             .children(self.render_settings(window, cx))
-            .children(self.render_clip_dialog(cx))
             .children(self.render_remux_dialog(cx))
             .children(self.render_file_info(cx))
     }

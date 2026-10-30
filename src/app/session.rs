@@ -161,6 +161,22 @@ impl PlayerApp {
         self.playing_tab
     }
 
+    /// 右侧面板占的宽度：裁切面板与播放列表互斥，同一时刻最多一条。
+    ///
+    /// 画面、控制条、菜单都按这个数让位，所以只能有一个地方算——三处各算一次
+    /// 迟早会有一处忘了改，表现为画面被面板盖住一条。
+    pub(super) fn side_panel_width(&self, window: &Window) -> f32 {
+        if self.clip.is_some() {
+            // 与控制条共享宽度：面板再宽也不能把控制条右侧按钮挤出窗口。
+            let available = f32::from(window.viewport_size().width);
+            CLIP_PANEL_WIDTH.min((available - CONTROLS_MIN_WIDTH).max(240.0))
+        } else if self.settings.show_playlist {
+            self.playlist_width(window)
+        } else {
+            0.0
+        }
+    }
+
     /// 面板宽度：跟着窗口收，避免窗口缩小后面板把画面整块吃掉。
     pub(super) fn playlist_width(&self, window: &Window) -> f32 {
         let available = f32::from(window.viewport_size().width);
@@ -314,6 +330,11 @@ impl PlayerApp {
     /// 「关着的时候选的」行还亮着，Delete 也不该删到看不见的东西。
     pub(super) fn set_playlist_visible(&mut self, visible: bool) {
         self.settings.show_playlist = visible;
+        if visible {
+            // 裁切面板与列表共用右侧通道：切到列表就把裁切收起来。
+            // 任务一并取消，半成品由任务线程删掉。
+            self.dismiss_clip_panel();
+        }
         if !visible {
             self.selection.clear();
             self.selection_anchor = None;
