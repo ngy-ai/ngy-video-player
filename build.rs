@@ -1,17 +1,21 @@
-//! 构建期准备：图标资源与内嵌的 libmpv。
+//! 构建期准备：图标资源、内嵌的 libmpv 与 ffmpeg。
 //!
 //! 1. 把 `assets/icon.ico` 嵌进可执行文件。Windows 的窗口与任务栏图标取自 exe 的
 //!    资源段，gpui 的 `WindowOptions::icon` 只对 X11 生效，所以只能在构建这一层嵌。
 //! 2. release 构建把 `libs/<平台>/` 下的 libmpv 内嵌进可执行文件，做出「一个 exe
 //!    就能播」的分发形态（见 `src/player/embed.rs`、`docs/adr/0005`）。
+//! 3. release 构建同样内嵌 `libs/<平台>/ffmpeg{,.exe}`：裁切片段要用它重编码，
+//!    而要求用户自己装 ffmpeg 会把「随包附带」变成一句空话（见 `src/platform/ffmpeg.rs`）。
 //!
-//! 两件事都「尽力而为」：图标嵌不进去、库找不到，都只发 warning 不中断构建。
+//! 这几件事都「尽力而为」：图标嵌不进去、可执行文件找不到，都只发 warning 不中断构建。
 //! 缺库时程序本来就能启动并说明缺什么，不该因此让整个项目编译不过。
 
 use std::path::{Path, PathBuf};
 
-/// 本脚本生成的模块，由 `src/player/embed.rs` 用 `include!` 拉进来。
-const GENERATED: &str = "mpv_embed.rs";
+/// libmpv 的内嵌表，由 `src/player/embed.rs` 用 `include!` 拉进来。
+const MPV_GENERATED: &str = "mpv_embed.rs";
+/// ffmpeg 的内嵌表，由 `src/platform/ffmpeg.rs` 用 `include!` 拉进来。
+const FFMPEG_GENERATED: &str = "ffmpeg_embed.rs";
 
 fn main() {
     // 监视整个目录而不是单个文件：图标是脚本生成的，首次构建可能还不存在。
@@ -21,11 +25,13 @@ fn main() {
     // 换掉 libs/ 里的库就要重新内嵌，同理监视整个目录。
     println!("cargo:rerun-if-changed=libs");
     println!("cargo:rerun-if-env-changed=NGY_EMBED_MPV");
+    println!("cargo:rerun-if-env-changed=NGY_EMBED_FFMPEG");
 
     #[cfg(windows)]
     embed_icon();
 
     embed_libmpv();
+    embed_ffmpeg();
 }
 
 #[cfg(windows)]
@@ -56,7 +62,7 @@ fn embed_icon() {
 /// 生成 `mpv_embed.rs`：这次构建要不要把 libmpv 一起塞进二进制。
 fn embed_libmpv() {
     let generated =
-        PathBuf::from(std::env::var("OUT_DIR").expect("cargo 未提供 OUT_DIR")).join(GENERATED);
+        PathBuf::from(std::env::var("OUT_DIR").expect("cargo 未提供 OUT_DIR")).join(MPV_GENERATED);
 
     match embed_source() {
         Some(source) => {
@@ -71,6 +77,64 @@ fn embed_libmpv() {
         // 不该为了「这次没内嵌」分叉出两套代码。
         None => write_generated(&generated, None),
     }
+}
+
+/// 生成 `ffmpeg_embed.rs`：这次构建要不要把 ffmpeg 可执行文件一起塞进二进制。
+fn embed_ffmpeg() {
+    let generated = PathBuf::from(std::env::var("OUT_DIR").expect("cargo 未提供 OUT_DIR"))
+        .join(FFMPEG_GENERATED);
+
+    match ffmpeg_source() {
+        Some(source) => {
+            write_generated(&generated, Some(&source));
+            println!(
+                "cargo:warning=已内嵌 {}（{:.1} MB）：裁切片段不需要用户另外安装 ffmpeg",
+                source.display(),
+                size_mb(&source)
+            );
+        }
+        None => write_generated(&generated, None),
+    }
+}
+
+/// 决定内嵌哪一份 ffmpeg。
+///
+/// 优先级与 libmpv 一致：`NGY_EMBED_FFMPEG`（显式指定路径；设为 `0` 表示不内嵌）
+/// → `libs/<平台>/ffmpeg{,.exe}`。同样只在 release 自动内嵌：开发期 `libs/` 就在
+/// 项目里，运行时自己找得到，不必每次链接都搬运上百 MB。
+fn ffmpeg_source() -> Option<PathBuf> {
+    if let Ok(explicit) = std::env::var("NGY_EMBED_FFMPEG") {
+        if explicit.is_empty() || explicit == "0" {
+            return None;
+        }
+        let path = PathBuf::from(&explicit);
+        if path.is_file() {
+            return Some(path);
+        }
+        println!("cargo:warning=NGY_EMBED_FFMPEG={explicit} 不是文件，本次不内嵌 ffmpeg");
+        return None;
+    }
+
+    if std::env::var("PROFILE").as_deref() != Ok("release") {
+        return None;
+    }
+
+    let libs = Path::new(&std::env::var("CARGO_MANIFEST_DIR").ok()?)
+        .join("libs")
+        .join(platform_dir());
+    let found = ffmpeg_names()
+        .iter()
+        .map(|name| libs.join(name))
+        .find(|candidate| candidate.is_file());
+
+    if found.is_none() {
+        println!(
+            "cargo:warning=release 构建没找到 ffmpeg（{}），产物不带内置 ffmpeg，\
+             裁切功能在没装 ffmpeg 的机器上不可用；先运行 scripts/fetch-ffmpeg.sh 再构建",
+            libs.display()
+        );
+    }
+    found
 }
 
 /// 决定内嵌哪一份库。
@@ -178,5 +242,14 @@ fn lib_names() -> &'static [&'static str] {
         &["libmpv.2.dylib", "libmpv.dylib"]
     } else {
         &["libmpv.so.2", "libmpv.so.1", "libmpv.so"]
+    }
+}
+
+/// ffmpeg 可执行文件名。只有 Windows 带 `.exe`。
+fn ffmpeg_names() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["ffmpeg.exe"]
+    } else {
+        &["ffmpeg"]
     }
 }

@@ -7,6 +7,8 @@
 
 pub mod associations;
 pub mod clipboard;
+// 裁切片段用的 ffmpeg：release 构建内嵌，运行时解压后以子进程调用。
+pub mod ffmpeg;
 pub mod gpu;
 pub mod open;
 pub mod reveal;

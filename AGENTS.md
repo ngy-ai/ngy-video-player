@@ -5,6 +5,9 @@
 跨平台视频播放器：**gpui-kit**（Zed GPUI）做界面，**libmpv** 做解复用/解码/字幕。
 Windows / macOS / Ubuntu 同一套纯 Rust 代码，libmpv 通过 `libloading` 在运行时加载。
 
+裁切片段要调用 **ffmpeg** 重编码：release 构建把 ffmpeg 与 libmpv 一起内嵌进 exe，
+运行时解压到缓存目录再以子进程调用（见 `src/platform/ffmpeg.rs`、`src/embed.rs`）。
+
 ## 常用命令
 
 ```bash
@@ -15,6 +18,7 @@ cargo test --test playlist        # 单个测试文件
 cargo fmt                         # 格式化
 cargo clippy --all-targets        # 静态检查
 ./scripts/fetch-libmpv.sh         # 拉取 libmpv 到 libs/<平台>/
+./scripts/fetch-ffmpeg.sh         # 拉取 ffmpeg 到 libs/<平台>/
 ```
 
 - Rust edition 2024，MSRV 跟随当前稳定版。
@@ -31,16 +35,19 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  picture、playlist_ops、video_area、controls、menus、bar、
                  menu_bar、associations、playlist_ui、playlist_menu（面板上的弹出
                  菜单：添加/排序/全部列表）、playlist_sort（排序 + 拖动重排）、
-                 overlays、mini、render、
+                 clip（裁切对话框）、overlays、mini、render、
                  settings_panel/（统一设置窗口：tabs + 各标签页 + 恢复默认）
 src/ui.rs        配色、图标按钮、时间格式、等比画面
 src/formats.rs   扩展名清单（文件过滤器 + 拖入判断）
+src/clip.rs      裁切片段：时间解析、区间校验、ffmpeg 任务与进度
+src/embed.rs     内嵌资源（libmpv / ffmpeg）解压到缓存目录
 src/playlist.rs  播放列表、m3u/pls 解析、目录展开、自然序
 src/playlist/sort.rs  按名称/修改时间/添加时间排序、手工重排、最近 3 版顺序历史
 src/screenshot.rs 截图落点与文件名
 src/settings.rs  偏好持久化
 src/logging.rs   终端 + 滚动日志文件
-src/platform/    associations.rs（文件关联：注册/撤销/状态，按平台实现）
+src/platform/    ffmpeg.rs（裁切用的 ffmpeg：内嵌→exe 同目录→libs→PATH）、
+                 associations.rs（文件关联：注册/撤销/状态，按平台实现）
 src/player/      ffi.rs（运行时绑定）、embed.rs（内嵌库解压）、frame.rs、probe.rs、thumbnail.rs
 src/player/engine.rs  引擎入口：Engine 句柄、Shared 共享状态、命令/查询接口
 src/player/engine/    state（对外类型）、event_loop、dispatch、render_loop

@@ -71,6 +71,7 @@ actions!(
 // 子模块按职责拆分：`PlayerApp` 的方法分散在各文件里，Rust 允许同一类型有多个 impl 块。
 mod associations;
 mod bar;
+mod clip;
 mod constants;
 mod controls;
 mod format;
@@ -91,6 +92,7 @@ mod video_area;
 mod widgets;
 mod window;
 
+use self::clip::ClipDialog;
 use self::constants::*;
 use self::format::*;
 use self::mini::MiniPlayer;
@@ -202,6 +204,11 @@ pub struct PlayerApp {
     item_menu: Option<ItemMenu>,
     /// 「查看格式」面板；`None` 表示没打开。
     file_info: Option<FileInfoPanel>,
+    /// 裁切片段对话框；`None` 表示没打开。
+    clip: Option<ClipDialog>,
+    /// 裁切任务代次。后台任务回来时用它确认事件仍属于当前对话框，
+    /// 否则关掉再打开一次，旧任务的完成事件会改写新对话框。
+    clip_generation: u64,
     settings: Settings,
     /// 上一次真正下发给窗口系统的置顶状态。
     ///
@@ -416,6 +423,7 @@ enum BarAction {
     /// 打开设置窗口；`Some` 表示直接切到那一页。
     OpenSettings(Option<SettingsTab>),
     TakeScreenshot,
+    Trim,
     SetAsDefaultPlayer,
     OpenDefaultApps,
     RemoveAssociations,

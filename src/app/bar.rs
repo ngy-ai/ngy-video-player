@@ -14,6 +14,11 @@ impl PlayerApp {
                 ));
                 items.push(BarItem::Entry(BarEntry::new("打开文件夹…", OpenFolder)));
                 items.push(BarItem::Separator);
+                // 没有片子、或者时长还没读出来时无从裁切。
+                items.push(BarItem::Entry(BarEntry::new("裁切片段…", Trim).enabled(
+                    self.snapshot.path.is_some() && self.snapshot.duration > 0.0,
+                )));
+                items.push(BarItem::Separator);
                 items.push(BarItem::Entry(BarEntry::new("退出", Quit)));
             }
             BarMenu::Playback => {
@@ -224,6 +229,7 @@ impl PlayerApp {
             BarAction::ToggleHelp => self.toggle_settings(SettingsTab::Shortcuts),
             BarAction::OpenSettings(tab) => self.open_settings(tab),
             BarAction::TakeScreenshot => self.take_screenshot(cx),
+            BarAction::Trim => self.open_clip_dialog(cx),
             BarAction::SetAsDefaultPlayer => self.set_default_player(),
             BarAction::OpenDefaultApps => self.open_default_apps(),
             BarAction::RemoveAssociations => self.remove_associations(window, cx),

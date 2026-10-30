@@ -108,6 +108,12 @@ impl Render for PlayerApp {
                 cx.listener(|this, _: &ExitOverlay, window, cx| this.exit_overlay(window, cx)),
             )
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+                // 裁切对话框是模态的：按键先交给它。不拦住的话，输入框里的空格、
+                // 方向键会顺带触发播放器的快捷键。
+                if this.on_clip_key(event, cx) {
+                    cx.stop_propagation();
+                    return;
+                }
                 // `?` 不走键位表：GPUI 的键位串匹配的是**键帽字符**（`/` 而不是
                 // `?`），而且不同键盘布局上 `?` 落在哪个键也不一样。直接看实际
                 // 打出来的字符，`shift-/`、法语 AZERTY、德语 QWERTZ 都能命中。
@@ -230,6 +236,7 @@ impl Render for PlayerApp {
             // 右键菜单在普通浮层之上、模态面板之下。
             .children(self.render_item_menu(cx))
             .children(self.render_settings(window, cx))
+            .children(self.render_clip_dialog(cx))
             .children(self.render_file_info(cx))
     }
 }

@@ -5,7 +5,10 @@ use super::*;
 impl PlayerApp {
     /// Esc 的语义：一层一层往回退，而不是直接全关。
     pub(super) fn exit_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.show_settings {
+        if self.clip.is_some() {
+            // 裁切对话框通常由 `on_clip_key` 直接处理 Esc；这里兜住仍走 action 的路径。
+            self.close_clip_dialog(cx);
+        } else if self.show_settings {
             self.show_settings = false;
         } else if self.file_info.is_some() {
             self.file_info = None;

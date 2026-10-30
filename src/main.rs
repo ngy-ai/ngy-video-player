@@ -52,6 +52,7 @@ fn print_help() {
          \n\
          环境变量:\n\
           NGY_MPV_LIB        指定 libmpv 库文件路径\n\
+          NGY_FFMPEG         指定裁切片段用的 ffmpeg 可执行文件\n\
           NGY_MPV_VERBOSE=1  输出 libmpv 详细日志（排查解码问题）\n\
           NGY_VIDEO_LOG_DIR  自定义日志目录\n\
           NGY_VIDEO_CONFIG_DIR 自定义配置目录",

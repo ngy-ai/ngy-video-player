@@ -37,8 +37,9 @@ mpv 的 render API 支持把解码结果直接渲染到一块 CPU 内存（`MPV_
 ## 构建
 
 ```bash
-# 1. 准备 libmpv（放到 libs/<平台>/）
+# 1. 准备 libmpv 与 ffmpeg（放到 libs/<平台>/）
 ./scripts/fetch-libmpv.sh
+./scripts/fetch-ffmpeg.sh
 
 # 2. 编译运行
 cargo run --release -- path/to/video.mkv
@@ -46,24 +47,25 @@ cargo run --release -- path/to/video.mkv
 
 ### 打包：一个 exe
 
-release 构建会把 `libs/<平台>/` 里的 libmpv **内嵌进可执行文件**，所以
-`target/release/ngy-video-player.exe` 本身就是完整分发包：拷到任何一台没装过 mpv 的
-机器上都能直接播，不需要在旁边摆 dll。
+release 构建会把 `libs/<平台>/` 里的 libmpv 与 ffmpeg **内嵌进可执行文件**，所以
+`target/release/ngy-video-player.exe` 本身就是完整分发包：拷到任何一台没装过 mpv、
+也没装 ffmpeg 的机器上都能直接播、直接裁切片段。
 
 ```bash
 ./scripts/fetch-libmpv.sh   # 库放到 libs/<平台>/（只需一次）
-cargo build --release       # 产物约 130MB，其中约 116MB 是库
+./scripts/fetch-ffmpeg.sh   # 可执行文件放到另一个目录（同样只需一次）
+cargo build --release       # 产物约 220MB：约 116MB libmpv + 约 90MB ffmpeg
 ```
 
-首次启动会把内置的库解压到用户缓存目录，之后直接复用：
+首次启动会把内置的库与 ffmpeg 解压到用户缓存目录，之后直接复用：
 
 | 平台 | 落点 |
 | --- | --- |
-| Windows | `%LOCALAPPDATA%\ngy-video-player\libmpv\` |
-| macOS | `~/Library/Caches/ngy-video-player/libmpv/` |
-| Linux | `~/.cache/ngy-video-player/libmpv/` |
+| Windows | `%LOCALAPPDATA%\ngy-video-player\libmpv\`、`...\ffmpeg\` |
+| macOS | `~/Library/Caches/ngy-video-player/libmpv/`、`.../ffmpeg/` |
+| Linux | `~/.cache/ngy-video-player/libmpv/`、`.../ffmpeg/` |
 
-文件名带内容哈希（`9665c142b49567cc-libmpv-2.dll`）：换了库版本会写出新文件，
+文件名带内容哈希（`9665c142b49567cc-libmpv-2.dll`）：换了版本会写出新文件，
 旧的在下次解压后清掉，不会误用上一版的库。
 
 exe 也不依赖系统里的 VC++ 运行库：Windows 目标在 `.cargo/config.toml` 里静态链接
@@ -72,7 +74,7 @@ VCRUNTIME140.dll，无法继续执行代码」（见 `docs/adr/0006`）。
 
 - debug 构建不内嵌（开发期 `libs/` 就在手边，每次链接搬上百 MB 没有意义）；
 - `NGY_EMBED_MPV=<路径>` 指定要内嵌的库，`NGY_EMBED_MPV=0` 关掉内嵌，
-  做出「库放在旁边」的轻薄 exe；
+  做出「库放在旁边」的轻薄 exe；`NGY_EMBED_FFMPEG` 对 ffmpeg 同理；
 - 内嵌只搬 libmpv 本身：Windows 的 `libmpv-2.dll` 是自包含的，macOS/Linux 从
   Homebrew / 发行版拿到的库还依赖同目录或固定路径上的其它共享库，跨机器分发请
   继续用 `bash scripts/bundle-macos.sh` 生成的 `.app`。
@@ -144,6 +146,20 @@ macOS 上是把图片本身放进剪贴板，Linux 的两个后端只支持文�
 （按钮文案会写成「复制路径」）。鼠标停在卡片上时不自动收起，`Esc` 或右上角的 `×`
 可以立刻关掉。
 
+### 裁切片段
+
+菜单「文件 → 裁切片段…」把当前视频的一段另存为新文件。开始、结束手动输入，
+支持 `90`、`1:30`、`01:02:03.500` 三种写法：
+
+- 开始留空 = 从头开始；
+- 结束留空 = 直到最后；
+- 两端都留空 = 不裁切，按钮不可用。
+
+走精确重编码（H.264 + AAC 的 mkv），起点精确到帧，字幕与多条音轨一并保留；
+输出到原文件同目录，名字是「原文件名 - 片段.mkv」，已有同名文件时自动编号，不会覆盖。
+耗时与片段长度、CPU 相关，进度显示在对话框里，可随时取消。10bit / HDR 源会被转成
+8bit SDR——这是重编码路径上已知的取舍。
+
 ### 设置窗口
 
 所有偏好都收在一个模态窗口里（菜单「设置 → 设置…」，或按 `A` / `?` 直达对应页），
@@ -197,6 +213,7 @@ macOS 上是把图片本身放进剪贴板，Linux 的两个后端只支持文�
 | 变量 | 用途 |
 | --- | --- |
 | `NGY_MPV_LIB` | 指定 libmpv 库文件路径 |
+| `NGY_FFMPEG` | 指定裁切用的 ffmpeg 可执行文件路径 |
 | `NGY_MPV_VERBOSE=1` | 输出 libmpv 详细日志（排查解码问题） |
 | `NGY_VIDEO_LOG_DIR` | 自定义日志目录 |
 | `NGY_VIDEO_CONFIG_DIR` | 自定义配置目录 |
@@ -218,9 +235,12 @@ src/
 ├─ formats.rs       扩展名清单（文件过滤器 + 拖入判断）
 ├─ playlist.rs      播放列表与 m3u/pls 解析、目录展开、自然序
 ├─ screenshot.rs    截图落点与文件名
+├─ clip.rs          裁切片段：时间解析、区间校验、ffmpeg 任务与进度
+├─ embed.rs         内嵌资源（libmpv / ffmpeg）解压到缓存目录
 ├─ settings.rs      偏好持久化
 ├─ logging.rs       终端 + 滚动日志文件
 ├─ platform/        系统集成
+│  ├─ ffmpeg.rs    裁切用的 ffmpeg：内嵌 → exe 同目录 → libs/ → PATH
 │  └─ associations.rs  文件关联：注册 / 撤销 / 状态
 │     ├─ windows.rs    注册表 + Capabilities
 │     ├─ linux.rs      .desktop + mimeapps.list
@@ -251,9 +271,10 @@ src/
   需要的话在设置窗口的「视频设置」页里切到智能解码或硬件解码，不必手改配置文件。
 - 播放显卡只在 Windows 上能列出（`EnumDisplayDevicesW`），且只对硬件解码这一路有意义；
   Linux/macOS 显示「系统自动选择」。
-- 单文件分发的 exe 约 130MB（其中约 116MB 是内嵌的 libmpv），首次启动要多花一次解压
-  的时间写进缓存目录。不想要这个体积就 `NGY_EMBED_MPV=0 cargo build --release`，
-  改回「库放在 exe 旁边」的分发方式。
+- 单文件分发的 exe 约 220MB（约 116MB libmpv + 约 90MB ffmpeg），首次启动要多花一次
+  解压的时间写进缓存目录。不想要这个体积就 `NGY_EMBED_MPV=0 NGY_EMBED_FFMPEG=0
+  cargo build --release`，改回「依赖放在 exe 旁边 / 用系统里的 ffmpeg」的分发方式。
+- 裁切的 H.264 重编码不含 tone-mapping：HDR / 10bit 源导出的片段会偏色或丢失动态范围。
 
 文件关联相关的限制：
 
