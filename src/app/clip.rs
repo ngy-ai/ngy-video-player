@@ -46,6 +46,11 @@ pub(super) struct ClipDialog {
     scrub: Option<f64>,
     /// 时间轴的 bounds，由 canvas 在 prepaint 阶段写回。
     bounds: Rc<Cell<Bounds<Pixels>>>,
+    /// 正在预览片段时的终点与开始时刻（秒）。
+    ///
+    /// 记下开始时刻是为了躲开 seek 的延迟：刚跳到起点时位置事件可能还是旧的
+    /// （甚至已经超过终点），不能拿它判断「播到结尾了」。
+    preview: Option<(f64, Instant)>,
 }
 
 impl ClipDialog {
@@ -61,6 +66,7 @@ impl ClipDialog {
             job: None,
             scrub: None,
             bounds: Rc::new(Cell::new(Bounds::default())),
+            preview: None,
         }
     }
 
@@ -120,6 +126,8 @@ impl PlayerApp {
             job.cancel();
         }
         self.clip = None;
+        // 悬停预览的浮层挂在 `self.hover` 上：不收拾掉，主控制条那边会接着画。
+        self.drop_hover();
         cx.notify();
     }
 
@@ -155,6 +163,15 @@ impl PlayerApp {
             // 空格在时间输入里没有意义，左右键也不用作文本光标（输入永远是追加/退格）。
             "space" => {
                 self.toggle_play(cx);
+                true
+            }
+            // Alt + 左右键逐帧：恰好卡在某帧上时，5 秒的步长太粗。
+            "left" if event.keystroke.modifiers.alt => {
+                self.step_frame(-1, cx);
+                true
+            }
+            "right" if event.keystroke.modifiers.alt => {
+                self.step_frame(1, cx);
                 true
             }
             "left" => {
@@ -267,6 +284,64 @@ impl PlayerApp {
         cx.notify();
     }
 
+    /// 时间轴悬停：预览浮层与缩略图请求复用主控制条那套状态。
+    fn update_clip_hover(&mut self, x: Option<Pixels>, cx: &mut Context<Self>) {
+        let Some(bounds) = self.clip.as_ref().map(|dialog| dialog.bounds.get()) else {
+            return;
+        };
+        self.update_hover_in(&bounds, x, cx);
+    }
+
+    /// 预览选定区间：从开始播到结束，带声音，方便用耳朵和眼睛确认起止点。
+    fn clip_preview_range(&mut self, cx: &mut Context<Self>) {
+        let range = match self.clip.as_ref().map(|dialog| dialog.range()) {
+            Some(Ok(Some(range))) => range,
+            Some(Err(error)) => {
+                self.flash(error.message());
+                cx.notify();
+                return;
+            }
+            _ => {
+                self.flash("先设置开始和结束，才能预览片段");
+                cx.notify();
+                return;
+            }
+        };
+        if let Some(dialog) = self.clip.as_mut() {
+            dialog.preview = Some((range.end, Instant::now()));
+        }
+        self.snapshot.paused = false;
+        self.send(Command::SeekAbsolute(range.start));
+        self.send(Command::SetPaused(false));
+        self.poke();
+        cx.notify();
+    }
+
+    /// 预览播到终点就自动停下。由 `render` 每帧检查——播放中画面刷新会带着它走。
+    pub(super) fn poll_clip_preview(&mut self, cx: &mut Context<Self>) {
+        let Some((end, started)) = self.clip.as_ref().and_then(|dialog| dialog.preview) else {
+            return;
+        };
+        // 用户自己按了暂停：不再替他停第二次，也不再跟踪终点。
+        if self.snapshot.paused {
+            if let Some(dialog) = self.clip.as_mut() {
+                dialog.preview = None;
+            }
+            return;
+        }
+        // 刚发出 seek 时位置事件可能还是旧的，先给 seek 一点时间。
+        if started.elapsed() < Duration::from_millis(250) || self.snapshot.position < end - 0.02 {
+            return;
+        }
+        if let Some(dialog) = self.clip.as_mut() {
+            dialog.preview = None;
+        }
+        self.snapshot.paused = true;
+        self.send(Command::SetPaused(true));
+        self.flash("预览结束");
+        cx.notify();
+    }
+
     /// 起一个后台任务。参数校验失败时留在编辑态，把原因显示在对话框里。
     pub(super) fn start_clip(&mut self, cx: &mut Context<Self>) {
         let Some(dialog) = self.clip.as_mut() else {
@@ -291,6 +366,8 @@ impl PlayerApp {
             Ok(job) => {
                 dialog.job = Some(Arc::new(job));
                 dialog.state = ClipState::Running { progress: 0.0 };
+                // 正在预览的那一段不该在裁切跑起来之后再把视频按停。
+                dialog.preview = None;
             }
             // 进程都没起来，不会有任何事件，别去等一个空通道。
             Err(error) => {
@@ -499,6 +576,8 @@ impl PlayerApp {
         let ratio = (position / duration).clamp(0.0, 1.0) as f32;
         let dragging = dialog.scrub.is_some();
         let slot = dialog.bounds.clone();
+        // 上一帧的宽度：缩略图浮层按它定位，canvas 本帧写回的新值下一帧才用得上。
+        let bar_width = f32::from(dialog.bounds.get().size.width);
         let selected = dialog.range().ok().flatten();
 
         let mut track = div()
@@ -593,7 +672,19 @@ impl PlayerApp {
                     )
                     .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
                         this.clip_update_seek(event.position.x, cx);
-                    })),
+                        this.update_clip_hover(Some(event.position.x), cx);
+                    }))
+                    // 指针移出就只能靠 `on_hover` 得知，否则缩略图会一直挂着。
+                    .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
+                        if !*hovered {
+                            this.update_clip_hover(None, cx);
+                        }
+                    }))
+                    .children(
+                        self.hover
+                            .as_ref()
+                            .map(|hover| self.render_preview(hover, bar_width)),
+                    ),
             )
             .child(
                 div()
@@ -617,11 +708,54 @@ impl PlayerApp {
                         }),
                     ))
                     .child(div().flex_1())
+                    .child(settings_button(
+                        "clip-preview-range",
+                        "预览片段",
+                        true,
+                        cx.listener(|this, _: &ClickEvent, _window, cx| {
+                            this.clip_preview_range(cx);
+                        }),
+                    )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(settings_button(
+                        "clip-frame-back",
+                        "上一帧",
+                        true,
+                        cx.listener(|this, _: &ClickEvent, _window, cx| {
+                            this.step_frame(-1, cx);
+                        }),
+                    ))
+                    .child(settings_button(
+                        "clip-toggle-play",
+                        if self.snapshot.paused {
+                            "播放"
+                        } else {
+                            "暂停"
+                        },
+                        true,
+                        cx.listener(|this, _: &ClickEvent, _window, cx| {
+                            this.toggle_play(cx);
+                        }),
+                    ))
+                    .child(settings_button(
+                        "clip-frame-step",
+                        "下一帧",
+                        true,
+                        cx.listener(|this, _: &ClickEvent, _window, cx| {
+                            this.step_frame(1, cx);
+                        }),
+                    ))
+                    .child(div().flex_1())
                     .child(
                         div()
                             .text_size(px(10.0))
                             .text_color(text_faint())
-                            .child("空格播放/暂停，← → 微调 5 秒"),
+                            .child("Alt+←/→ 逐帧，←/→ 5 秒"),
                     ),
             )
             .into_any_element()

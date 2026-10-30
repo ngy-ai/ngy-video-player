@@ -187,6 +187,8 @@ impl PlayerApp {
         let ratio = (position / duration).clamp(0.0, 1.0) as f32;
         let dragging = self.dragging.is_some();
         let slot = self.progress_bounds.clone();
+        // 预览浮层按进度条宽度定位；这里先取一次，后面 canvas 再更新也不影响这一帧。
+        let slot_width = self.progress_bounds.get().size.width;
 
         let bar = div()
             .relative()
@@ -255,19 +257,22 @@ impl PlayerApp {
                     this.update_hover(None, cx);
                 }
             }))
-            .children(self.hover.as_ref().map(|hover| self.render_preview(hover)))
+            .children(
+                self.hover
+                    .as_ref()
+                    .map(|hover| self.render_preview(hover, f32::from(slot_width))),
+            )
     }
 
     /// 进度条上方的悬停预览：一张小图 + 对应时间。
     ///
     /// 浮层是进度条的绝对定位子节点，画在画面之上、控制条之外，
     /// 不占控制条的布局空间，也不会把进度条顶高。
-    pub(super) fn render_preview(&self, hover: &HoverPreview) -> AnyElement {
+    pub(super) fn render_preview(&self, hover: &HoverPreview, bar_width: f32) -> AnyElement {
         const WIDTH: f32 = 208.0;
         const PADDING: f32 = 3.0;
         const LABEL: f32 = 18.0;
 
-        let bar_width = f32::from(self.progress_bounds.get().size.width);
         // 跟着指针走，但不许越出进度条两端——浮层跑到控制条外面看着像画错了。
         let left = (hover.ratio * bar_width - WIDTH * 0.5).clamp(0.0, (bar_width - WIDTH).max(0.0));
 
@@ -366,6 +371,20 @@ impl PlayerApp {
 
     /// 鼠标在进度条上（`Some(x)`）或离开（`None`）时更新预览浮层。
     pub(super) fn update_hover(&mut self, x: Option<Pixels>, cx: &mut Context<Self>) {
+        let bounds = self.progress_bounds.get();
+        self.update_hover_in(&bounds, x, cx);
+    }
+
+    /// 时间轴悬停的通用实现：主控制条与裁切对话框的时间轴共用。
+    ///
+    /// `bounds` 由调用方给：两条时间轴各有一份几何信息，预览请求与浮层内容
+    /// 却是同一套状态（同一时刻只可能悬停在其中一条上）。
+    pub(super) fn update_hover_in(
+        &mut self,
+        bounds: &Bounds<Pixels>,
+        x: Option<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(x) = x else {
             if self.hover.is_some() {
                 self.drop_hover();
@@ -375,7 +394,6 @@ impl PlayerApp {
         };
 
         let duration = self.snapshot.duration;
-        let bounds = self.progress_bounds.get();
         let width = f32::from(bounds.size.width);
         if duration <= 0.0 || width <= 1.0 {
             return;

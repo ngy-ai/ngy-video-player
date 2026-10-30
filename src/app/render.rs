@@ -6,6 +6,7 @@ impl Render for PlayerApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.swap_frame(window);
         self.drop_retired_previews(window);
+        self.poll_clip_preview(cx);
         self.update_render_target(window);
         self.sync_on_top(window, cx);
 
