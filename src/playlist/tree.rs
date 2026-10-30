@@ -145,6 +145,38 @@ impl Playlist {
         index > ancestor && index < self.subtree_end(ancestor)
     }
 
+    /// 列表里有没有文件夹。没有的话「折叠/展开所有」没有任何可做的。
+    pub fn has_dir(&self) -> bool {
+        self.items().iter().any(|item| item.is_dir())
+    }
+
+    /// 是不是所有文件夹都收起来了。没有文件夹时返回 `false`——没有可展开的
+    /// 东西，不该让按钮显示成「已经全收起了」。
+    pub fn all_collapsed(&self) -> bool {
+        let mut seen = false;
+        for item in self.items() {
+            if item.is_dir() {
+                seen = true;
+                if !item.collapsed() {
+                    return false;
+                }
+            }
+        }
+        seen
+    }
+
+    /// 一键收起或展开所有文件夹，返回是否真的有变化。
+    pub fn set_all_collapsed(&mut self, collapsed: bool) -> bool {
+        let mut changed = false;
+        for item in self.items_mut() {
+            if item.is_dir() && item.collapsed() != collapsed {
+                item.set_collapsed(collapsed);
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// 展开或收起一个文件夹。文件夹以外的行返回 `false`。
     pub fn toggle_dir(&mut self, index: usize) -> bool {
         let Some(item) = self.items_mut().get_mut(index) else {

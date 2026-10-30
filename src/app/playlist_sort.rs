@@ -61,7 +61,7 @@ impl PlayerApp {
             IconName::ArrowUpDown,
             self.panel_menu == Some(PanelMenu::Sort),
             false,
-            Some("排序与恢复顺序"),
+            Some("排序 · 顺序历史 · 文件夹折叠"),
             cx.listener(|this, _: &ClickEvent, _window, cx| {
                 this.toggle_panel_menu(PanelMenu::Sort, cx);
             }),

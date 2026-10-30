@@ -332,6 +332,38 @@ impl PlayerApp {
         cx.notify();
     }
 
+    /// 一键收起或展开所有文件夹。
+    ///
+    /// 收起之后列表会变得很短，之前选中的行可能已经不在界面上了，所以和
+    /// 单个文件夹折叠时一样，顺手把选择和落点清掉。
+    pub(super) fn set_all_folded(&mut self, folded: bool, cx: &mut Context<Self>) {
+        if !self.playlist_mut().set_all_collapsed(folded) {
+            self.flash(if folded {
+                "文件夹已经全部收起"
+            } else {
+                "文件夹已经全部展开"
+            });
+            cx.notify();
+            return;
+        }
+        self.selection.clear();
+        self.selection_anchor = None;
+        self.drop_spot = None;
+        self.playlists.save();
+        self.flash(if folded {
+            "已收起所有文件夹"
+        } else {
+            "已展开所有文件夹"
+        });
+        cx.notify();
+    }
+
+    /// 标题栏那颗按钮：已经是「全收起」就展开，否则收起。
+    pub(super) fn toggle_fold_all(&mut self, cx: &mut Context<Self>) {
+        let folded = !self.playlist().all_collapsed();
+        self.set_all_folded(folded, cx);
+    }
+
     /// 展开或收起一个文件夹。
     pub(super) fn toggle_dir(&mut self, index: usize, cx: &mut Context<Self>) {
         if !self.playlist_mut().toggle_dir(index) {

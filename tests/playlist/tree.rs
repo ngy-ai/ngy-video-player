@@ -123,6 +123,49 @@ fn 折叠的文件夹把子项一起藏起来() {
 }
 
 #[test]
+fn 一键收起与展开所有文件夹() {
+    let mut playlist = tree_of(
+        &[
+            dir_item("a", 0),
+            dir_item("a/b", 1),
+            file_item("a/b/x.mp4", 2),
+            dir_item("c", 0),
+            file_item("c/y.mp4", 1),
+        ],
+        2,
+    );
+
+    assert!(playlist.has_dir());
+    assert!(!playlist.all_collapsed());
+
+    assert!(playlist.set_all_collapsed(true));
+    assert!(playlist.all_collapsed());
+    assert_eq!(
+        playlist.visible_indices(),
+        [0, 3],
+        "只剩两个顶层文件夹，里面全收"
+    );
+
+    // 已经是全收起了：再点一次不该算「有变化」。
+    assert!(!playlist.set_all_collapsed(true));
+
+    assert!(playlist.set_all_collapsed(false));
+    assert!(!playlist.all_collapsed());
+    assert_eq!(playlist.visible_indices().len(), 5);
+}
+
+#[test]
+fn 没有文件夹时没有可收起的() {
+    let mut playlist = sample(&["a.mp4", "b.mp4"], 0);
+    assert!(!playlist.has_dir());
+    assert!(
+        !playlist.all_collapsed(),
+        "没有文件夹不该显示成「已经全部收起」"
+    );
+    assert!(!playlist.set_all_collapsed(true));
+}
+
+#[test]
 fn 下一集跳过折叠的文件夹() {
     let mut playlist = tree_of(
         &[

@@ -52,6 +52,8 @@ enum PanelAction {
     ApplySort(SortMode),
     Restore(usize),
     SelectTab(usize),
+    /// 一键收起 / 展开所有文件夹。
+    FoldAll(bool),
 }
 
 impl PlayerApp {
@@ -250,6 +252,22 @@ impl PlayerApp {
                 });
             }
         }
+
+        // 没有文件夹时这两项点了也不会有反应，干脆不占地方。
+        if self.playlist().has_dir() {
+            rows.push(PanelRow::Divider);
+            rows.push(PanelRow::Title("文件夹"));
+            rows.push(PanelRow::Entry {
+                label: "收起所有文件夹".to_string(),
+                active: false,
+                action: Some(PanelAction::FoldAll(true)),
+            });
+            rows.push(PanelRow::Entry {
+                label: "展开所有文件夹".to_string(),
+                active: false,
+                action: Some(PanelAction::FoldAll(false)),
+            });
+        }
         rows
     }
 
@@ -284,6 +302,7 @@ impl PlayerApp {
             PanelAction::ApplySort(mode) => self.apply_sort(mode, cx),
             PanelAction::Restore(index) => self.restore_order(index, cx),
             PanelAction::SelectTab(index) => self.select_tab(index, cx),
+            PanelAction::FoldAll(folded) => self.set_all_folded(folded, cx),
         }
         cx.notify();
     }

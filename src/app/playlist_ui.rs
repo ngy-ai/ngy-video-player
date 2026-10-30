@@ -223,6 +223,11 @@ impl PlayerApp {
                             .child(self.render_add_button(cx))
                             // 排序按钮放在「清空」左边：它比清空常用，但两颗按钮
                             // 都贴着右上角，删表那一下不该是离手指最近的那个。
+                            // 只在真有文件夹时出现：列表全是文件时它没有任何作用，
+                            // 白白占掉标题栏的宽度。
+                            .when(!empty && self.playlist().has_dir(), |this| {
+                                this.child(self.render_fold_button(cx))
+                            })
                             .when(!empty, |this| this.child(self.render_sort_button(cx)))
                             // 用文字而不是垃圾桶图标：标题栏的图标离「关闭」太近，
                             // 而且和行尾的「移除这一项」撞脸，一不留神就清空了整张表。
@@ -374,6 +379,33 @@ impl PlayerApp {
             })
             // 菜单必须是最后一个子节点：GPUI 按树的顺序绘制，排在行后面才盖得住它们。
             .children(self.render_panel_menu(cx))
+    }
+
+    /// 标题栏的「收起 / 展开所有文件夹」按钮。
+    ///
+    /// 一个按钮两态：已经全收起了就展开，否则收起。两个按钮挤进标题栏反而
+    /// 分不清该点哪个，而且这颗按钮只在有文件夹时出现，本来就不常用。
+    pub(super) fn render_fold_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        let folded = self.playlist().all_collapsed();
+        icon_button_with_tip(
+            "playlist-fold",
+            if folded {
+                IconName::ChevronsUpDown
+            } else {
+                IconName::ChevronsDownUp
+            },
+            false,
+            // 没有文件夹（比如只加了几个文件）时点不动。
+            !self.playlist().has_dir(),
+            Some(if folded {
+                "展开所有文件夹"
+            } else {
+                "收起所有文件夹"
+            }),
+            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                this.toggle_fold_all(cx);
+            }),
+        )
     }
 
     /// 一行：一个文件，或者一个可以折叠的文件夹。
