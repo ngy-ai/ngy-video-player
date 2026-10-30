@@ -821,6 +821,14 @@ impl Render for MiniPlayer {
             .on_action(cx.listener(|this, _: &SeekBackward, _window, cx| {
                 this.forward(cx, |app, cx| app.seek_by(-SEEK_STEP, cx));
             }))
+            // 逐帧在主窗口与小窗里是同一套键（Ctrl/⌘ + ←/→），这里不接的话
+            // 小窗里按下去毫无反应——动作是全局键位表派发的，但得有元素接。
+            .on_action(cx.listener(|this, _: &StepBackward, _window, cx| {
+                this.forward(cx, |app, cx| app.step_frame(-1, cx));
+            }))
+            .on_action(cx.listener(|this, _: &StepForward, _window, cx| {
+                this.forward(cx, |app, cx| app.step_frame(1, cx));
+            }))
             .on_action(cx.listener(|this, _: &VolumeUp, _window, cx| {
                 this.forward(cx, |app, cx| app.change_volume(VOLUME_STEP, cx));
             }))
