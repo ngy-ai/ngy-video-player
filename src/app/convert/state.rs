@@ -60,8 +60,8 @@ impl ConvertDialog {
         Self {
             generation,
             source: ConvertSource::Current,
-            // MP4 是最常见的「发给别人也能播」的格式，默认选中它。
-            target: TargetFormat::Mp4,
+            // 默认 mp4：最常见的「发给别人也能播」的格式。
+            target: TargetFormat::default(),
             scan: ScanState::Idle,
             state: ConvertState::Editing,
             job: None,

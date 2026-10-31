@@ -44,7 +44,7 @@ src/ui.rs        配色、图标按钮、时间格式、等比画面
 src/formats.rs   扩展名清单（文件过滤器 + 拖入判断）
 src/clip.rs      裁切片段：时间解析、区间校验、ffmpeg 任务与进度
 src/convert.rs   格式转换：把当前文件或整个文件夹转成指定格式
-src/convert/format.rs  目标格式（容器 + 编码组合、字幕策略）
+src/convert/format.rs  目标格式表：覆盖 formats 里所有能写出的容器（封装器 + 编码参数）
 src/convert/scan.rs    文件夹递归扫描（自然序、跳过符号链接）
 src/convert/task.rs    批次任务：逐个文件重编码、输出命名、进度与取消
 src/remux.rs     轨道编辑：换/删内置音轨、内嵌字幕（画面流复制，单路转码）与进度

@@ -7,8 +7,9 @@ use super::super::*;
 use super::state::{ConvertDialog, ConvertSource, ConvertState, ScanState};
 use crate::convert::{TargetFormat, TargetKind};
 
-/// 格式卡片两列排：面板最窄时只剩两百多像素，分三列连标题都放不下。
-const COLUMNS: usize = 2;
+/// 格式格子一行放几个。目标格式有几十个，四列能让列表短一半；再密就装不下
+/// `3gpp`、`webm` 这种四字符的扩展名了。
+const COLUMNS: usize = 4;
 /// 结果页最多列几条失败原因，剩下的只报个数。
 const MAX_FAILURES_SHOWN: usize = 3;
 
@@ -21,12 +22,14 @@ impl PlayerApp {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let dialog = self.convert.as_ref()?;
-        let body = match &dialog.state {
-            ConvertState::Editing | ConvertState::Failed(_) => {
-                self.render_convert_editor(dialog, cx)
-            }
-            ConvertState::Running { .. } => self.render_convert_running(dialog, cx),
-            ConvertState::Done { .. } => self.render_convert_done(dialog, cx),
+        // 格式表很长，编辑态把「开始转换」钉在面板底部：滚到一半也该点得到。
+        let (body, footer) = match &dialog.state {
+            ConvertState::Editing | ConvertState::Failed(_) => (
+                self.render_convert_editor(dialog, cx),
+                Some(self.render_convert_footer(dialog, cx)),
+            ),
+            ConvertState::Running { .. } => (self.render_convert_running(dialog, cx), None),
+            ConvertState::Done { .. } => (self.render_convert_done(dialog, cx), None),
         };
 
         Some(
@@ -78,12 +81,13 @@ impl PlayerApp {
                         .id("convert-panel-body")
                         .flex_1()
                         .min_h(px(0.0))
-                        // 窗口矮时内容可滚动，按钮不会掉到面板外面。
+                        // 格式表有几十项，窗口再高也装不下，让它自己滚。
                         .overflow_y_scroll()
                         .px(px(14.0))
                         .pb(px(14.0))
                         .child(body),
                 )
+                .children(footer)
                 .into_any_element(),
         )
     }
@@ -110,34 +114,46 @@ impl PlayerApp {
             );
         }
 
+        body.into_any_element()
+    }
+
+    /// 面板底部的固定操作区：说明 + 开始按钮。不跟着格式表一起滚。
+    fn render_convert_footer(&self, dialog: &ConvertDialog, cx: &mut Context<Self>) -> AnyElement {
         // 有文件可转才让按钮亮起来：点下去什么都没发生的按钮最让人困惑。
         let ready = dialog.editing() && self.convert_input_count() > 0;
-
-        body.child(
-            div()
-                .text_size(px(10.0))
-                .text_color(text_faint())
-                .whitespace_normal()
-                .child(
-                    "输出保存在原文件同目录，命名如「片名 - 转换.mkv」；同名文件已存在时自动编号，\
-                     不会覆盖原片。",
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_end()
-                .child(primary_button(
-                    "convert-start",
-                    "开始转换",
-                    ready,
-                    cx.listener(|this, _: &ClickEvent, _window, cx| {
-                        this.start_convert(cx);
-                    }),
-                )),
-        )
-        .into_any_element()
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .px(px(14.0))
+            .py(px(10.0))
+            .border_t_1()
+            .border_color(gpui_kit::rgb(0x26262e))
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(text_faint())
+                    .whitespace_normal()
+                    .child(
+                        "输出保存在原文件同目录，命名如「片名 - 转换.mkv」；同名文件已存在时\
+                         自动编号，不会覆盖原片。",
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .child(primary_button(
+                        "convert-start",
+                        "开始转换",
+                        ready,
+                        cx.listener(|this, _: &ClickEvent, _window, cx| {
+                            this.start_convert(cx);
+                        }),
+                    )),
+            )
+            .into_any_element()
     }
 
     /// 来源区：当前文件 / 文件夹两个入口，加一行「这一批有多少个文件」。
@@ -237,31 +253,62 @@ impl PlayerApp {
             .into_any_element()
     }
 
-    /// 目标格式：视频、音频各一组卡片，选中的那种描一道强调色的边。
+    /// 目标格式：视频、音频各一组格子，选中的那种描一道强调色的边。
     fn render_convert_formats(&self, dialog: &ConvertDialog, cx: &mut Context<Self>) -> AnyElement {
         let mut column = div()
             .flex()
             .flex_col()
             .gap(px(8.0))
-            .child(section_title("目标格式"));
+            .child(section_title("目标格式"))
+            // 选中的格式和它的编码组合放最上面：格子铺了几屏，不能只靠高亮认。
+            .child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(ui::accent())
+                    .whitespace_normal()
+                    .child(format!(
+                        "输出 .{} · {}",
+                        dialog.target.extension(),
+                        dialog.target.hint()
+                    )),
+            );
 
         for kind in [TargetKind::Video, TargetKind::Audio] {
             let formats: Vec<TargetFormat> = TargetFormat::ALL
-                .into_iter()
+                .iter()
+                .copied()
                 .filter(|format| format.kind() == kind)
                 .collect();
             column = column.child(
                 div()
-                    .text_size(px(11.0))
-                    .text_color(text_faint())
-                    .child(kind.label()),
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .pt(px(4.0))
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(text_faint())
+                            .child(kind.label()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(text_faint())
+                            .child(format!("{} 种", formats.len())),
+                    ),
             );
             for row in formats.chunks(COLUMNS) {
                 column = column.child(
-                    div().flex().gap(px(8.0)).children(
-                        row.iter()
-                            .map(|format| render_format_card(dialog.target, *format, cx)),
-                    ),
+                    div()
+                        .flex()
+                        .gap(px(4.0))
+                        .children(
+                            row.iter()
+                                .map(|format| render_format_chip(dialog.target, *format, cx)),
+                        )
+                        // 末行不满时补空位，格子宽度才和上面几行对得上。
+                        .children((row.len()..COLUMNS).map(|_| div().flex_1().into_any_element())),
                 );
             }
         }
@@ -272,9 +319,7 @@ impl PlayerApp {
                     .text_size(px(10.0))
                     .text_color(text_faint())
                     .whitespace_normal()
-                    .child(
-                        "MKV 保留原字幕；MP4 / MOV / WebM 不带字幕。全部重编码，耗时与片长相关。",
-                    ),
+                    .child("只有 MKV 保留原字幕；其它容器不带字幕。全部重编码，耗时与片长相关。"),
             )
             .into_any_element()
     }
@@ -529,8 +574,9 @@ fn convert_chip(
         .into_any_element()
 }
 
-/// 一张格式卡片：标题 + 一行代价说明。
-fn render_format_card(
+/// 一个格式格子：只写扩展名，编码说明统一放在组标题下面（几十个格子逐张带说明
+/// 会把面板撑成一条长长的清单）。
+fn render_format_chip(
     selected: TargetFormat,
     format: TargetFormat,
     cx: &mut Context<PlayerApp>,
@@ -544,11 +590,11 @@ fn render_format_card(
         .flex_1()
         .min_w(px(0.0))
         .flex()
-        .flex_col()
-        .gap(px(2.0))
-        .px(px(10.0))
-        .py(px(7.0))
-        .rounded(px(8.0))
+        .items_center()
+        .justify_center()
+        .h(px(26.0))
+        .rounded(px(6.0))
+        .text_size(px(11.0))
         .bg(if active {
             ui::surface_active()
         } else {
@@ -556,23 +602,12 @@ fn render_format_card(
         })
         .border_1()
         .border_color(if active { ui::accent() } else { ui::track() })
+        .text_color(if active { ui::accent() } else { text_muted() })
         .cursor(CursorStyle::PointingHand)
         .when(!active, |this| {
-            this.hover(|style| style.border_color(ui::track()).bg(ui::surface_active()))
+            this.hover(|style| style.bg(ui::surface_active()).text_color(text()))
         })
-        .child(
-            div()
-                .text_size(px(12.0))
-                .text_color(if active { ui::accent() } else { text() })
-                .child(format.label()),
-        )
-        .child(
-            div()
-                .text_size(px(10.0))
-                .text_color(text_faint())
-                .whitespace_normal()
-                .child(format.hint()),
-        )
+        .child(format.extension())
         .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
             cx.stop_propagation();
             this.convert_set_target(format, cx);

@@ -364,15 +364,29 @@ fn build_command(executable: &Path, request: &ConvertRequest) -> Command {
 
     if target.keeps_video() {
         // 大写 V 排除封面图（attached_pic），否则第一路「视频」可能是一张 jpeg。
-        command.arg("-map").arg("0:V:0?").arg("-map").arg("0:a?");
-        command.args(target.subtitle_args());
+        command.arg("-map").arg("0:V:0?");
+        // 裸流容器（h264 / m2v / y4m …）压根装不下音频轨，不能硬 map。
+        if !target.audio_args().is_empty() {
+            command.arg("-map").arg("0:a?");
+        }
+        if target.copy_subtitles() {
+            // 必须先 map 再谈编码：只写 `-c:s copy` 不 map，字幕轨根本进不了输出。
+            command.arg("-map").arg("0:s?").args(["-c:s", "copy"]);
+        } else {
+            command.arg("-sn");
+        }
     } else {
         // 纯音频容器装不下一路以上的音频轨，只取第一条。
         command.arg("-map").arg("0:a:0?").arg("-vn").arg("-sn");
     }
 
     command
-        .args(target.codec_args())
+        .args(target.video_args())
+        .args(target.audio_args())
+        // 显式指定封装器：`mts` / `tp` / `alac` 这些扩展名 ffmpeg 猜不准，
+        // 猜错时的报错信息是「无法找到合适的输出格式」，用户根本看不出问题在哪。
+        .arg("-f")
+        .arg(target.muxer())
         .arg(&request.output)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -392,19 +406,23 @@ mod tests {
         dir
     }
 
+    fn target_mp4() -> TargetFormat {
+        TargetFormat::by_extension("mp4").unwrap()
+    }
+
     #[test]
     fn 换后缀且不覆盖原文件() {
         let dir = temp_dir("naming");
         let input = dir.join("课程 01.mkv");
         std::fs::write(&input, b"x").unwrap();
 
-        let requests = plan(std::slice::from_ref(&input), TargetFormat::Mp4);
+        let requests = plan(std::slice::from_ref(&input), target_mp4());
         assert_eq!(requests[0].output, dir.join("课程 01.mp4"));
 
         // 已经是 mp4：目标就是源文件自己，必须让开。
         let same = dir.join("课程 01.mp4");
         std::fs::write(&same, b"x").unwrap();
-        let requests = plan(std::slice::from_ref(&same), TargetFormat::Mp4);
+        let requests = plan(std::slice::from_ref(&same), target_mp4());
         assert_eq!(requests[0].output, dir.join("课程 01 - 转换.mp4"));
 
         std::fs::remove_dir_all(&dir).unwrap();
@@ -418,7 +436,7 @@ mod tests {
         std::fs::write(&mkv, b"x").unwrap();
         std::fs::write(&mp4, b"x").unwrap();
 
-        let requests = plan(&[mkv, mp4], TargetFormat::Mp4);
+        let requests = plan(&[mkv, mp4], target_mp4());
         assert_eq!(requests[0].output, dir.join("a - 转换.mp4"));
         assert_eq!(requests[1].output, dir.join("a - 转换 (2).mp4"));
         assert_ne!(requests[0].output, requests[1].output);
@@ -436,39 +454,64 @@ mod tests {
         assert_eq!(parse_duration("  Stream #0:0"), None);
     }
 
-    #[test]
-    fn 纯音频目标不带视频轨() {
-        let dir = temp_dir("args");
+    fn args_of(input: &str, output: &str, target: &str) -> Vec<String> {
         let request = ConvertRequest {
-            input: dir.join("in.mkv"),
-            output: dir.join("out.mp3"),
-            target: TargetFormat::Mp3,
+            input: std::path::PathBuf::from(input),
+            output: std::path::PathBuf::from(output),
+            target: TargetFormat::by_extension(target).unwrap(),
         };
-        let command = build_command(Path::new("ffmpeg"), &request);
-        let args: Vec<String> = command
+        build_command(Path::new("ffmpeg"), &request)
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
+            .collect()
+    }
+
+    #[test]
+    fn 纯音频目标不带视频轨() {
+        let args = args_of("in.mkv", "out.mp3", "mp3");
         assert!(args.iter().any(|arg| arg == "-vn"), "{args:?}");
         assert!(args.iter().any(|arg| arg == "0:a:0?"), "{args:?}");
         assert!(!args.iter().any(|arg| arg == "0:V:0?"), "{args:?}");
+        // 封装器必须显式给：ffmpeg 按扩展名猜的时候，`mts`/`tp` 这类会猜空。
+        assert!(
+            args.windows(2).any(|pair| pair == ["-f", "mp3"]),
+            "{args:?}"
+        );
+    }
 
-        let request = ConvertRequest {
-            input: dir.join("in.mkv"),
-            output: dir.join("out.mkv"),
-            target: TargetFormat::Mkv,
-        };
-        let command = build_command(Path::new("ffmpeg"), &request);
-        let args: Vec<String> = command
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
+    #[test]
+    fn 视频目标映射字幕与音轨() {
+        let args = args_of("in.mkv", "out.mkv", "mkv");
         assert!(args.iter().any(|arg| arg == "0:V:0?"), "{args:?}");
+        assert!(args.iter().any(|arg| arg == "0:a?"), "{args:?}");
+        assert!(args.iter().any(|arg| arg == "0:s?"), "{args:?}");
         assert!(
             args.windows(2).any(|pair| pair == ["-c:s", "copy"]),
             "{args:?}"
         );
+        assert!(
+            args.windows(2).any(|pair| pair == ["-f", "matroska"]),
+            "{args:?}"
+        );
 
-        std::fs::remove_dir_all(&dir).unwrap();
+        let args = args_of("in.mkv", "out.mp4", "mp4");
+        assert!(args.iter().any(|arg| arg == "-sn"), "{args:?}");
+        assert!(!args.iter().any(|arg| arg == "0:s"), "{args:?}");
+    }
+
+    #[test]
+    fn 裸流容器不映射音轨() {
+        // h264 / m2v / y4m 这些容器装不下音频，多 map 一路会被封装器拒绝。
+        for extension in ["h264", "m2v", "y4m", "roq"] {
+            let args = args_of("in.mkv", &format!("out.{extension}"), extension);
+            assert!(
+                args.iter().any(|arg| arg == "-an" || arg == "-sn"),
+                "{args:?}"
+            );
+            assert!(
+                !args.iter().any(|arg| arg == "0:a?"),
+                "{extension}: {args:?}"
+            );
+        }
     }
 }
