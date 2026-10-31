@@ -117,6 +117,7 @@ impl Render for PlayerApp {
                 if this.on_rename_key(event, cx)
                     || this.on_clip_key(event, cx)
                     || this.on_remux_key(event, cx)
+                    || this.on_convert_key(event, cx)
                 {
                     cx.stop_propagation();
                     return;

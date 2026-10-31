@@ -17,6 +17,14 @@ impl PlayerApp {
             // 输入框有焦点时 Esc 被 `on_clip_key` 截走（只退出焦点）；这里处理
             // 「焦点已经在播放器上」的那一次，把面板收起来。
             self.close_clip_dialog(cx);
+        } else if self
+            .convert
+            .as_ref()
+            .is_some_and(|dialog| dialog.picker_open())
+        {
+            // 格式下拉展开时 Esc 先收列表：面板本身还留着。
+            // 下拉里的搜索框会先吃掉这次按键，这里兜住「焦点不在根视图」的那一次。
+            self.convert_close_picker(cx);
         } else if !fullscreen && self.convert.is_some() {
             // 转换面板和裁切占同一条通道，两者不会同时开着。
             self.close_convert_dialog(cx);

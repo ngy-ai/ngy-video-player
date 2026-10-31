@@ -5,11 +5,8 @@
 
 use super::super::*;
 use super::state::{ConvertDialog, ConvertSource, ConvertState, ScanState};
-use crate::convert::{TargetFormat, TargetKind};
+use crate::convert::TargetFormat;
 
-/// 格式格子一行放几个。目标格式有几十个，四列能让列表短一半；再密就装不下
-/// `3gpp`、`webm` 这种四字符的扩展名了。
-const COLUMNS: usize = 4;
 /// 结果页最多列几条失败原因，剩下的只报个数。
 const MAX_FAILURES_SHOWN: usize = 3;
 
@@ -76,16 +73,26 @@ impl PlayerApp {
                             }),
                         )),
                 )
+                // 正文与格式下拉叠在同一块区域：下拉展开时整块盖住正文。
+                // 这样列表不会被滚动容器裁掉，也不用去算触发器在屏幕上的位置。
                 .child(
                     div()
-                        .id("convert-panel-body")
+                        .relative()
                         .flex_1()
                         .min_h(px(0.0))
-                        // 格式表有几十项，窗口再高也装不下，让它自己滚。
-                        .overflow_y_scroll()
-                        .px(px(14.0))
-                        .pb(px(14.0))
-                        .child(body),
+                        .child(
+                            div()
+                                .id("convert-panel-body")
+                                .absolute()
+                                .inset_0()
+                                .overflow_y_scroll()
+                                .px(px(14.0))
+                                .pb(px(14.0))
+                                .child(body),
+                        )
+                        .when(dialog.picker.open, |this| {
+                            this.child(self.render_convert_picker(dialog, cx))
+                        }),
                 )
                 .children(footer)
                 .into_any_element(),
@@ -96,9 +103,8 @@ impl PlayerApp {
         let mut body = div()
             .flex()
             .flex_col()
-            .gap(px(14.0))
-            .child(self.render_convert_source(dialog, cx))
-            .child(self.render_convert_formats(dialog, cx));
+            .gap(px(12.0))
+            .child(self.render_convert_source(dialog, cx));
 
         // 失败原因来自 ffmpeg，可能有多行；单独一块红字，别和来源说明混在一起。
         if let ConvertState::Failed(message) = &dialog.state {
@@ -114,13 +120,22 @@ impl PlayerApp {
             );
         }
 
-        body.into_any_element()
+        body.child(
+            div()
+                .text_size(px(10.0))
+                .text_color(text_faint())
+                .whitespace_normal()
+                .child("只有 MKV 保留原字幕；其它容器不带字幕。全部重编码，耗时与片长相关。"),
+        )
+        .into_any_element()
     }
 
-    /// 面板底部的固定操作区：说明 + 开始按钮。不跟着格式表一起滚。
+    /// 面板底部的固定操作区：格式下拉 + 说明 + 开始按钮。
     fn render_convert_footer(&self, dialog: &ConvertDialog, cx: &mut Context<Self>) -> AnyElement {
+        let picking = dialog.picker.open;
         // 有文件可转才让按钮亮起来：点下去什么都没发生的按钮最让人困惑。
-        let ready = dialog.editing() && self.convert_input_count() > 0;
+        let ready = dialog.editing() && self.convert_input_count() > 0 && !picking;
+
         div()
             .flex()
             .flex_col()
@@ -129,29 +144,180 @@ impl PlayerApp {
             .py(px(10.0))
             .border_t_1()
             .border_color(gpui_kit::rgb(0x26262e))
+            .child(self.render_format_trigger(dialog, cx))
+            // 列表展开时把说明和按钮让出去：这时候视线都在列表上，不该开始转换。
+            .when(!picking, |this| {
+                this.child(
+                    div()
+                        .text_size(px(10.0))
+                        .text_color(text_faint())
+                        .whitespace_normal()
+                        .child(
+                            "输出保存在原文件同目录，命名如「片名 - 转换.mkv」；同名文件已存在时\
+                             自动编号，不会覆盖原片。",
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .child(primary_button(
+                            "convert-start",
+                            "开始转换",
+                            ready,
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.start_convert(cx);
+                            }),
+                        )),
+                )
+            })
+            .into_any_element()
+    }
+
+    /// 目标格式的入口：平时只显示当前值，点开才是带搜索的列表。
+    fn render_format_trigger(&self, dialog: &ConvertDialog, cx: &mut Context<Self>) -> AnyElement {
+        let open = dialog.picker.open;
+        div()
+            .id("convert-format-trigger")
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .h(px(32.0))
+            .px(px(10.0))
+            .rounded(px(7.0))
+            .bg(if open {
+                ui::surface_active()
+            } else {
+                ui::surface_hover()
+            })
+            .border_1()
+            .border_color(if open { ui::accent() } else { ui::track() })
+            .cursor(CursorStyle::PointingHand)
+            .when(!open, |this| {
+                this.hover(|style| style.bg(ui::surface_active()))
+            })
+            .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                cx.stop_propagation();
+                this.convert_toggle_picker(cx);
+            }))
             .child(
                 div()
-                    .text_size(px(10.0))
-                    .text_color(text_faint())
-                    .whitespace_normal()
+                    .flex()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .items_center()
+                    .gap(px(8.0))
                     .child(
-                        "输出保存在原文件同目录，命名如「片名 - 转换.mkv」；同名文件已存在时\
-                         自动编号，不会覆盖原片。",
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(text_faint())
+                            .child("输出格式"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(ui::accent())
+                            .child(format!(".{}", dialog.target.extension())),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_size(px(10.0))
+                            .text_color(text_faint())
+                            .child(ui::ellipsis(dialog.target.hint())),
                     ),
+            )
+            .child(icon(IconName::ChevronDown, 14.0, text_muted()))
+            .into_any_element()
+    }
+
+    /// 格式下拉：搜索框 + 命中列表，盖在面板正文上。
+    fn render_convert_picker(&self, dialog: &ConvertDialog, cx: &mut Context<Self>) -> AnyElement {
+        let matches = dialog.matches();
+        let query = &dialog.picker.query;
+
+        let mut list = div().flex().flex_col().gap(px(2.0));
+        if matches.is_empty() {
+            list = list.child(
+                div()
+                    .py(px(10.0))
+                    .text_size(px(11.0))
+                    .text_color(text_faint())
+                    .child("没有匹配的格式，换个词试试"),
+            );
+        }
+        for target in &matches {
+            list = list.child(render_picker_row(dialog.target, *target, cx));
+        }
+
+        div()
+            .id("convert-picker")
+            .absolute()
+            .inset_0()
+            // 底色必须不透明：底下还压着来源区，透出来就是两层文字叠在一起。
+            .bg(gpui_kit::rgb(0x131317))
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .px(px(14.0))
+            .py(px(12.0))
+            .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
+                cx.stop_propagation();
+            }))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .h(px(30.0))
+                    .px(px(8.0))
+                    .rounded(px(7.0))
+                    .bg(ui::surface_hover())
+                    .border_1()
+                    .border_color(ui::accent())
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(if query.is_empty() {
+                                text_faint()
+                            } else {
+                                text()
+                            })
+                            .child(if query.is_empty() {
+                                "搜索格式：mkv / h264 / 无损…".to_string()
+                            } else {
+                                query.clone()
+                            }),
+                    )
+                    // 光标固定画在末尾：这里不做左右移动与选区，输入永远是追加/退格。
+                    .child(div().w(px(1.0)).h(px(13.0)).bg(ui::accent())),
             )
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .justify_end()
-                    .child(primary_button(
-                        "convert-start",
-                        "开始转换",
-                        ready,
-                        cx.listener(|this, _: &ClickEvent, _window, cx| {
-                            this.start_convert(cx);
-                        }),
-                    )),
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(text_faint())
+                            .child(format!("{} 个格式", matches.len())),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(text_faint())
+                            .child("回车选第一个 · Esc 关闭"),
+                    ),
+            )
+            .child(
+                div()
+                    .id("convert-picker-list")
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_y_scroll()
+                    .child(list),
             )
             .into_any_element()
     }
@@ -249,77 +415,6 @@ impl PlayerApp {
                             .text_color(note_color)
                             .child(ui::ellipsis(note)),
                     ),
-            )
-            .into_any_element()
-    }
-
-    /// 目标格式：视频、音频各一组格子，选中的那种描一道强调色的边。
-    fn render_convert_formats(&self, dialog: &ConvertDialog, cx: &mut Context<Self>) -> AnyElement {
-        let mut column = div()
-            .flex()
-            .flex_col()
-            .gap(px(8.0))
-            .child(section_title("目标格式"))
-            // 选中的格式和它的编码组合放最上面：格子铺了几屏，不能只靠高亮认。
-            .child(
-                div()
-                    .text_size(px(11.0))
-                    .text_color(ui::accent())
-                    .whitespace_normal()
-                    .child(format!(
-                        "输出 .{} · {}",
-                        dialog.target.extension(),
-                        dialog.target.hint()
-                    )),
-            );
-
-        for kind in [TargetKind::Video, TargetKind::Audio] {
-            let formats: Vec<TargetFormat> = TargetFormat::ALL
-                .iter()
-                .copied()
-                .filter(|format| format.kind() == kind)
-                .collect();
-            column = column.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .pt(px(4.0))
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(text_faint())
-                            .child(kind.label()),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(10.0))
-                            .text_color(text_faint())
-                            .child(format!("{} 种", formats.len())),
-                    ),
-            );
-            for row in formats.chunks(COLUMNS) {
-                column = column.child(
-                    div()
-                        .flex()
-                        .gap(px(4.0))
-                        .children(
-                            row.iter()
-                                .map(|format| render_format_chip(dialog.target, *format, cx)),
-                        )
-                        // 末行不满时补空位，格子宽度才和上面几行对得上。
-                        .children((row.len()..COLUMNS).map(|_| div().flex_1().into_any_element())),
-                );
-            }
-        }
-
-        column
-            .child(
-                div()
-                    .text_size(px(10.0))
-                    .text_color(text_faint())
-                    .whitespace_normal()
-                    .child("只有 MKV 保留原字幕；其它容器不带字幕。全部重编码，耗时与片长相关。"),
             )
             .into_any_element()
     }
@@ -574,43 +669,70 @@ fn convert_chip(
         .into_any_element()
 }
 
-/// 一个格式格子：只写扩展名，编码说明统一放在组标题下面（几十个格子逐张带说明
-/// 会把面板撑成一条长长的清单）。
-fn render_format_chip(
+/// 下拉列表里的一行：扩展名 + 编码说明 + 视频/音频标签。
+fn render_picker_row(
     selected: TargetFormat,
     format: TargetFormat,
     cx: &mut Context<PlayerApp>,
 ) -> AnyElement {
     let active = selected == format;
+    // 选中行底色是强调色，浅色调的文字在上面会糊成一片，统一换成深色。
+    let ink: Hsla = if active {
+        gpui_kit::rgb(0x111114).into()
+    } else {
+        text_faint()
+    };
     div()
         .id(SharedString::from(format!(
             "convert-format-{}",
             format.extension()
         )))
-        .flex_1()
-        .min_w(px(0.0))
         .flex()
         .items_center()
-        .justify_center()
-        .h(px(26.0))
+        .justify_between()
+        .gap(px(8.0))
+        .h(px(30.0))
+        .px(px(8.0))
         .rounded(px(6.0))
-        .text_size(px(11.0))
-        .bg(if active {
-            ui::surface_active()
-        } else {
-            ui::surface_hover()
-        })
-        .border_1()
-        .border_color(if active { ui::accent() } else { ui::track() })
-        .text_color(if active { ui::accent() } else { text_muted() })
         .cursor(CursorStyle::PointingHand)
-        .when(!active, |this| {
-            this.hover(|style| style.bg(ui::surface_active()).text_color(text()))
+        .when(active, |this| {
+            this.bg(ui::accent()).text_color(gpui_kit::rgb(0x111114))
         })
-        .child(format.extension())
+        .when(!active, |this| {
+            this.text_color(text())
+                .hover(|style| style.bg(ui::surface_hover()))
+        })
+        .child(
+            div()
+                .flex()
+                .flex_1()
+                .min_w(px(0.0))
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .w(px(44.0))
+                        .text_size(px(12.0))
+                        .child(format.extension()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .text_size(px(10.0))
+                        .text_color(ink)
+                        .child(ui::ellipsis(format.hint())),
+                ),
+        )
+        .child(
+            div()
+                .text_size(px(9.0))
+                .text_color(ink)
+                .child(format.kind().label()),
+        )
         .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
             cx.stop_propagation();
-            this.convert_set_target(format, cx);
+            this.convert_pick_format(format, cx);
         }))
         .into_any_element()
 }

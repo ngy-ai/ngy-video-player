@@ -36,7 +36,8 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  menu_bar、associations、playlist_ui、playlist_menu（面板上的弹出
                  菜单：添加/排序/全部列表）、playlist_sort（排序 + 拖动重排）、
                  clip（裁切面板：与播放列表共用右侧通道）、
-                 convert/（格式转换面板：同一条右侧通道，来源可选当前文件或文件夹）、
+                 convert/（格式转换面板：同一条右侧通道，来源可选当前文件或文件夹，
+                 目标格式是可搜索的下拉）、
                  remux（音轨/字幕编辑对话框）、
                  overlays、mini、render、
                  settings_panel/（统一设置窗口：tabs + 各标签页 + 恢复默认）

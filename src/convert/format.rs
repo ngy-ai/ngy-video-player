@@ -52,6 +52,17 @@ pub struct TargetFormat {
     profile: Profile,
 }
 
+/// 搜索用的归一化：去掉空格、点、连字符再比。
+///
+/// 用户打的是「h264」，说明里写的是「H.264」；打「mpeg4」也不该被「MPEG-4」
+/// 挡在门外。
+fn normalize(text: &str) -> String {
+    text.chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect()
+}
+
 /// 表项的简写，省掉每条都写一遍结构体名。
 const fn target(extension: &'static str, muxer: &'static str, profile: Profile) -> TargetFormat {
     TargetFormat {
@@ -466,6 +477,20 @@ impl TargetFormat {
         self.profile.hint
     }
 
+    /// 搜索词是否命中。扩展名、编码说明、视频/音频分类都算。
+    ///
+    /// 让「mkv」「h264」「无损」都能搜到人想要的那一条：用户记得的往往不是
+    /// 扩展名，而是「能装字幕的那个」或者「那个 AVC 的」。
+    pub fn matches(self, query: &str) -> bool {
+        let query = normalize(query);
+        if query.is_empty() {
+            return true;
+        }
+        normalize(self.extension).contains(&query)
+            || normalize(self.hint()).contains(&query)
+            || normalize(self.kind().label()).contains(&query)
+    }
+
     /// 按扩展名找回一条。设置里存的是扩展名，读回来要用它还原。
     pub fn by_extension(extension: &str) -> Option<Self> {
         Self::ALL
@@ -577,5 +602,33 @@ mod tests {
     fn 默认是_mp4() {
         assert_eq!(TargetFormat::default().extension(), "mp4");
         assert_eq!(TargetFormat::by_extension("nope"), None);
+    }
+
+    #[test]
+    fn 搜索能按扩展名_编码和分类命中() {
+        // 扩展名。
+        assert!(TargetFormat::by_extension("mkv").unwrap().matches("mkv"));
+        assert!(TargetFormat::by_extension("mkv").unwrap().matches("MK"));
+        // 编码说明：想找 h264 的人不用先知道容器叫什么。
+        let h264: Vec<&str> = TargetFormat::ALL
+            .iter()
+            .filter(|format| format.matches("h264") || format.matches("H.264"))
+            .map(|format| format.extension)
+            .collect();
+        assert!(h264.contains(&"mp4") && h264.contains(&"flv"), "{h264:?}");
+        // 无损音频。
+        let lossless: Vec<&str> = TargetFormat::ALL
+            .iter()
+            .filter(|format| format.matches("无损"))
+            .map(|format| format.extension)
+            .collect();
+        assert_eq!(lossless, vec!["flac", "mka", "alac", "wv"], "{lossless:?}");
+        // 分类。
+        assert!(TargetFormat::by_extension("mp3").unwrap().matches("音频"));
+        assert!(!TargetFormat::by_extension("mp3").unwrap().matches("视频"));
+        // 空搜索词命中全部。
+        assert!(TargetFormat::ALL.iter().all(|format| format.matches("  ")));
+        // 搜不到就是空。
+        assert!(!TargetFormat::by_extension("mp3").unwrap().matches("zzz"));
     }
 }

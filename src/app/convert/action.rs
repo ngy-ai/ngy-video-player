@@ -4,6 +4,9 @@ use super::super::*;
 use super::state::{ConvertDialog, ConvertSource, ConvertState, ScanState};
 use crate::convert::{self, ConvertEvent, ConvertJob, ConvertOutcome, TargetFormat};
 
+/// 搜索词长度上限：再长也不会更精确，只是占地方。
+const MAX_QUERY_CHARS: usize = 24;
+
 impl PlayerApp {
     /// 打开面板。再点一次菜单就是收起：面板不挡播放，开关语义比「重新开一个」自然。
     pub(in crate::app) fn open_convert_dialog(&mut self, cx: &mut Context<Self>) {
@@ -160,11 +163,95 @@ impl PlayerApp {
         .detach();
     }
 
-    pub(super) fn convert_set_target(&mut self, target: TargetFormat, cx: &mut Context<Self>) {
+    /// 展开 / 收起格式下拉。展开时清空搜索词，从完整列表开始。
+    pub(super) fn convert_toggle_picker(&mut self, cx: &mut Context<Self>) {
         if let Some(dialog) = self.convert.as_mut() {
-            dialog.target = target;
+            dialog.picker.open = !dialog.picker.open;
+            dialog.picker.query.clear();
         }
         cx.notify();
+    }
+
+    pub(in crate::app) fn convert_close_picker(&mut self, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.convert.as_mut() {
+            dialog.picker.open = false;
+            dialog.picker.query.clear();
+        }
+        cx.notify();
+    }
+
+    /// 选中一个格式并收起列表。
+    pub(super) fn convert_pick_format(&mut self, target: TargetFormat, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.convert.as_mut() {
+            dialog.target = target;
+            dialog.picker.open = false;
+            dialog.picker.query.clear();
+            // 上一批的失败原因是针对旧格式的，换了格式就该清掉。
+            if matches!(dialog.state, ConvertState::Failed(_)) {
+                dialog.state = ConvertState::Editing;
+            }
+        }
+        cx.notify();
+    }
+
+    /// 下拉展开时接管键盘，返回 `true` 表示这次按键已被消费。
+    ///
+    /// 搜索框是自绘的（跟裁切的时间输入框同一套做法）：没有选区、没有输入法，
+    /// 光标永远在末尾。展开期间字母键必须归搜索框，否则会顺带触发播放器快捷键。
+    pub(in crate::app) fn on_convert_key(
+        &mut self,
+        event: &KeyDownEvent,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(dialog) = self.convert.as_ref() else {
+            return false;
+        };
+        if !dialog.picker.open || !dialog.editing() {
+            return false;
+        }
+        let keystroke = &event.keystroke;
+        // 带 Ctrl / Alt / ⌘ 的组合留给全局快捷键（保存、全屏这些不该被搜索框吃掉）。
+        if keystroke.modifiers.control || keystroke.modifiers.alt || keystroke.modifiers.platform {
+            return false;
+        }
+
+        match keystroke.key.as_str() {
+            // Esc 先收列表，再按一次才收面板（走 ExitOverlay）。
+            "escape" => self.convert_close_picker(cx),
+            // 回车选中第一个匹配项：输完几个字母直接回车是最快的路径。
+            "enter" => {
+                if let Some(target) = self
+                    .convert
+                    .as_ref()
+                    .and_then(|dialog| dialog.matches().first().copied())
+                {
+                    self.convert_pick_format(target, cx);
+                }
+            }
+            "backspace" => {
+                if let Some(dialog) = self.convert.as_mut() {
+                    dialog.picker.query.pop();
+                }
+                cx.notify();
+            }
+            _ => {
+                let typed = keystroke
+                    .key_char
+                    .as_deref()
+                    .filter(|text| !text.is_empty() && text.chars().all(|ch| !ch.is_control()));
+                let Some(text) = typed else {
+                    // 方向键、F1 之类不参与搜索，交还给播放器。
+                    return false;
+                };
+                if let Some(dialog) = self.convert.as_mut()
+                    && dialog.picker.query.chars().count() < MAX_QUERY_CHARS
+                {
+                    dialog.picker.query.push_str(text);
+                }
+                cx.notify();
+            }
+        }
+        true
     }
 
     /// 起一个后台批次。参数不齐时只给一条提示，面板留在编辑态。
@@ -176,6 +263,11 @@ impl PlayerApp {
             return;
         }
         let target = dialog.target;
+        // 起跑时把下拉收掉：批次开始后不该还挂着一个选择器。
+        if let Some(dialog) = self.convert.as_mut() {
+            dialog.picker.open = false;
+            dialog.picker.query.clear();
+        }
 
         let inputs = self.convert_inputs();
         if inputs.is_empty() {
