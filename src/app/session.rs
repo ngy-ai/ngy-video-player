@@ -170,6 +170,12 @@ impl PlayerApp {
     /// 画面、控制条、菜单都按这个数让位，所以只能有一个地方算——三处各算一次
     /// 迟早会有一处忘了改，表现为画面被面板盖住一条。
     pub(super) fn side_panel_width(&self, window: &Window) -> f32 {
+        // 全屏只放画面：右侧这条通道整条让出来，画面与控制条铺满整屏。
+        // 面板自己的状态不动（裁切/转换跑到一半的任务、列表的开关都还在），
+        // 退出全屏原样回来。
+        if window.is_fullscreen() {
+            return 0.0;
+        }
         // 裁切与转换都是定宽面板，宽度规则一模一样。
         let fixed = if self.convert.is_some() {
             Some(CONVERT_PANEL_WIDTH)
@@ -336,6 +342,20 @@ impl PlayerApp {
 
     pub(super) fn poke(&mut self) {
         self.last_activity = Instant::now();
+    }
+
+    /// 播放列表面板的开合（按钮、`L`、菜单共用这一个入口）。
+    ///
+    /// 全屏里右侧通道不画，`show_playlist` 却还是「开」的。这时候用户按列表
+    /// 按钮，本意就是「把列表拿出来」，不是「关掉一个看不见的开关」——所以
+    /// 先把窗口退回全屏之前的样子，再把列表打开。
+    pub(super) fn toggle_playlist(&mut self, window: &mut Window) {
+        if window.is_fullscreen() {
+            self.toggle_fullscreen(window);
+            self.set_playlist_visible(true);
+        } else {
+            self.set_playlist_visible(!self.settings.show_playlist);
+        }
     }
 
     /// 播放列表面板的开合。关掉时顺手清掉选择：再打开时不该有一批

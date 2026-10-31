@@ -298,8 +298,8 @@ impl PlayerApp {
                         self.settings.show_playlist,
                         false,
                         Some("播放列表（L）"),
-                        cx.listener(|this, _: &ClickEvent, _window, cx| {
-                            this.set_playlist_visible(!this.settings.show_playlist);
+                        cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.toggle_playlist(window);
                             this.poke();
                             cx.notify();
                         }),

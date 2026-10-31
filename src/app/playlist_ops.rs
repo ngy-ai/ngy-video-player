@@ -5,28 +5,32 @@ use super::*;
 impl PlayerApp {
     /// Esc 的语义：一层一层往回退，而不是直接全关。
     pub(super) fn exit_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // 全屏里右侧面板与菜单栏都不画（见 `render`）：它们的关闭分支要是还排在
+        // 队伍里，Esc 第一下关掉的就是一个看不见的东西，屏幕上毫无变化——看着像
+        // Esc 失灵，退出全屏得按第二下。所以全屏时跳过那几层。
+        let fullscreen = window.is_fullscreen();
         if self.tab_rename.is_some() {
             // 输入框自己会吃掉 Esc（见 `on_rename_key`），这里兜住「焦点不在
             // 根视图」的那一次，保证 Esc 总能关掉它。
             self.tab_rename = None;
-        } else if self.clip.is_some() {
+        } else if !fullscreen && self.clip.is_some() {
             // 输入框有焦点时 Esc 被 `on_clip_key` 截走（只退出焦点）；这里处理
             // 「焦点已经在播放器上」的那一次，把面板收起来。
             self.close_clip_dialog(cx);
-        } else if self.convert.is_some() {
+        } else if !fullscreen && self.convert.is_some() {
             // 转换面板和裁切占同一条通道，两者不会同时开着。
             self.close_convert_dialog(cx);
         } else if self.show_settings {
             self.show_settings = false;
         } else if self.file_info.is_some() {
             self.file_info = None;
-        } else if self.item_menu.is_some() {
+        } else if !fullscreen && self.item_menu.is_some() {
             self.item_menu = None;
-        } else if self.tab_menu.is_some() {
+        } else if !fullscreen && self.tab_menu.is_some() {
             self.tab_menu = None;
-        } else if self.panel_menu.is_some() {
+        } else if !fullscreen && self.panel_menu.is_some() {
             self.panel_menu = None;
-        } else if self.menu_bar.is_some() {
+        } else if !fullscreen && self.menu_bar.is_some() {
             self.menu_bar = None;
         } else if self.menu == Some(Menu::SpeedCustom) {
             // 自定义面板是倍速菜单的第二层，Esc 先退回预设列表。
@@ -39,9 +43,9 @@ impl PlayerApp {
         } else if self.mini.is_some() {
             // 小窗是「从主窗口分出去」的，Esc 表示收回来。
             self.dismiss_mini(cx);
-        } else if self.settings.show_playlist {
+        } else if !fullscreen && self.settings.show_playlist {
             self.set_playlist_visible(false);
-        } else if window.is_fullscreen() {
+        } else if fullscreen {
             window.toggle_fullscreen();
         }
         self.poke();

@@ -71,7 +71,9 @@ src/player/engine/    state（对外类型）、event_loop、dispatch、render_l
 - 浮层/按钮的点击处理必须 `stop_propagation`，否则同位置的视频画面也会收到点击。
 - 右侧只有一条通道：裁切、格式转换、播放列表三者互斥，宽度统一由
   `side_panel_width()` 算。新开一个这样的面板时，要同时收掉另外两个，并在
-  `render()` 里把播放列表的显示条件补上它。
+  `render()` 里把播放列表的显示条件补上它。全屏时这条通道整条让给画面
+  （`side_panel_width()` 返回 0，`render()` 里那几个面板都不画），
+  新面板同样要放进 `!fullscreen` 的分支里。
 - 注释用中文，解释「为什么」而不是复述代码；错误信息要给出可执行的解决路径。
 - 新增依赖前先确认必要性；`gpui-kit` 版本与其它 ngy-* 项目保持一致。
 - `.cargo/config.toml` 里的 `+crt-static` 不能删：exe 要能在没装 VC++ 运行库的

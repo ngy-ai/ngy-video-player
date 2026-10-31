@@ -19,8 +19,10 @@ impl Render for PlayerApp {
         window.set_window_title(&title);
 
         let fullscreen = window.is_fullscreen();
-        // 全屏时把菜单栏让给鼠标：和底栏一起出现、一起消失，避免画面永久缩水。
-        let bar_visible = !fullscreen || self.controls_visible();
+        // 全屏是「只管放片」的形态：菜单栏完全不进场，右侧面板整条收起，屏幕上
+        // 只剩画面和一条随鼠标出现、停一会儿又淡出的控制条。普通播放器全屏之后
+        // 就是这个样子——窗口标题栏让位给画面，而不是把整个界面原样铺满屏幕。
+        let bar_visible = !fullscreen;
         let video_top = if fullscreen {
             px(0.0)
         } else {
@@ -66,8 +68,8 @@ impl Render for PlayerApp {
             .on_action(cx.listener(|this, _: &ToggleMini, window, cx| {
                 this.toggle_mini(window, cx);
             }))
-            .on_action(cx.listener(|this, _: &TogglePlaylist, _window, cx| {
-                this.set_playlist_visible(!this.settings.show_playlist);
+            .on_action(cx.listener(|this, _: &TogglePlaylist, window, cx| {
+                this.toggle_playlist(window);
                 this.poke();
                 cx.notify();
             }))
@@ -98,9 +100,10 @@ impl Render for PlayerApp {
             .on_action(
                 cx.listener(|this, _: &TakeScreenshot, _window, cx| this.take_screenshot(cx)),
             )
-            .on_action(cx.listener(|this, _: &DeleteSelected, _window, cx| {
+            .on_action(cx.listener(|this, _: &DeleteSelected, window, cx| {
                 // 面板关着的时候选择是看不见的，这时候删等于盲删，直接忽略。
-                if this.settings.show_playlist {
+                // 全屏里面板同样不画（见本函数的渲染部分），一个道理。
+                if this.settings.show_playlist && !window.is_fullscreen() {
                     this.remove_selection(cx);
                 }
             }))
@@ -221,12 +224,20 @@ impl Render for PlayerApp {
             }))
             .child(self.render_video_area(video_top, panel_width, cx))
             // 转换 / 裁切 / 播放列表互斥，占同一条右侧通道；前两者开着时优先它们。
-            .children(self.render_convert_panel(video_top, panel_width, cx))
-            .children(self.render_clip_panel(video_top, panel_width, cx))
-            .when(
-                self.settings.show_playlist && self.clip.is_none() && self.convert.is_none(),
-                |this| this.child(self.render_playlist(video_top, panel_width, cx)),
-            )
+            //
+            // 全屏时这条通道整条不画：全屏要看的是画面本身，不是它旁边那一栏。
+            // 面板的开关状态原样留着，退出全屏就回来——切一下全屏不该把正在跑的
+            // 裁切/转换任务取消掉。
+            .when(!fullscreen, |this| {
+                this.children(self.render_convert_panel(video_top, panel_width, cx))
+                    .children(self.render_clip_panel(video_top, panel_width, cx))
+                    .when(
+                        self.settings.show_playlist
+                            && self.clip.is_none()
+                            && self.convert.is_none(),
+                        |this| this.child(self.render_playlist(video_top, panel_width, cx)),
+                    )
+            })
             .when(self.controls_visible(), |this| {
                 this.child(self.render_controls(panel_width, cx))
             })

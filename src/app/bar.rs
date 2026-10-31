@@ -241,9 +241,7 @@ impl PlayerApp {
             BarAction::Seek(delta) => self.seek_by(delta, cx),
             BarAction::SetLoop(mode) => self.set_loop(mode, cx),
             BarAction::SetOnTop(mode) => self.set_on_top(mode),
-            BarAction::TogglePlaylist => {
-                self.set_playlist_visible(!self.settings.show_playlist);
-            }
+            BarAction::TogglePlaylist => self.toggle_playlist(window),
             BarAction::ToggleFullscreen => self.toggle_fullscreen(window),
             BarAction::ToggleMini => self.toggle_mini(window, cx),
             BarAction::ToggleHelp => self.toggle_settings(SettingsTab::Shortcuts),

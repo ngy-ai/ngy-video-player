@@ -7,6 +7,16 @@ impl PlayerApp {
         window.toggle_fullscreen();
         // 进出全屏时平台会重排窗口层级，之前设过的置顶可能被清掉；下一帧重设一次。
         self.on_top_applied = false;
+        // 全屏里不画菜单栏和右侧面板，替它们弹出来的下拉也跟着收掉：
+        // 留着一个开着的菜单，退出全屏时它又会原地冒出来。
+        self.menu = None;
+        self.menu_bar = None;
+        self.item_menu = None;
+        self.tab_menu = None;
+        self.panel_menu = None;
+        // 控制条先亮一下再按 `CONTROLS_IDLE` 淡出：用户看得见「已经全屏了」，
+        // 而不是画面无声无息地变大。
+        self.poke();
     }
 
     // -- 小窗 --------------------------------------------------------------
