@@ -23,6 +23,8 @@ mod tree;
 pub use scan::{collect_dir, parse_playlist};
 pub use sort::{OrderVersion, SortMode};
 pub use tree::{DropSpot, collect_tree};
+// 格式转换扫描文件夹时也按这套自然序排：同一个 `第2集` 不该在两个地方排到不同位置。
+pub(crate) use scan::natural_cmp;
 
 /// 列表里的一项：一个文件，或者一个文件夹。
 ///

@@ -220,11 +220,13 @@ impl Render for PlayerApp {
                 cx.notify();
             }))
             .child(self.render_video_area(video_top, panel_width, cx))
-            // 裁切面板与播放列表互斥，占同一条右侧通道；裁切开着时优先它。
+            // 转换 / 裁切 / 播放列表互斥，占同一条右侧通道；前两者开着时优先它们。
+            .children(self.render_convert_panel(video_top, panel_width, cx))
             .children(self.render_clip_panel(video_top, panel_width, cx))
-            .when(self.settings.show_playlist && self.clip.is_none(), |this| {
-                this.child(self.render_playlist(video_top, panel_width, cx))
-            })
+            .when(
+                self.settings.show_playlist && self.clip.is_none() && self.convert.is_none(),
+                |this| this.child(self.render_playlist(video_top, panel_width, cx)),
+            )
             .when(self.controls_visible(), |this| {
                 this.child(self.render_controls(panel_width, cx))
             })

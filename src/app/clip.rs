@@ -105,6 +105,8 @@ impl PlayerApp {
 
         // 轨道编辑还是模态的，叠在面板上会挡住画面与进度条。
         self.close_remux_dialog(cx);
+        // 转换面板与裁切抢同一条右侧通道，先让位（正在跑的任务一并取消）。
+        self.dismiss_convert_panel();
         self.clip_generation += 1;
         self.clip = Some(ClipDialog::new(self.clip_generation, path, duration));
         // 播放列表与裁切面板抢同一条右侧通道，先让位。

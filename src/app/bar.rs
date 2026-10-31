@@ -23,6 +23,8 @@ impl PlayerApp {
                 items.push(BarItem::Entry(
                     BarEntry::new("裁切片段…", Trim).enabled(self.file_editable()),
                 ));
+                // 没有正在播放的文件也能用：面板里可以直接选一个文件夹批量转。
+                items.push(BarItem::Entry(BarEntry::new("格式转换…", Convert)));
                 items.push(BarItem::Entry(
                     BarEntry::new("替换或删除音轨…", EditAudio).enabled(self.file_editable()),
                 ));
@@ -248,6 +250,7 @@ impl PlayerApp {
             BarAction::OpenSettings(tab) => self.open_settings(tab),
             BarAction::TakeScreenshot => self.take_screenshot(cx),
             BarAction::Trim => self.open_clip_dialog(cx),
+            BarAction::Convert => self.open_convert_dialog(cx),
             BarAction::EditAudio => self.open_remux_dialog(EditTarget::Audio, cx),
             BarAction::EditSubtitle => self.open_remux_dialog(EditTarget::Subtitle, cx),
             BarAction::SetAsDefaultPlayer => self.set_default_player(),

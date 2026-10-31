@@ -6,6 +6,7 @@ pub mod logging;
 
 pub mod app;
 pub mod clip;
+pub mod convert;
 // 内嵌资源（libmpv / ffmpeg）的解压与缓存：对外没有 API，只是两个模块共用的落盘逻辑。
 mod embed;
 pub mod formats;

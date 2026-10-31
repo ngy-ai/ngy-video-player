@@ -76,6 +76,7 @@ mod bar;
 mod clip;
 mod constants;
 mod controls;
+mod convert;
 mod format;
 mod menu_bar;
 mod menus;
@@ -97,6 +98,7 @@ mod window;
 
 use self::clip::ClipDialog;
 use self::constants::*;
+use self::convert::ConvertDialog;
 use self::format::*;
 use self::mini::MiniPlayer;
 use self::playlist_menu::PanelMenu;
@@ -234,6 +236,11 @@ pub struct PlayerApp {
     /// 裁切任务代次。后台任务回来时用它确认事件仍属于当前对话框，
     /// 否则关掉再打开一次，旧任务的完成事件会改写新对话框。
     clip_generation: u64,
+    /// 格式转换面板；`None` 表示没打开。
+    convert: Option<ConvertDialog>,
+    /// 转换任务代次，作用同 `clip_generation`。扫描结果也认这个代次：
+    /// 换文件夹或重开面板之后，上一次扫描的慢结果不该填进新面板。
+    convert_generation: u64,
     /// 音轨 / 字幕编辑对话框；`None` 表示没打开。
     remux: Option<RemuxDialog>,
     /// 轨道编辑任务代次，作用同 `clip_generation`。
@@ -478,6 +485,8 @@ enum BarAction {
     OpenSettings(Option<SettingsTab>),
     TakeScreenshot,
     Trim,
+    /// 转成别的格式：当前文件，或整个文件夹。
+    Convert,
     /// 换掉 / 删掉内置音轨。
     EditAudio,
     /// 把外部字幕内嵌进容器。

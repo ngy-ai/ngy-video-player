@@ -13,6 +13,9 @@ impl PlayerApp {
             // 输入框有焦点时 Esc 被 `on_clip_key` 截走（只退出焦点）；这里处理
             // 「焦点已经在播放器上」的那一次，把面板收起来。
             self.close_clip_dialog(cx);
+        } else if self.convert.is_some() {
+            // 转换面板和裁切占同一条通道，两者不会同时开着。
+            self.close_convert_dialog(cx);
         } else if self.show_settings {
             self.show_settings = false;
         } else if self.file_info.is_some() {

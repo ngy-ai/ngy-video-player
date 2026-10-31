@@ -46,6 +46,8 @@ impl PlayerApp {
             file_info: None,
             clip: None,
             clip_generation: 0,
+            convert: None,
+            convert_generation: 0,
             remux: None,
             remux_generation: 0,
             settings,
@@ -163,15 +165,23 @@ impl PlayerApp {
         self.playing_tab
     }
 
-    /// 右侧面板占的宽度：裁切面板与播放列表互斥，同一时刻最多一条。
+    /// 右侧面板占的宽度：裁切 / 转换 / 播放列表互斥，同一时刻最多一条。
     ///
     /// 画面、控制条、菜单都按这个数让位，所以只能有一个地方算——三处各算一次
     /// 迟早会有一处忘了改，表现为画面被面板盖住一条。
     pub(super) fn side_panel_width(&self, window: &Window) -> f32 {
-        if self.clip.is_some() {
+        // 裁切与转换都是定宽面板，宽度规则一模一样。
+        let fixed = if self.convert.is_some() {
+            Some(CONVERT_PANEL_WIDTH)
+        } else if self.clip.is_some() {
+            Some(CLIP_PANEL_WIDTH)
+        } else {
+            None
+        };
+        if let Some(width) = fixed {
             // 与控制条共享宽度：面板再宽也不能把控制条右侧按钮挤出窗口。
             let available = f32::from(window.viewport_size().width);
-            CLIP_PANEL_WIDTH.min((available - CONTROLS_MIN_WIDTH).max(240.0))
+            width.min((available - CONTROLS_MIN_WIDTH).max(240.0))
         } else if self.settings.show_playlist {
             self.playlist_width(window)
         } else {
@@ -333,9 +343,10 @@ impl PlayerApp {
     pub(super) fn set_playlist_visible(&mut self, visible: bool) {
         self.settings.show_playlist = visible;
         if visible {
-            // 裁切面板与列表共用右侧通道：切到列表就把裁切收起来。
+            // 裁切 / 转换面板与列表共用右侧通道：切到列表就把它们收起来。
             // 任务一并取消，半成品由任务线程删掉。
             self.dismiss_clip_panel();
+            self.dismiss_convert_panel();
         }
         if !visible {
             self.selection.clear();

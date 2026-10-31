@@ -5,8 +5,8 @@
 跨平台视频播放器：**gpui-kit**（Zed GPUI）做界面，**libmpv** 做解复用/解码/字幕。
 Windows / macOS / Ubuntu 同一套纯 Rust 代码，libmpv 通过 `libloading` 在运行时加载。
 
-裁切片段要调用 **ffmpeg** 重编码：release 构建把 ffmpeg 与 libmpv 一起内嵌进 exe，
-运行时解压到缓存目录再以子进程调用（见 `src/platform/ffmpeg.rs`、`src/embed.rs`）。
+裁切片段、格式转换要调用 **ffmpeg** 重编码：release 构建把 ffmpeg 与 libmpv 一起
+内嵌进 exe，运行时解压到缓存目录再以子进程调用（见 `src/platform/ffmpeg.rs`、`src/embed.rs`）。
 
 ## 常用命令
 
@@ -35,12 +35,18 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  picture、playlist_ops、video_area、controls、menus、bar、
                  menu_bar、associations、playlist_ui、playlist_menu（面板上的弹出
                  菜单：添加/排序/全部列表）、playlist_sort（排序 + 拖动重排）、
-                 clip（裁切面板：与播放列表共用右侧通道）、remux（音轨/字幕编辑对话框）、
+                 clip（裁切面板：与播放列表共用右侧通道）、
+                 convert/（格式转换面板：同一条右侧通道，来源可选当前文件或文件夹）、
+                 remux（音轨/字幕编辑对话框）、
                  overlays、mini、render、
                  settings_panel/（统一设置窗口：tabs + 各标签页 + 恢复默认）
 src/ui.rs        配色、图标按钮、时间格式、等比画面
 src/formats.rs   扩展名清单（文件过滤器 + 拖入判断）
 src/clip.rs      裁切片段：时间解析、区间校验、ffmpeg 任务与进度
+src/convert.rs   格式转换：把当前文件或整个文件夹转成指定格式
+src/convert/format.rs  目标格式（容器 + 编码组合、字幕策略）
+src/convert/scan.rs    文件夹递归扫描（自然序、跳过符号链接）
+src/convert/task.rs    批次任务：逐个文件重编码、输出命名、进度与取消
 src/remux.rs     轨道编辑：换/删内置音轨、内嵌字幕（画面流复制，单路转码）与进度
 src/embed.rs     内嵌资源（libmpv / ffmpeg）解压到缓存目录
 src/playlist.rs  播放列表：树形条目（扁平数组 + depth）、多页签、存档
@@ -63,6 +69,9 @@ src/player/engine/    state（对外类型）、event_loop、dispatch、render_l
   不是 `Send`，跨线程只能通过 `futures::mpsc` 把事件推回主线程。
 - 播放器状态以 `engine.rs` 的状态快照为准，界面层不直接持有 mpv 句柄。
 - 浮层/按钮的点击处理必须 `stop_propagation`，否则同位置的视频画面也会收到点击。
+- 右侧只有一条通道：裁切、格式转换、播放列表三者互斥，宽度统一由
+  `side_panel_width()` 算。新开一个这样的面板时，要同时收掉另外两个，并在
+  `render()` 里把播放列表的显示条件补上它。
 - 注释用中文，解释「为什么」而不是复述代码；错误信息要给出可执行的解决路径。
 - 新增依赖前先确认必要性；`gpui-kit` 版本与其它 ngy-* 项目保持一致。
 - `.cargo/config.toml` 里的 `+crt-static` 不能删：exe 要能在没装 VC++ 运行库的

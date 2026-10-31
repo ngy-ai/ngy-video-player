@@ -1,6 +1,6 @@
-//! 裁切用的 ffmpeg 可执行文件。
+//! 裁切 / 转换用的 ffmpeg 可执行文件，以及跑子进程时共用的等待逻辑。
 //!
-//! 裁切片段要重编码，libmpv 只负责播放、做不了输出。release 构建把
+//! 裁切与格式转换都要重编码，libmpv 只负责播放、做不了输出。release 构建把
 //! `libs/<平台>/ffmpeg{,.exe}` 内嵌进二进制（见 `build.rs`），运行时解压到缓存目录
 //! 再以子进程调用——这样分发包仍然是一个 exe，不要求用户自己装 ffmpeg。
 //!
@@ -9,7 +9,8 @@
 
 use anyhow::Result;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::process::{Child, ExitStatus};
+use std::sync::{Arc, Mutex, OnceLock};
 
 // `build.rs` 生成的表：这次构建内嵌了哪个可执行文件（`NAME`）、内容是什么（`BYTES`）。
 include!(concat!(env!("OUT_DIR"), "/ffmpeg_embed.rs"));
@@ -128,6 +129,32 @@ fn platform_dir() -> &'static str {
         "linux-arm64"
     } else {
         "linux-x86_64"
+    }
+}
+
+/// 轮询等待子进程退出。
+///
+/// 不用 `wait()` 是因为它要独占 `&mut Child`，取消时就没法杀进程了；100ms 的
+/// 轮询延迟对「点取消」这件事完全够用。子进程退出（或被取消方杀掉）后会把句柄
+/// 从槽位里取走，返回它的退出状态；槽位已经空了则返回 `None`。
+pub fn wait_polling(child: &Arc<Mutex<Option<Child>>>) -> Option<std::io::Result<ExitStatus>> {
+    loop {
+        {
+            let mut slot = child.lock().unwrap();
+            let process = slot.as_mut()?;
+            match process.try_wait() {
+                Ok(Some(status)) => {
+                    slot.take();
+                    return Some(Ok(status));
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    slot.take();
+                    return Some(Err(error));
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
 

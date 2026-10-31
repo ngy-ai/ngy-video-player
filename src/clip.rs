@@ -15,7 +15,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 /// 裁切输出的容器。
 ///
@@ -281,7 +280,7 @@ impl ClipJob {
             if let Some(stdout) = stdout {
                 read_progress(stdout, total, &tx);
             }
-            let status = wait_polling(&task_child);
+            let status = crate::platform::ffmpeg::wait_polling(&task_child);
             let cancelled = task_cancelled.load(Ordering::SeqCst);
 
             let outcome = if cancelled {
@@ -330,33 +329,6 @@ impl Drop for ClipJob {
     fn drop(&mut self) {
         // 关窗口退出时不能把 ffmpeg 留在后台继续写文件。
         self.cancel();
-    }
-}
-
-/// 轮询等待子进程退出。
-///
-/// 不用 `wait()` 是因为它要独占 `&mut Child`，取消时就没法杀进程了；100ms 的
-/// 轮询延迟对「点取消」这件事完全够用。
-fn wait_polling(
-    child: &Arc<Mutex<Option<Child>>>,
-) -> Option<std::io::Result<std::process::ExitStatus>> {
-    loop {
-        {
-            let mut slot = child.lock().unwrap();
-            let process = slot.as_mut()?;
-            match process.try_wait() {
-                Ok(Some(status)) => {
-                    slot.take();
-                    return Some(Ok(status));
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    slot.take();
-                    return Some(Err(error));
-                }
-            }
-        }
-        std::thread::sleep(Duration::from_millis(100));
     }
 }
 

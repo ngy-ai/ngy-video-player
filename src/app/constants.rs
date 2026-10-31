@@ -30,6 +30,8 @@ pub(super) const PLAYLIST_MAX_WIDTH: f32 = 760.0;
 ///
 /// 固定宽度而不给拖动条：裁切面板的内容都是定宽控件，拖宽只会让中间空出一片。
 pub(super) const CLIP_PANEL_WIDTH: f32 = 340.0;
+/// 格式转换面板的宽度。比裁切宽一点：格式卡片两列并排，太窄小字会折成两行。
+pub(super) const CONVERT_PANEL_WIDTH: f32 = 360.0;
 /// 控制条一行排下全部按钮所需的宽度。
 ///
 /// 控制条按「窗口宽 - 面板宽」定宽，面板一旦把这一条压窄，右侧的倍速、
