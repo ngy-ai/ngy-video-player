@@ -272,8 +272,10 @@ impl PlayerApp {
     pub(super) fn render_tab_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let menu = self.tab_menu.as_ref()?;
         let index = menu.index;
-        // 只剩一页时不能删：右上角关闭按钮也是这个规矩，两条路别给出两种答案。
-        let closable = self.playlists.len() > 1;
+        // 默认列表不能改名、不能删；只剩一页时也不能删：右上角关闭按钮也是
+        // 这个规矩，几条路别给出两种答案。
+        let is_default = self.playlists.is_default(index);
+        let closable = self.playlists.len() > 1 && !is_default;
 
         Some(
             div()
@@ -302,17 +304,24 @@ impl PlayerApp {
                 .child(item_menu_entry(
                     "tab-menu-rename",
                     IconName::Pencil,
-                    "重命名…",
-                    text(),
+                    if is_default {
+                        "默认列表，不可改名"
+                    } else {
+                        "重命名…"
+                    },
+                    if is_default { text_faint() } else { text() },
                     cx.listener(move |this, _: &ClickEvent, _window, cx| {
                         cx.stop_propagation();
+                        // 灰掉的那一行也留着点击：点了给一句原因，比毫无反应好。
                         this.begin_rename(index, cx);
                     }),
                 ))
                 .child(item_menu_entry(
                     "tab-menu-delete",
                     IconName::Trash,
-                    if closable {
+                    if is_default {
+                        "默认列表，不可删除"
+                    } else if closable {
                         "删除列表"
                     } else {
                         "仅剩一页，无法删除"
@@ -323,6 +332,9 @@ impl PlayerApp {
                         this.tab_menu = None;
                         if closable {
                             this.close_tab(index, cx);
+                        } else if is_default {
+                            this.flash("「默认」列表不能删除");
+                            cx.notify();
                         } else {
                             this.flash("只剩一页列表，不能删除");
                             cx.notify();

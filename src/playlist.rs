@@ -266,6 +266,14 @@ impl Playlist {
         }
     }
 
+    /// 把一批已经展开好的条目并进列表，返回新增的可播放文件数。
+    ///
+    /// 「打开」走这条路：目录展开、m3u 解析都在调用方做完，这里只管并进去
+    /// 并去重（规则和 [`Playlist::append_paths`] 一致）。
+    pub fn append_entries(&mut self, entries: Vec<Item>) -> usize {
+        self.push_entries(entries)
+    }
+
     /// 追加文件；目录会连同子文件夹一起展开成子树。返回新增的可播放文件数。
     ///
     /// 已经在列表里的项跳过：同一个文件从目录展开、m3u 和手动挑选三条路进来
@@ -463,6 +471,12 @@ impl Playlist {
     }
 }
 
+/// 默认列表的名字。
+///
+/// 第一页永远是它：名字由程序掌管（存档里改过也不作数），也不能改名、不能删。
+/// 「打开」和双击文件启动都把内容放进这一页，用户无论怎么整理页签都有个固定落点。
+pub const DEFAULT_TAB_NAME: &str = "默认";
+
 /// 面板上的一页：一个名字 + 一份列表。
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -471,9 +485,19 @@ pub struct PlaylistTab {
     pub playlist: Playlist,
 }
 
+impl PlaylistTab {
+    fn default_tab() -> Self {
+        Self {
+            name: DEFAULT_TAB_NAME.to_string(),
+            playlist: Playlist::default(),
+        }
+    }
+}
+
 /// 全部列表 + 当前显示的是哪一页。
 ///
-/// 不变量：至少有一页。删到最后一页时不再允许删，保证界面永远有个落脚点。
+/// 不变量：至少有一页，且第 0 页固定是「默认」列表。它不能被删、不能被改名，
+/// 保证界面永远有个落脚点，也保证「打开」永远有地方放。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PlaylistSet {
@@ -492,10 +516,7 @@ static EMPTY_PLAYLIST: Playlist = Playlist {
 impl Default for PlaylistSet {
     fn default() -> Self {
         Self {
-            tabs: vec![PlaylistTab {
-                name: "列表 1".to_string(),
-                playlist: Playlist::default(),
-            }],
+            tabs: vec![PlaylistTab::default_tab()],
             active: 0,
         }
     }
@@ -542,23 +563,44 @@ impl PlaylistSet {
 
     pub fn active_playlist_mut(&mut self) -> &mut Playlist {
         if self.tabs.is_empty() {
-            self.tabs.push(PlaylistTab::default());
+            self.tabs.push(PlaylistTab::default_tab());
         }
         let index = self.active();
         &mut self.tabs[index].playlist
     }
 
+    /// 默认列表的下标。它固定是第一页，写成方法是为了让调用方说清楚意图，
+    /// 而不是到处散落一个 `0`。
+    pub fn default_index(&self) -> usize {
+        0
+    }
+
+    pub fn is_default(&self, index: usize) -> bool {
+        index == self.default_index()
+    }
+
     /// 给某一页改名。页签和「全部列表」菜单都按这个名字显示。
-    pub fn rename(&mut self, index: usize, name: impl Into<String>) {
-        if let Some(tab) = self.tabs.get_mut(index) {
-            tab.name = name.into();
+    ///
+    /// 返回是否真的改了。默认列表的名字由程序掌管，改不了；别的页也不许叫
+    /// 「默认」——两页同名的话，用户分不清哪一页才是「打开」的落点。
+    pub fn rename(&mut self, index: usize, name: impl Into<String>) -> bool {
+        let name = name.into();
+        if self.is_default(index) || name.trim() == DEFAULT_TAB_NAME {
+            return false;
+        }
+        match self.tabs.get_mut(index) {
+            Some(tab) => {
+                tab.name = name;
+                true
+            }
+            None => false,
         }
     }
 
     /// 给当前显示的那一页改名。
-    pub fn rename_active(&mut self, name: impl Into<String>) {
+    pub fn rename_active(&mut self, name: impl Into<String>) -> bool {
         let index = self.active();
-        self.rename(index, name);
+        self.rename(index, name)
     }
 
     /// 新建一页并切过去，返回新页的下标。
@@ -571,9 +613,9 @@ impl PlaylistSet {
         self.active
     }
 
-    /// 关掉一页。只剩一页时拒绝，返回是否真的关了。
+    /// 关掉一页。只剩一页、或者要关的是默认列表时拒绝，返回是否真的关了。
     pub fn remove(&mut self, index: usize) -> bool {
-        if self.tabs.len() <= 1 || index >= self.tabs.len() {
+        if self.tabs.len() <= 1 || index >= self.tabs.len() || self.is_default(index) {
             return false;
         }
         self.tabs.remove(index);
@@ -587,8 +629,11 @@ impl PlaylistSet {
     }
 
     /// 没用过的名字 `列表 N`，跳过已经被占用的号。
+    ///
+    /// 从 1 数起而不是从页数 +1 数起：第一页固定叫「默认」，按页数算的话
+    /// 用户新建的第一页就叫「列表 2」，看着像少了一页。
     pub fn auto_name(&self) -> String {
-        let mut number = self.tabs.len() + 1;
+        let mut number = 1;
         loop {
             let name = format!("列表 {number}");
             if !self.tabs.iter().any(|tab| tab.name == name) {
@@ -642,11 +687,11 @@ impl PlaylistSet {
 
     fn sanitize(&mut self) {
         if self.tabs.is_empty() {
-            self.tabs.push(PlaylistTab {
-                name: "列表 1".to_string(),
-                playlist: Playlist::default(),
-            });
+            self.tabs.push(PlaylistTab::default_tab());
         }
+        // 第一页永远是默认列表：老存档里用户自己起的名字在这一版让位，
+        // 否则升级之后就没有那个「不能改、不能删、放打开结果」的固定页了。
+        self.tabs[0].name = DEFAULT_TAB_NAME.to_string();
         for (index, tab) in self.tabs.iter_mut().enumerate() {
             if tab.name.trim().is_empty() {
                 tab.name = format!("列表 {}", index + 1);

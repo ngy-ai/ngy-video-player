@@ -1,6 +1,8 @@
 //! 播放列表的确定性行为：目录展开、自然序、m3u 解析、循环推进。
 
-use ngy_video_player::playlist::{Playlist, PlaylistSet, SortMode, collect_dir, parse_playlist};
+use ngy_video_player::playlist::{
+    Playlist, PlaylistSet, SortMode, collect_dir, collect_tree, parse_playlist,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -231,7 +233,7 @@ fn 关闭列表后页码仍然有效() {
     set.add("C");
     assert_eq!(set.active(), 2);
 
-    assert!(set.remove(0));
+    assert!(set.remove(1), "关掉中间的 B");
     assert_eq!(set.len(), 2);
     assert_eq!(set.active(), 1, "当前页跟着左移，仍指向 C");
     assert_eq!(set.tabs()[1].name, "C");
@@ -246,9 +248,33 @@ fn 只剩一页时不允许关闭() {
 }
 
 #[test]
+fn 第一页是默认列表且改不动删不掉() {
+    let mut set = PlaylistSet::default();
+    assert_eq!(set.len(), 1);
+    assert_eq!(set.tabs()[0].name, "默认");
+    assert!(set.is_default(0));
+
+    assert!(!set.rename(0, "我的列表"), "默认列表不许改名");
+    assert_eq!(set.tabs()[0].name, "默认");
+
+    set.add("第二页");
+    set.set_active(0);
+    assert!(!set.remove(0), "默认列表不许删除");
+    assert_eq!(set.len(), 2);
+    assert!(!set.rename_active("还是一样"), "默认页改名请求也拒绝");
+    assert_eq!(set.tabs()[0].name, "默认");
+
+    // 别的页可以随便改，但「默认」是保留名：两页同名的话用户分不清落点。
+    assert!(set.rename(1, "剧集"));
+    assert_eq!(set.tabs()[1].name, "剧集");
+    assert!(!set.rename(1, "默认"));
+    assert_eq!(set.tabs()[1].name, "剧集");
+    assert!(!set.rename(9, "不存在"), "越界索引返回失败而不是 panic");
+}
+
+#[test]
 fn 存档往返保留内容与页码() {
     let mut set = PlaylistSet::default();
-    set.rename_active("剧集");
     set.active_playlist_mut()
         .replace(vec![PathBuf::from("a.mp4"), PathBuf::from("b.mp4")], 1);
     set.add("电影");
@@ -258,27 +284,42 @@ fn 存档往返保留内容与页码() {
 
     assert_eq!(back.len(), 2);
     assert_eq!(back.active(), 1);
-    assert_eq!(back.tabs()[0].name, "剧集");
+    assert_eq!(back.tabs()[0].name, "默认");
     assert_eq!(back.tabs()[0].playlist.items().len(), 2);
     assert_eq!(back.tabs()[0].playlist.index(), Some(1));
     assert_eq!(back.tabs()[1].name, "电影");
 }
 
 #[test]
-fn 存档里的越界索引与空名字被校正() {
-    let text = r#"{"tabs":[{"name":"  ","playlist":{"items":["a.mp4"],"index":7}}],"active":9}"#;
+fn 老存档的第一页变成默认列表() {
+    // 升级前第一页可能是用户自己起的名；这一版它是固定的「默认」，
+    // 内容照旧保留，不额外插一页把用户的东西挪走。
+    let text = r#"{"tabs":[{"name":"剧集","playlist":{"items":["a.mp4"]}}],"active":0}"#;
     let set = PlaylistSet::from_json(text);
 
     assert_eq!(set.len(), 1);
-    assert_eq!(set.active(), 0);
-    assert_eq!(set.tabs()[0].name, "列表 1");
-    assert_eq!(set.tabs()[0].playlist.index(), None, "越界索引应被丢掉");
+    assert_eq!(set.tabs()[0].name, "默认");
+    assert_eq!(set.tabs()[0].playlist.items().len(), 1);
+}
+
+#[test]
+fn 存档里的越界索引与空名字被校正() {
+    let text = r#"{"tabs":[{"name":"默认","playlist":{}},
+        {"name":"  ","playlist":{"items":["a.mp4"],"index":7}}],"active":9}"#;
+    let set = PlaylistSet::from_json(text);
+
+    assert_eq!(set.len(), 2);
+    assert_eq!(set.active(), 1);
+    assert_eq!(set.tabs()[0].name, "默认");
+    assert_eq!(set.tabs()[1].name, "列表 2");
+    assert_eq!(set.tabs()[1].playlist.index(), None, "越界索引应被丢掉");
 }
 
 #[test]
 fn 坏存档退回默认列表() {
     let set = PlaylistSet::from_json("这不是 json");
     assert_eq!(set.len(), 1);
+    assert_eq!(set.tabs()[0].name, "默认");
     assert!(set.active_playlist().is_empty());
 }
 
@@ -333,6 +374,24 @@ fn 追加文件跳过重复项() {
 
     // 追加不动当前项：队首还是原来那一项。
     assert_eq!(playlist.index(), None, "空列表里追加不会凭空多出当前项");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn 追加展开好的条目按路径去重() {
+    let dir = scratch("append-entries");
+    touch(&dir, "a.mp4");
+    let entries = collect_tree(&dir);
+    assert_eq!(entries.len(), 2, "文件夹一行 + 里面一个文件");
+
+    let mut playlist = Playlist::default();
+    assert_eq!(playlist.append_entries(entries.clone()), 1);
+    assert_eq!(playlist.len(), 2);
+
+    // 同一棵树再并一次：文件夹连同子树整段跳过，不会变成两份。
+    assert_eq!(playlist.append_entries(entries), 0);
+    assert_eq!(playlist.len(), 2);
+    assert_eq!(playlist.index(), None, "追加不会凭空多出当前项");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -528,16 +587,31 @@ fn 列表页可以重命名() {
     set.add("第二页");
     assert_eq!(set.active(), 1);
 
-    set.rename(0, "剧集");
-    assert_eq!(set.tabs()[0].name, "剧集");
+    assert!(set.rename(1, "剧集"));
+    assert_eq!(set.tabs()[1].name, "剧集");
 
-    set.rename_active("综艺");
+    assert!(set.rename_active("综艺"));
     assert_eq!(set.tabs()[1].name, "综艺");
-    assert_eq!(set.tabs()[0].name, "剧集", "只改当前页，别的页不动");
+    assert_eq!(set.tabs()[0].name, "默认", "只改当前页，默认页不动");
 
     // 越界索引静默忽略：右键菜单弹出后页签可能刚好被关掉了。
-    set.rename(9, "不存在");
+    assert!(!set.rename(9, "不存在"));
     assert_eq!(set.len(), 2);
+}
+
+#[test]
+fn 新页默认名字跳过已占用的号() {
+    let mut set = PlaylistSet::default();
+    assert_eq!(set.auto_name(), "列表 1", "默认页不占「列表 N」的号");
+
+    let first = set.auto_name();
+    set.add(first);
+    assert_eq!(set.auto_name(), "列表 2");
+
+    let second = set.auto_name();
+    set.add(second);
+    assert!(set.rename(1, "剧集"));
+    assert_eq!(set.auto_name(), "列表 1", "改名腾出来的号可以再用");
 }
 
 #[test]
@@ -549,8 +623,8 @@ fn 页签可以新建和关闭且至少留一页() {
 
     assert!(set.remove(2));
     assert_eq!(set.active(), 1);
-    assert!(set.remove(0));
+    assert!(set.remove(1));
     assert_eq!(set.len(), 1);
-    assert!(!set.remove(0), "最后一页不让关");
+    assert!(!set.remove(0), "默认页是最后一页，不让关");
     assert_eq!(set.len(), 1);
 }

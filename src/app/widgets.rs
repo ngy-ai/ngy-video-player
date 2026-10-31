@@ -426,22 +426,6 @@ pub(super) fn render_media_info(info: &crate::player::MediaInfo) -> AnyElement {
         .into_any_element()
 }
 
-/// 给新列表起名字：文件夹名 / m3u 文件名 / 文件所在目录名。
-///
-/// 名字是列表在面板上唯一的身份，叫「列表 3」的话开三个页就分不清谁是谁了。
-pub(super) fn tab_name_for(paths: &[PathBuf]) -> Option<String> {
-    let first = paths.first()?;
-    let name = if first.is_dir() {
-        first.file_name()
-    } else if formats::is_playlist(first) {
-        first.file_stem()
-    } else {
-        first.parent().and_then(|parent| parent.file_name())
-    }?;
-    let name = name.to_string_lossy().trim().to_string();
-    (!name.is_empty()).then_some(name)
-}
-
 /// 当前 exe 是不是 `cargo build` 的产物。
 ///
 /// 关联里存的是绝对路径，`target` 目录会被 `cargo clean` 抹掉、被新构建顶替，

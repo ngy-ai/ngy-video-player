@@ -5,10 +5,12 @@ use super::*;
 use gpui_kit::DragMoveEvent;
 
 impl PlayerApp {
-    /// 面板顶部的页签条：多份列表并排，`+` 新建，`×` 关闭（只剩一页时不显示）。
+    /// 面板顶部的页签条：多份列表并排，`+` 新建，`×` 关闭。
+    ///
+    /// 只剩一页、或者这一页是默认列表时不画 `×`：默认列表是「打开」的固定落点，
+    /// 关掉它双击启动就无处可放了。
     pub(super) fn render_playlist_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.playlists.active();
-        let closable = self.playlists.len() > 1;
 
         div()
             .flex()
@@ -33,6 +35,8 @@ impl PlayerApp {
                             .map(|(index, tab)| {
                                 let group = format!("playlist-tab-{index}");
                                 let is_active = index == active;
+                                let closable =
+                                    self.playlists.len() > 1 && !self.playlists.is_default(index);
                                 div()
                                     .id(gpui_kit::ElementId::Name(
                                         format!("playlist-tab-{index}").into(),

@@ -109,10 +109,6 @@ impl PlayerApp {
         let single_file = paths.len() == 1 && !paths[0].is_dir();
         let mut entries: Vec<playlist::Item> = Vec::new();
         let mut focus: Option<PathBuf> = None;
-        // 单独打开一个 .m3u/.pls 时新开一页：它本来就是一份独立列表，
-        // 直接覆盖当前页会把用户正在看的那一页顶掉。
-        let as_new_tab = paths.len() == 1 && formats::is_playlist(&paths[0]);
-        let label = tab_name_for(&paths);
 
         for path in paths {
             if path.is_dir() {
@@ -165,21 +161,23 @@ impl PlayerApp {
             }
         }
 
-        // 当前页本来就是空的就别再新开一页，否则启动时那个空页会一直留着。
-        let reuse_empty = self.playlist().is_empty();
-        if as_new_tab && !reuse_empty {
-            let name = label.unwrap_or_else(|| self.playlists.auto_name());
-            self.playlists.add(name);
-        } else if reuse_empty {
-            // 空页借这次打开的文件起个名字，省得列表全叫「列表 N」。
-            if let Some(name) = label {
-                self.playlists.rename_active(name);
-            }
-        }
-        self.playlist_mut()
-            .replace_entries(entries, focus.as_deref());
+        // 「打开」的结果一律并进默认列表，并切到那一页。页签是用户手动整理用的：
+        // 打开动作不该覆盖当前正在看的这页，也不该再自动新开一页——双击文件
+        // 启动走的也是这里，落点必须稳定。
+        let tab = self.playlists.default_index();
+        self.playlists.set_active(tab);
+        self.playlist_mut().append_entries(entries);
         self.selection.clear();
         self.selection_anchor = None;
+        let Some(path) = focus else {
+            // 只并进来一些空文件夹：列表留着，正在放的片子不动。
+            self.playlists.save();
+            cx.notify();
+            return;
+        };
+        // 焦点跟着刚打开的那一项走；它早就在列表里时也切过去重播，
+        // 这样第二次双击同一个文件仍然有反应。
+        self.playlist_mut().follow(Some(path));
         if let Some(index) = self.playlist().index() {
             self.play_index(index);
         }
@@ -458,6 +456,13 @@ impl PlayerApp {
             .get(index)
             .map(|tab| tab.name.clone())
             .unwrap_or_default();
+        // 默认页不画关闭按钮，菜单里那两项也是灰的；这里是最后一道闸，
+        // 少一条路绕过「不能删」的约定。
+        if self.playlists.is_default(index) {
+            self.flash("「默认」列表不能删除");
+            cx.notify();
+            return;
+        }
         if !self.playlists.remove(index) {
             return;
         }
@@ -509,6 +514,12 @@ impl PlayerApp {
     /// 打开重命名输入框，预填当前名字。
     pub(super) fn begin_rename(&mut self, index: usize, cx: &mut Context<Self>) {
         self.tab_menu = None;
+        // 默认列表的名字是程序的一部分（「打开」的结果放在这一页），不给改。
+        if self.playlists.is_default(index) {
+            self.flash("「默认」列表的名字固定，不能改名");
+            cx.notify();
+            return;
+        }
         let Some(tab) = self.playlists.tabs().get(index) else {
             return;
         };
@@ -548,7 +559,12 @@ impl PlayerApp {
             cx.notify();
             return;
         }
-        self.playlists.rename(dialog.index, name.clone());
+        if !self.playlists.rename(dialog.index, name.clone()) {
+            // 只剩两种原因：改的是默认列表，或者想给别的页起「默认」这个名字。
+            self.flash("「默认」是保留名，不能改也不能重名");
+            cx.notify();
+            return;
+        }
         self.playlists.save();
         self.flash(format!("已改名为「{name}」"));
         self.poke();
