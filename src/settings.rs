@@ -419,10 +419,10 @@ impl Settings {
 
 /// 设置文件位置，遵循各平台惯例。
 pub fn config_path() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("NGY_VIDEO_CONFIG_DIR") {
-        if !dir.is_empty() {
-            return Some(PathBuf::from(dir).join("settings.json"));
-        }
+    if let Ok(dir) = std::env::var("NGY_VIDEO_CONFIG_DIR")
+        && !dir.is_empty()
+    {
+        return Some(PathBuf::from(dir).join("settings.json"));
     }
 
     #[cfg(windows)]

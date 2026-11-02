@@ -15,7 +15,7 @@
 //! `render.h` 写，结构体布局也照抄 C 定义。
 
 use super::embed;
-use anyhow::{Context as _, Result, anyhow, bail};
+use anyhow::{Context as _, Result, bail};
 use libloading::Library;
 use std::{
     ffi::{CStr, CString, c_char, c_double, c_int, c_ulong, c_void},
@@ -80,7 +80,11 @@ pub struct MpvRenderParam {
 // ---------------------------------------------------------------------------
 // 常量（照抄 mpv/client.h 与 mpv/render.h）
 // ---------------------------------------------------------------------------
+//
+// 这两张表故意抄全：以后接新事件、新渲染参数时对着头文件找名字，不必回头补值。
+// 表里暂时没人用的项是正常的，所以整块关掉 dead_code 检查。
 
+#[allow(dead_code)]
 pub mod event {
     pub const NONE: i32 = 0;
     pub const SHUTDOWN: i32 = 1;
@@ -110,6 +114,7 @@ pub mod end_file {
     pub const ERROR: i32 = 4;
 }
 
+#[allow(dead_code)]
 pub mod render_param {
     pub const INVALID: i32 = 0;
     pub const API_TYPE: i32 = 1;
@@ -484,10 +489,10 @@ impl MpvApi {
 fn search_paths() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
-    if let Ok(explicit) = std::env::var("NGY_MPV_LIB") {
-        if !explicit.is_empty() {
-            candidates.push(PathBuf::from(explicit));
-        }
+    if let Ok(explicit) = std::env::var("NGY_MPV_LIB")
+        && !explicit.is_empty()
+    {
+        candidates.push(PathBuf::from(explicit));
     }
 
     let names: &[&str] = if cfg!(windows) {
@@ -499,18 +504,18 @@ fn search_paths() -> Vec<PathBuf> {
     };
 
     let mut dirs: Vec<PathBuf> = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            dirs.push(dir.to_path_buf());
-            // macOS .app 布局：可执行文件在 Contents/MacOS，库在 Contents/Frameworks。
-            if let Some(contents) = dir.parent() {
-                dirs.push(contents.join("Frameworks"));
-                dirs.push(contents.join("Resources"));
-            }
-            // 开发期：target/debug/../../libs/<platform>
-            if let Some(root) = dir.parent().and_then(|p| p.parent()) {
-                dirs.push(root.join("libs").join(platform_dir()));
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        dirs.push(dir.to_path_buf());
+        // macOS .app 布局：可执行文件在 Contents/MacOS，库在 Contents/Frameworks。
+        if let Some(contents) = dir.parent() {
+            dirs.push(contents.join("Frameworks"));
+            dirs.push(contents.join("Resources"));
+        }
+        // 开发期：target/debug/../../libs/<platform>
+        if let Some(root) = dir.parent().and_then(|p| p.parent()) {
+            dirs.push(root.join("libs").join(platform_dir()));
         }
     }
     if let Ok(cwd) = std::env::current_dir() {
@@ -621,9 +626,4 @@ pub fn json_f64(value: &serde_json::Value, key: &str) -> Option<f64> {
 /// 轨道信息缺失不影响播放。
 pub fn parse_track_list(raw: &str) -> Vec<serde_json::Value> {
     serde_json::from_str::<Vec<serde_json::Value>>(raw).unwrap_or_default()
-}
-
-/// 构造一个以 `name=value` 形式传选项的辅助函数所需的 `CString`。
-pub fn cstring(value: &str) -> Result<CString> {
-    CString::new(value).map_err(|_| anyhow!("字符串包含 NUL 字节：{value:?}"))
 }

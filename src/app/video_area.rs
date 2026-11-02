@@ -81,11 +81,11 @@ impl PlayerApp {
         let mut height = (canvas_height * fit).round().max(2.0) as u32;
         // 性能模式封顶渲染高度：全屏看 4K 时，缩放和每帧回读那几个 MB 的像素
         // 是耗电的大头，而 720 行在正常观看距离下几乎看不出与全分辨率的差别。
-        if let Some(cap) = self.settings.render_mode.height_cap() {
-            if height > cap {
-                width = ((width as f32 * cap as f32 / height as f32).round() as u32).max(2);
-                height = cap;
-            }
+        if let Some(cap) = self.settings.render_mode.height_cap()
+            && height > cap
+        {
+            width = ((width as f32 * cap as f32 / height as f32).round() as u32).max(2);
+            height = cap;
         }
         engine.set_render_target(width, height, self.settings.video_rotate.degrees());
     }

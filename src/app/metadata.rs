@@ -32,6 +32,18 @@ struct ChapterRow {
     title: Entity<InputState>,
 }
 
+/// 打开对话框时从播放器快照里抄出来的一份文件信息。
+///
+/// 单独成结构是为了让 `MetadataDialog::new` 只收两个参数：数据一批、窗口与上下文一批。
+struct MetadataSource<'a> {
+    path: PathBuf,
+    duration: f64,
+    tags: &'a Tags,
+    chapters: Vec<(String, f64)>,
+    /// 原文件内置字幕的编码名，保存时决定字幕是复制还是转码。
+    subtitle_codecs: Vec<String>,
+}
+
 /// 对话框的全部状态。
 pub(super) struct MetadataDialog {
     generation: u64,
@@ -50,31 +62,27 @@ pub(super) struct MetadataDialog {
 impl MetadataDialog {
     fn new(
         generation: u64,
-        path: PathBuf,
-        duration: f64,
-        tags: &Tags,
-        chapters: Vec<(String, f64)>,
-        subtitle_codecs: Vec<String>,
+        source: MetadataSource<'_>,
         window: &mut Window,
         cx: &mut Context<PlayerApp>,
     ) -> Self {
         let title = cx.new(|cx| {
             InputState::new(window, cx)
-                .default_value(tags.title.clone())
+                .default_value(source.tags.title.clone())
                 .placeholder("留空则删除标题")
         });
         let artist = cx.new(|cx| {
             InputState::new(window, cx)
-                .default_value(tags.artist.clone())
+                .default_value(source.tags.artist.clone())
                 .placeholder("留空则删除作者")
         });
         let comment = cx.new(|cx| {
             InputState::new(window, cx)
-                .default_value(tags.comment.clone())
+                .default_value(source.tags.comment.clone())
                 .placeholder("留空则删除备注")
         });
 
-        let mut chapters: Vec<(String, f64)> = chapters;
+        let mut chapters: Vec<(String, f64)> = source.chapters;
         chapters.sort_by(|a, b| a.1.total_cmp(&b.1));
         let chapters = chapters
             .into_iter()
@@ -97,13 +105,13 @@ impl MetadataDialog {
 
         Self {
             generation,
-            path,
-            duration,
+            path: source.path,
+            duration: source.duration,
             title,
             artist,
             comment,
             chapters,
-            subtitle_codecs,
+            subtitle_codecs: source.subtitle_codecs,
             state: MetadataState::Editing,
             job: None,
         }
@@ -210,11 +218,13 @@ impl PlayerApp {
         };
         let dialog = MetadataDialog::new(
             self.metadata_generation,
-            path,
-            self.snapshot.duration,
-            &tags,
-            chapters,
-            subtitle_codecs,
+            MetadataSource {
+                path,
+                duration: self.snapshot.duration,
+                tags: &tags,
+                chapters,
+                subtitle_codecs,
+            },
             window,
             cx,
         );

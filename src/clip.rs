@@ -22,11 +22,6 @@ mod export;
 pub(crate) use encoder::warm_up as warm_up_encoders;
 pub use export::{EncoderMode, ExportMode, ExportOptions, OutputFormat, Quality, VideoCodec};
 
-/// 裁切输出的容器。
-///
-/// 选 mkv 而不是 mp4：mkv 能原样装下任意来源的音频与字幕轨，换成 mp4 就要为
-/// PGS/ASS 之类找替身编码，失败面大得多。
-
 /// 两端时间输入框允许的最短区间。低于这个值的请求基本是误操作，也让进度条失去意义。
 const MIN_DURATION: f64 = 0.05;
 

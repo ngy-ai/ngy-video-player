@@ -81,6 +81,8 @@ fn m3u_相对路径按列表文件所在目录解析() {
 }
 
 #[test]
+// 名字里的 FileN 是 pls 格式的键名，照抄格式本身比迎合 snake_case 更好读。
+#[allow(non_snake_case)]
 fn pls_解析_FileN_条目() {
     let dir = scratch("pls");
     touch(&dir, "a.mp4");

@@ -21,18 +21,18 @@ pub fn log_path() -> Option<PathBuf> {
 
 pub fn init() {
     let path = default_log_path();
-    if let Some(path) = &path {
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
+    if let Some(path) = &path
+        && let Some(parent) = path.parent()
+    {
+        let _ = std::fs::create_dir_all(parent);
     }
     let file = path.as_ref().and_then(|path| {
         // 超过 8MB 就轮转一次，避免长期使用后日志无限增长。
-        if let Ok(meta) = std::fs::metadata(path) {
-            if meta.len() > 8 * 1024 * 1024 {
-                let old = path.with_extension("log.1");
-                let _ = std::fs::rename(path, old);
-            }
+        if let Ok(meta) = std::fs::metadata(path)
+            && meta.len() > 8 * 1024 * 1024
+        {
+            let old = path.with_extension("log.1");
+            let _ = std::fs::rename(path, old);
         }
         OpenOptions::new().create(true).append(true).open(path).ok()
     });
@@ -51,10 +51,10 @@ pub fn init() {
 }
 
 fn default_log_path() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("NGY_VIDEO_LOG_DIR") {
-        if !dir.is_empty() {
-            return Some(PathBuf::from(dir).join("player.log"));
-        }
+    if let Ok(dir) = std::env::var("NGY_VIDEO_LOG_DIR")
+        && !dir.is_empty()
+    {
+        return Some(PathBuf::from(dir).join("player.log"));
     }
 
     #[cfg(windows)]
@@ -101,13 +101,12 @@ pub fn write(level: &str, args: std::fmt::Arguments<'_>) {
     if level == "ERROR" || level == "WARN" || cfg!(debug_assertions) {
         eprintln!("{message}");
     }
-    if let Some(file) = LOG_FILE.get() {
-        if let Ok(mut guard) = file.lock() {
-            if let Some(file) = guard.as_mut() {
-                let _ = writeln!(file, "{message}");
-                let _ = file.flush();
-            }
-        }
+    if let Some(file) = LOG_FILE.get()
+        && let Ok(mut guard) = file.lock()
+        && let Some(file) = guard.as_mut()
+    {
+        let _ = writeln!(file, "{message}");
+        let _ = file.flush();
     }
 }
 

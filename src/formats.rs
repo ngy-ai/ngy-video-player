@@ -50,7 +50,7 @@ pub fn extension(path: &std::path::Path) -> Option<String> {
 }
 
 fn matches(list: &[&str], ext: &str) -> bool {
-    list.iter().any(|candidate| *candidate == ext)
+    list.contains(&ext)
 }
 
 /// 这个路径看起来是不是可以播放的东西。

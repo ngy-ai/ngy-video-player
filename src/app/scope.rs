@@ -9,7 +9,9 @@ use crate::scope::{self as scope_core, LumaScope};
 #[derive(Clone, Debug)]
 enum ScopeState {
     Loading,
-    Ready(LumaScope),
+    /// 直方图本体是 256 个 bin 的定长数组，比另外两个变体大一个量级；
+    /// 装进 Box 里，枚举本身就不会被撑大。
+    Ready(Box<LumaScope>),
     Failed(String),
 }
 
@@ -106,7 +108,7 @@ impl PlayerApp {
                         return;
                     }
                     dialog.state = match result {
-                        Ok(scope) => ScopeState::Ready(scope),
+                        Ok(scope) => ScopeState::Ready(Box::new(scope)),
                         Err(error) => ScopeState::Failed(format!("{error:#}")),
                     };
                     cx.notify();

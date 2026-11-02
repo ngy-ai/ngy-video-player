@@ -123,13 +123,11 @@ pub(super) fn event_loop(
                     shared.notify(PlayerEvent::Ended(reason));
                     shared.notify(PlayerEvent::Dirty);
                 }
-                event::LOG_MESSAGE => {
-                    if !event.data.is_null() {
-                        let message = &*(event.data as *const ffi::MpvEventLogMessage);
-                        let text = cstr(message.text);
-                        let prefix = cstr(message.prefix);
-                        log_debug!("[mpv/{prefix}] {text}");
-                    }
+                event::LOG_MESSAGE if !event.data.is_null() => {
+                    let message = &*(event.data as *const ffi::MpvEventLogMessage);
+                    let text = cstr(message.text);
+                    let prefix = cstr(message.prefix);
+                    log_debug!("[mpv/{prefix}] {text}");
                 }
                 _ => {}
             }
@@ -261,14 +259,14 @@ fn refresh_metadata(api: &Arc<MpvApi>, handle: *mut ffi::MpvHandle, shared: &Arc
     }
 
     let mut chapters = Vec::new();
-    if let Some(raw) = chapter_json {
-        if let Ok(values) = serde_json::from_str::<Vec<serde_json::Value>>(&raw) {
-            for value in values {
-                chapters.push(Chapter {
-                    title: ffi::json_str(&value, "title").unwrap_or_else(|| "未命名章节".into()),
-                    time: ffi::json_f64(&value, "time").unwrap_or(0.0),
-                });
-            }
+    if let Some(raw) = chapter_json
+        && let Ok(values) = serde_json::from_str::<Vec<serde_json::Value>>(&raw)
+    {
+        for value in values {
+            chapters.push(Chapter {
+                title: ffi::json_str(&value, "title").unwrap_or_else(|| "未命名章节".into()),
+                time: ffi::json_f64(&value, "time").unwrap_or(0.0),
+            });
         }
     }
 

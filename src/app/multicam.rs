@@ -541,12 +541,15 @@ impl PlayerApp {
     }
 }
 
+/// 「更换」按钮的回调。取个别名，免得参数表被一长串 `dyn Fn` 撑得看不清。
+type ReplaceHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+
 /// 一行机位信息：名称、时长，以及可选的「更换」按钮。
 fn camera_row(
     label: &'static str,
     name: &str,
     duration: f64,
-    replace: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
+    replace: Option<ReplaceHandler>,
 ) -> AnyElement {
     let mut row = div()
         .flex()
