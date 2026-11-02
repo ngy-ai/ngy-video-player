@@ -8,6 +8,7 @@ impl Render for PlayerApp {
         self.drop_retired_previews(window);
         self.sync_clip_source(cx);
         self.poll_clip_preview(cx);
+        self.poll_ab_loop(cx);
         self.update_render_target(window);
         self.sync_on_top(window, cx);
 

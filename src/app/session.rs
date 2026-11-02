@@ -48,6 +48,7 @@ impl PlayerApp {
             clip_generation: 0,
             convert: None,
             convert_generation: 0,
+            ab_loop: AbLoop::default(),
             remux: None,
             remux_generation: 0,
             settings,

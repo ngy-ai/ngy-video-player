@@ -42,6 +42,8 @@ pub(super) struct ClipDialog {
     field: Option<ClipField>,
     state: ClipState,
     job: Option<Arc<ClipJob>>,
+    /// 导出参数：剪切方式、编码、滤镜与轨道保留。
+    options: clip_core::ExportOptions,
     /// 正在预览片段时的终点与开始时刻（秒）。
     ///
     /// 记下开始时刻是为了躲开 seek 的延迟：刚跳到起点时位置事件可能还是旧的
@@ -60,6 +62,7 @@ impl ClipDialog {
             field: None,
             state: ClipState::Editing,
             job: None,
+            options: clip_core::ExportOptions::default(),
             preview: None,
         }
     }
@@ -308,6 +311,7 @@ impl PlayerApp {
             output: clip_core::output_path(&dialog.path),
             input: dialog.path.clone(),
             range,
+            options: dialog.options.clone(),
         };
         let (tx, mut rx) = futures::channel::mpsc::unbounded();
         match ClipJob::start(request, tx) {
@@ -400,4 +404,5 @@ impl PlayerApp {
     }
 }
 
+mod options;
 mod panel;

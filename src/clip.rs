@@ -12,9 +12,13 @@ use futures::channel::mpsc::UnboundedSender;
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+
+mod export;
+
+pub use export::{ExportMode, ExportOptions, Quality, VideoCodec};
 
 /// 裁切输出的容器。
 ///
@@ -218,6 +222,7 @@ pub struct ClipRequest {
     pub input: PathBuf,
     pub output: PathBuf,
     pub range: ClipRange,
+    pub options: ExportOptions,
 }
 
 /// 后台任务回报给界面的事件。
@@ -247,7 +252,7 @@ impl ClipJob {
     /// 启动后台裁切。命令拼装或进程启动失败会立即返回错误，界面不必等事件。
     pub fn start(request: ClipRequest, tx: UnboundedSender<ClipEvent>) -> Result<Self> {
         let executable = crate::platform::ffmpeg::executable()?;
-        let mut child = build_command(&executable, &request)
+        let mut child = export::build_command(&executable, &request)
             .spawn()
             .with_context(|| format!("启动 ffmpeg 失败：{}", executable.display()))?;
 
@@ -348,60 +353,6 @@ fn read_progress(stdout: impl Read, total: f64, tx: &UnboundedSender<ClipEvent>)
         let progress = (micros / total_us).clamp(0.0, 1.0) as f32;
         let _ = tx.unbounded_send(ClipEvent::Progress(progress));
     }
-}
-
-/// 拼 ffmpeg 参数。
-///
-/// `-ss` 放在 `-i` 前：ffmpeg 会先跳到目标附近再精确解码到目标帧，重编码时起点
-/// 精确到帧，长视频也不用从第 0 秒解起。输出统一成 H.264 8bit + AAC：
-/// 兼容性优先，HDR/10bit 源会被转成 SDR——这是「精确重编码」必须付出的代价。
-fn build_command(executable: &Path, request: &ClipRequest) -> Command {
-    let mut command = Command::new(executable);
-    command
-        .arg("-hide_banner")
-        .arg("-nostdin")
-        .arg("-y")
-        .arg("-nostats")
-        .arg("-loglevel")
-        .arg("error")
-        .arg("-progress")
-        .arg("pipe:1")
-        .arg("-ss")
-        .arg(format!("{:.3}", request.range.start))
-        .arg("-i")
-        .arg(&request.input)
-        .arg("-t")
-        .arg(format!("{:.3}", request.range.duration()))
-        // 大写 V 排除封面图（attached_pic），否则第一路「视频」可能是一张 jpeg。
-        .arg("-map")
-        .arg("0:V:0?")
-        .arg("-map")
-        .arg("0:a?")
-        .arg("-map")
-        .arg("0:s?")
-        .arg("-map_metadata")
-        .arg("0")
-        .arg("-c:v")
-        .arg("libx264")
-        .arg("-preset")
-        .arg("medium")
-        .arg("-crf")
-        .arg("20")
-        .arg("-pix_fmt")
-        .arg("yuv420p")
-        .arg("-c:a")
-        .arg("aac")
-        .arg("-b:a")
-        .arg("192k")
-        .arg("-c:s")
-        .arg("copy")
-        .arg("-avoid_negative_ts")
-        .arg("make_zero")
-        .arg(&request.output)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    command
 }
 
 #[cfg(test)]

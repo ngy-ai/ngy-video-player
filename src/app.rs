@@ -71,6 +71,7 @@ actions!(
 );
 
 // 子模块按职责拆分：`PlayerApp` 的方法分散在各文件里，Rust 允许同一类型有多个 impl 块。
+mod ab_loop;
 mod associations;
 mod bar;
 mod clip;
@@ -177,6 +178,19 @@ struct HoverPreview {
     image: Option<Arc<RenderImage>>,
 }
 
+/// A-B 循环的两个标记点。
+///
+/// `path` 记下标记时的文件：换片后位置与时长都变了，旧标记必须失效，
+/// 不能在别的片子上继续循环。
+#[derive(Clone, Debug, Default)]
+struct AbLoop {
+    path: Option<PathBuf>,
+    start: Option<f64>,
+    end: Option<f64>,
+    /// 上一次回跳的时刻，用来避开 seek 的延迟。
+    seeked_at: Option<Instant>,
+}
+
 /// 截图卡片里那块预览的三种状态。
 ///
 /// 用枚举而不是 `Option`：`None` 分不清「还在解码」和「解码失败」，
@@ -241,6 +255,8 @@ pub struct PlayerApp {
     /// 转换任务代次，作用同 `clip_generation`。扫描结果也认这个代次：
     /// 换文件夹或重开面板之后，上一次扫描的慢结果不该填进新面板。
     convert_generation: u64,
+    /// A-B 循环的标记点。
+    ab_loop: AbLoop,
     /// 音轨 / 字幕编辑对话框；`None` 表示没打开。
     remux: Option<RemuxDialog>,
     /// 轨道编辑任务代次，作用同 `clip_generation`。
@@ -487,6 +503,10 @@ enum BarAction {
     Trim,
     /// 转成别的格式：当前文件，或整个文件夹。
     Convert,
+    /// 标记 / 清除 A-B 循环。
+    MarkAbStart,
+    MarkAbEnd,
+    ClearAbLoop,
     /// 换掉 / 删掉内置音轨。
     EditAudio,
     /// 把外部字幕内嵌进容器。

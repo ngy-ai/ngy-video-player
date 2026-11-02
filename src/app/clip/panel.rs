@@ -231,6 +231,7 @@ impl PlayerApp {
                     }),
                 )),
         )
+        .child(self.render_clip_options(dialog, cx))
         .child(
             div()
                 .flex()
@@ -247,7 +248,11 @@ impl PlayerApp {
                 ))
                 .child(primary_button(
                     "clip-start",
-                    "开始裁切",
+                    if dialog.options.mode == clip_core::ExportMode::Copy {
+                        "开始无损剪切"
+                    } else {
+                        "开始裁切"
+                    },
                     can_start,
                     cx.listener(move |this, _: &ClickEvent, _window, cx| {
                         this.start_clip(cx);
@@ -263,6 +268,18 @@ impl PlayerApp {
                     "用控制条上的进度条定位，停在哪一帧就点「设为开始 / 设为结束」。\
                      空格播放/暂停，←/→ 5 秒，Ctrl/⌘+←/→ 逐帧。",
                 ),
+        )
+        .child(
+            div()
+                .text_size(px(10.0))
+                .text_color(text_faint())
+                .whitespace_normal()
+                .child(if dialog.options.mode == clip_core::ExportMode::Copy {
+                    "流复制为 mkv：不重新编码，几秒完成；切点会落在前一个关键帧上，\
+                     画面可能比设定时间多出几秒。"
+                } else {
+                    "重编码为 mkv，耗时与片长相关；开始后可取消。"
+                }),
         )
         .into_any_element()
     }

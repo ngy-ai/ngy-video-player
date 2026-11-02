@@ -78,6 +78,36 @@ impl PlayerApp {
                 }
 
                 items.push(BarItem::Separator);
+                // A-B 循环：标记只对当前文件有效，换片会自动失效。
+                let ab_start = self.ab_loop.start;
+                let ab_end = self.ab_loop.end;
+                items.push(BarItem::Entry(
+                    BarEntry::new("标记 A-B 起点", MarkAbStart)
+                        .checked(ab_start.is_some())
+                        .enabled(self.file_editable()),
+                ));
+                items.push(BarItem::Entry(
+                    BarEntry::new("标记 A-B 终点", MarkAbEnd)
+                        .checked(ab_end.is_some())
+                        .enabled(ab_start.is_some()),
+                ));
+                if let (Some(start), Some(end)) = (ab_start, ab_end) {
+                    items.push(BarItem::Entry(BarEntry::note(format!(
+                        "A-B：{} → {}",
+                        format_time(start),
+                        format_time(end)
+                    ))));
+                } else if let Some(start) = ab_start {
+                    items.push(BarItem::Entry(BarEntry::note(format!(
+                        "A-B：{} → 待标记",
+                        format_time(start)
+                    ))));
+                }
+                items.push(BarItem::Entry(
+                    BarEntry::new("清除 A-B 循环", ClearAbLoop).enabled(ab_start.is_some()),
+                ));
+
+                items.push(BarItem::Separator);
                 items.push(BarItem::Entry(
                     BarEntry::new("截图", TakeScreenshot)
                         .hint("S")
@@ -249,6 +279,9 @@ impl PlayerApp {
             BarAction::TakeScreenshot => self.take_screenshot(cx),
             BarAction::Trim => self.open_clip_dialog(cx),
             BarAction::Convert => self.open_convert_dialog(cx),
+            BarAction::MarkAbStart => self.mark_ab_start(cx),
+            BarAction::MarkAbEnd => self.mark_ab_end(cx),
+            BarAction::ClearAbLoop => self.clear_ab_loop(cx),
             BarAction::EditAudio => self.open_remux_dialog(EditTarget::Audio, cx),
             BarAction::EditSubtitle => self.open_remux_dialog(EditTarget::Subtitle, cx),
             BarAction::SetAsDefaultPlayer => self.set_default_player(),
