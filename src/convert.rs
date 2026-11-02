@@ -11,6 +11,8 @@ mod format;
 mod scan;
 mod task;
 
+// 编码器偏好与裁切共用同一套定义，这里重新导出，批次调用方不必再多引一个模块。
+pub use crate::encoder::EncoderMode;
 pub use format::{TargetFormat, TargetKind};
 pub use scan::scan_folder;
 pub use task::{

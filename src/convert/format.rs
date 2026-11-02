@@ -19,6 +19,7 @@ mod profiles;
 #[cfg(test)]
 mod tests;
 
+use crate::encoder::EncoderMode;
 use profiles::Profile;
 
 /// 目标属于哪一类：视频容器还是纯音频。
@@ -108,10 +109,11 @@ impl TargetFormat {
         self.muxer
     }
 
-    /// 视频流参数（含 `-c:v`）。每次拼命令时现探测：探测结果缓存在进程内，
-    /// 这里只是取一次快照。H.264 / HEVC 目标有显卡编码器就用它。
-    pub(crate) fn video_args(self) -> Vec<String> {
+    /// 视频流参数（含 `-c:v`）。探测结果缓存在进程内，这里只取一次快照；
+    /// 强制硬件却探测不到时返回错误，由调用方在批次开始前报给用户。
+    pub(crate) fn video_args(self, mode: EncoderMode) -> Result<Vec<String>, String> {
         self.video_args_with(
+            mode,
             crate::encoder::pick(crate::encoder::Family::H264),
             crate::encoder::pick(crate::encoder::Family::Hevc),
         )
@@ -120,10 +122,11 @@ impl TargetFormat {
     /// 传入探测结果，便于测试固定场景。
     fn video_args_with(
         self,
+        mode: EncoderMode,
         h264: Option<&'static str>,
         hevc: Option<&'static str>,
-    ) -> Vec<String> {
-        self.profile.video_args_with(h264, hevc)
+    ) -> Result<Vec<String>, String> {
+        self.profile.video_args_with(mode, h264, hevc)
     }
 
     /// 空切片表示这个容器装不下音频，调用方不该映射音轨。

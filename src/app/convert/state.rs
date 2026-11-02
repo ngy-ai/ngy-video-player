@@ -2,6 +2,7 @@
 
 use super::super::*;
 use crate::convert::{ConvertJob, ConvertSummary, TargetFormat};
+use crate::encoder::EncoderMode;
 
 /// 这一批文件从哪儿来。
 #[derive(Clone, Debug)]
@@ -61,6 +62,8 @@ pub(in crate::app) struct ConvertDialog {
     pub(super) generation: u64,
     pub(super) source: ConvertSource,
     pub(super) target: TargetFormat,
+    /// 编码器偏好。跟着面板走，关掉重开回到「自动」——和格式一样只对这一次有效。
+    pub(super) encoder_mode: EncoderMode,
     pub(super) scan: ScanState,
     pub(super) state: ConvertState,
     pub(super) job: Option<Arc<ConvertJob>>,
@@ -74,6 +77,7 @@ impl ConvertDialog {
             source: ConvertSource::Current,
             // 默认 mp4：最常见的「发给别人也能播」的格式。
             target: TargetFormat::default(),
+            encoder_mode: EncoderMode::default(),
             scan: ScanState::Idle,
             state: ConvertState::Editing,
             job: None,

@@ -7,7 +7,7 @@
 //! [`crate::encoder`] 按厂商生成），没有才落回 libx264 / libx265。
 
 use super::TargetFormat;
-use crate::encoder::{self, Family};
+use crate::encoder::{self, EncoderMode, Family};
 
 /// 硬件编码没有跨厂商通用的画质参数，只能给码率。取裁切那边的最高档：转换是
 /// 用户主动重编码，画质不该比 CPU 档差太多，文件大小也还可以预期。
@@ -50,44 +50,67 @@ impl Profile {
         !matches!(self.video, VideoProfile::None)
     }
 
-    /// 视频流参数（含 `-c:v`）。探测结果由调用方传进来：既方便测试固定场景，
-    /// 也让一个批次里的每个文件用同一个编码器。
+    /// 视频流参数（含 `-c:v`）。探测结果与编码器偏好由调用方传进来：既方便测试
+    /// 固定场景，也让一个批次里的每个文件用同一个编码器。
     pub(super) fn video_args_with(
         self,
+        mode: EncoderMode,
         h264: Option<&'static str>,
         hevc: Option<&'static str>,
-    ) -> Vec<String> {
+    ) -> Result<Vec<String>, String> {
         match self.video {
-            VideoProfile::None => Vec::new(),
-            VideoProfile::Fixed(args) => args.iter().map(|arg| (*arg).to_string()).collect(),
+            VideoProfile::None => Ok(Vec::new()),
+            VideoProfile::Fixed(args) => Ok(args.iter().map(|arg| (*arg).to_string()).collect()),
             VideoProfile::H264 {
                 baseline,
                 faststart,
-            } => family_args(Family::H264, h264, baseline, faststart),
-            VideoProfile::Hevc => family_args(Family::Hevc, hevc, false, false),
+            } => family_args(Family::H264, mode, h264, baseline, faststart),
+            VideoProfile::Hevc => family_args(Family::Hevc, mode, hevc, false, false),
         }
     }
 }
 
-/// H.264 / HEVC 的参数：能硬编就硬编，否则用 CPU 那套。
+/// H.264 / HEVC 的参数：按编码器偏好硬编或软件。
 fn family_args(
     family: Family,
+    mode: EncoderMode,
     hardware: Option<&'static str>,
     baseline: bool,
     faststart: bool,
-) -> Vec<String> {
+) -> Result<Vec<String>, String> {
+    // 老设备档位（3gp / 3g2）的卖点是「插到任何机器上都能放」，各家驱动对
+    // baseline 的支持不一致，这一档不换硬编。用户坚持要硬件编码就明说，别悄悄
+    // 改成软件——那样看起来成功了，实际用的不是显卡。
+    let hardware = match mode {
+        EncoderMode::Software => None,
+        EncoderMode::Auto if baseline => None,
+        EncoderMode::Auto => hardware,
+        EncoderMode::Hardware if baseline => {
+            return Err("这个格式保留 H.264 baseline 兼容档，只能用软件编码。\
+                 把「编码器」改回「自动」，或者换 mp4 / mkv 等常用格式再试。"
+                .to_string());
+        }
+        EncoderMode::Hardware => Some(hardware.ok_or_else(|| {
+            format!(
+                "没有检测到可用的 {} 硬件编码器。\
+                 把「编码器」改回「自动」或「软件」即可；\
+                 要用显卡编码请确认驱动正常，且 ffmpeg 带 NVENC / QSV / AMF / VideoToolbox。\
+                 程序刚启动时探测还要一两秒，稍等再试。",
+                family.label()
+            )
+        })?),
+    };
+
     let mut args = Vec::new();
-    // 老设备档位不换硬编：各家驱动对 baseline 的支持不一致，这一档的卖点就是
-    // 「插到任何机器上都能放」，宁可慢也别赌驱动。
     match hardware {
-        Some(hardware) if !baseline => {
+        Some(hardware) => {
             args.push("-c:v".to_string());
             args.push(hardware.to_string());
             args.extend(encoder::bitrate_args(hardware, HARDWARE_BITRATE));
             // 多数硬件编码器只吃 8bit 4:2:0，不指定会在初始化阶段失败。
             args.extend(["-pix_fmt", "yuv420p"].map(str::to_string));
         }
-        _ => {
+        None => {
             args.push("-c:v".to_string());
             args.push(software_encoder(family).to_string());
             args.extend(
@@ -110,7 +133,7 @@ fn family_args(
     if faststart {
         args.extend(["-movflags", "+faststart"].map(str::to_string));
     }
-    args
+    Ok(args)
 }
 
 fn software_encoder(family: Family) -> &'static str {

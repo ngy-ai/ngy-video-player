@@ -10,6 +10,42 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 
+/// 编码器偏好：有显卡就用、强制软件、或强制硬件。裁切与格式转换共用。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EncoderMode {
+    /// 探测到硬件编码器就用，否则回退 libx264/libx265。
+    #[default]
+    Auto,
+    /// 始终用 libx264/libx265：画质与跨平台一致性最好。
+    Software,
+    /// 只用硬件编码器；探测不到时直接报错，不悄悄改回软件。
+    Hardware,
+}
+
+impl EncoderMode {
+    pub const ALL: [EncoderMode; 3] = [
+        EncoderMode::Auto,
+        EncoderMode::Software,
+        EncoderMode::Hardware,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            EncoderMode::Auto => "自动",
+            EncoderMode::Software => "软件",
+            EncoderMode::Hardware => "硬件",
+        }
+    }
+
+    pub fn hint(self) -> &'static str {
+        match self {
+            EncoderMode::Auto => "有可用的显卡编码器就用，没有则用 x264 / x265",
+            EncoderMode::Software => "始终用 x264 / x265：画质稳定，CPU 占用高",
+            EncoderMode::Hardware => "只用显卡编码：速度快、CPU 占用低，画质随驱动变化",
+        }
+    }
+}
+
 /// 编码族。硬件编码器只按这两族区分，具体落到哪个厂商由探测结果定。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Family {
@@ -29,6 +65,13 @@ impl Family {
         match self {
             Family::H264 => H264_HARDWARE,
             Family::Hevc => HEVC_HARDWARE,
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Family::H264 => "H.264",
+            Family::Hevc => "H.265",
         }
     }
 }

@@ -95,42 +95,6 @@ impl VideoCodec {
     }
 }
 
-/// 编码器偏好：硬件优先、强制软件、或强制硬件。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum EncoderMode {
-    /// 探测到硬件编码器就用，否则回退 libx264/libx265。
-    #[default]
-    Auto,
-    /// 始终用 libx264/libx265：画质与跨平台一致性最好。
-    Software,
-    /// 只用硬件编码器；探测不到时直接报错，不悄悄改回软件。
-    Hardware,
-}
-
-impl EncoderMode {
-    pub const ALL: [EncoderMode; 3] = [
-        EncoderMode::Auto,
-        EncoderMode::Software,
-        EncoderMode::Hardware,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            EncoderMode::Auto => "自动",
-            EncoderMode::Software => "软件",
-            EncoderMode::Hardware => "硬件",
-        }
-    }
-
-    pub fn hint(self) -> &'static str {
-        match self {
-            EncoderMode::Auto => "有可用的显卡编码器就用，没有则用 x264 / x265",
-            EncoderMode::Software => "始终用 x264 / x265：画质稳定，CPU 占用高",
-            EncoderMode::Hardware => "只用显卡编码：速度快、CPU 占用低，画质随驱动变化",
-        }
-    }
-}
-
 /// 画质档位。CRF 越小越清晰、文件越大。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Quality {

@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::TargetFormat;
+use crate::encoder::EncoderMode;
 
 /// 改名后的后缀。只在「目标文件已存在」时用上，说明这份是转出来的。
 const SUFFIX: &str = " - 转换";
@@ -28,15 +29,25 @@ pub struct ConvertRequest {
     pub input: PathBuf,
     pub output: PathBuf,
     pub target: TargetFormat,
+    /// 视频流参数，计划阶段就按编码器偏好定好，整批一致。
+    video_args: Vec<String>,
 }
 
 /// 给一批输入配上输出路径。
 ///
 /// 同一批次里两条请求不会落到同一个文件上：`a.mkv` 和 `a.mp4` 一起转 mp4 时，
 /// 第二条会被编号成 `a - 转换 (2).mp4`，否则两路 ffmpeg 会互相踩掉对方的输出。
-pub fn plan(inputs: &[PathBuf], target: TargetFormat) -> Vec<ConvertRequest> {
+///
+/// 编码器只在这里解析一次：强制硬件却探测不到时，要在第一个文件开始之前就报错，
+/// 而不是每个文件失败一遍。
+pub fn plan(
+    inputs: &[PathBuf],
+    target: TargetFormat,
+    mode: EncoderMode,
+) -> Result<Vec<ConvertRequest>> {
+    let video_args = target.video_args(mode).map_err(anyhow::Error::msg)?;
     let mut taken: HashSet<PathBuf> = HashSet::new();
-    inputs
+    Ok(inputs
         .iter()
         .map(|input| {
             let output = output_path(input, target, &taken);
@@ -45,9 +56,10 @@ pub fn plan(inputs: &[PathBuf], target: TargetFormat) -> Vec<ConvertRequest> {
                 input: input.clone(),
                 output,
                 target,
+                video_args: video_args.clone(),
             }
         })
-        .collect()
+        .collect())
 }
 
 /// 输出落点：优先用同名换后缀，撞上已有文件就加「 - 转换」再编号。
@@ -381,7 +393,7 @@ fn build_command(executable: &Path, request: &ConvertRequest) -> Command {
     }
 
     command
-        .args(target.video_args())
+        .args(&request.video_args)
         .args(target.audio_args())
         // 显式指定封装器：`mts` / `tp` / `alac` 这些扩展名 ffmpeg 猜不准，
         // 猜错时的报错信息是「无法找到合适的输出格式」，用户根本看不出问题在哪。
@@ -416,13 +428,18 @@ mod tests {
         let input = dir.join("课程 01.mkv");
         std::fs::write(&input, b"x").unwrap();
 
-        let requests = plan(std::slice::from_ref(&input), target_mp4());
+        let requests = plan(
+            std::slice::from_ref(&input),
+            target_mp4(),
+            EncoderMode::Auto,
+        )
+        .unwrap();
         assert_eq!(requests[0].output, dir.join("课程 01.mp4"));
 
         // 已经是 mp4：目标就是源文件自己，必须让开。
         let same = dir.join("课程 01.mp4");
         std::fs::write(&same, b"x").unwrap();
-        let requests = plan(std::slice::from_ref(&same), target_mp4());
+        let requests = plan(std::slice::from_ref(&same), target_mp4(), EncoderMode::Auto).unwrap();
         assert_eq!(requests[0].output, dir.join("课程 01 - 转换.mp4"));
 
         std::fs::remove_dir_all(&dir).unwrap();
@@ -436,7 +453,7 @@ mod tests {
         std::fs::write(&mkv, b"x").unwrap();
         std::fs::write(&mp4, b"x").unwrap();
 
-        let requests = plan(&[mkv, mp4], target_mp4());
+        let requests = plan(&[mkv, mp4], target_mp4(), EncoderMode::Auto).unwrap();
         assert_eq!(requests[0].output, dir.join("a - 转换.mp4"));
         assert_eq!(requests[1].output, dir.join("a - 转换 (2).mp4"));
         assert_ne!(requests[0].output, requests[1].output);
@@ -455,10 +472,14 @@ mod tests {
     }
 
     fn args_of(input: &str, output: &str, target: &str) -> Vec<String> {
+        let target = TargetFormat::by_extension(target).unwrap();
+        // 测试只关心轨道映射与封装器，用软件编码固定住参数，免得探测结果影响断言。
+        let video_args = target.video_args(EncoderMode::Software).unwrap();
         let request = ConvertRequest {
             input: std::path::PathBuf::from(input),
             output: std::path::PathBuf::from(output),
-            target: TargetFormat::by_extension(target).unwrap(),
+            target,
+            video_args,
         };
         build_command(Path::new("ffmpeg"), &request)
             .get_args()

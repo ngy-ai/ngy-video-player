@@ -9,7 +9,10 @@
 mod types;
 
 use super::ClipRequest;
-pub use types::{EncoderMode, ExportMode, OutputFormat, PixelFormat, Quality, VideoCodec};
+// 编码器偏好是裁切与格式转换共用的，定义在 `crate::encoder`，这里只重新导出，
+// 保持 `clip::EncoderMode` 这个既有入口不变。
+pub use crate::encoder::EncoderMode;
+pub use types::{ExportMode, OutputFormat, PixelFormat, Quality, VideoCodec};
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -227,7 +230,7 @@ pub(super) fn build_command(executable: &Path, request: &ClipRequest, encoder: &
         // 失败）、HLS（TS 分片里的 10bit H.264 在老设备和浏览器上支持面太窄）。
         let force_8bit = options.pixel_format == PixelFormat::Yuv420p
             || hls
-            || super::encoder::is_hardware(encoder);
+            || crate::encoder::is_hardware(encoder);
         if force_8bit {
             command.arg("-pix_fmt").arg("yuv420p");
         }

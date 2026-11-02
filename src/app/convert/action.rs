@@ -3,6 +3,7 @@
 use super::super::*;
 use super::state::{ConvertDialog, ConvertSource, ConvertState, ScanState};
 use crate::convert::{self, ConvertEvent, ConvertJob, ConvertOutcome, TargetFormat};
+use crate::encoder::EncoderMode;
 
 /// 搜索词长度上限：再长也不会更精确，只是占地方。
 const MAX_QUERY_CHARS: usize = 24;
@@ -194,6 +195,18 @@ impl PlayerApp {
         cx.notify();
     }
 
+    /// 改编码器偏好。与格式一样只对这一次有效，不影响下次打开面板。
+    pub(super) fn convert_pick_encoder(&mut self, mode: EncoderMode, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.convert.as_mut() {
+            dialog.encoder_mode = mode;
+            // 「强制硬件但没探测到」这类失败与编码器直接相关，换了就该清掉。
+            if matches!(dialog.state, ConvertState::Failed(_)) {
+                dialog.state = ConvertState::Editing;
+            }
+        }
+        cx.notify();
+    }
+
     /// 下拉展开时接管键盘，返回 `true` 表示这次按键已被消费。
     ///
     /// 搜索框是自绘的（跟裁切的时间输入框同一套做法）：没有选区、没有输入法，
@@ -263,6 +276,7 @@ impl PlayerApp {
             return;
         }
         let target = dialog.target;
+        let mode = dialog.encoder_mode;
         // 起跑时把下拉收掉：批次开始后不该还挂着一个选择器。
         if let Some(dialog) = self.convert.as_mut() {
             dialog.picker.open = false;
@@ -277,7 +291,17 @@ impl PlayerApp {
             return;
         }
 
-        let requests = convert::plan(&inputs, target);
+        // 编码器在这里定：强制硬件却探测不到时要当场报错，不要让每个文件各失败一次。
+        let requests = match convert::plan(&inputs, target, mode) {
+            Ok(requests) => requests,
+            Err(error) => {
+                if let Some(dialog) = self.convert.as_mut() {
+                    dialog.state = ConvertState::Failed(format!("{error:#}"));
+                }
+                cx.notify();
+                return;
+            }
+        };
         let total = requests.len();
         let first = requests[0].input.clone();
         let (tx, mut rx) = futures::channel::mpsc::unbounded();

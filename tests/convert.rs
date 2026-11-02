@@ -4,7 +4,9 @@
 //! 「参数拼对了、进度回来了、批量跑完了」——纯逻辑部分在 `src/convert/` 的单测里。
 
 use futures::StreamExt as _;
-use ngy_video_player::convert::{ConvertEvent, ConvertJob, ConvertOutcome, TargetFormat, plan};
+use ngy_video_player::convert::{
+    ConvertEvent, ConvertJob, ConvertOutcome, EncoderMode, TargetFormat, plan,
+};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -48,7 +50,7 @@ fn 批量转换成_mkv() {
     generate(&ffmpeg, &second);
 
     let mkv = TargetFormat::by_extension("mkv").expect("格式表里应该有 mkv");
-    let requests = plan(&[first.clone(), second.clone()], mkv);
+    let requests = plan(&[first.clone(), second.clone()], mkv, EncoderMode::Auto).unwrap();
     let outputs: Vec<std::path::PathBuf> = requests
         .iter()
         .map(|request| request.output.clone())
@@ -136,7 +138,7 @@ fn 每种目标格式都能写出文件() {
     // 这条测试把整张表跑一遍，失败的容器连同 ffmpeg 的错误一起列出来。
     let mut failed = Vec::new();
     for target in TargetFormat::ALL.iter().copied() {
-        let requests = plan(std::slice::from_ref(&input), target);
+        let requests = plan(std::slice::from_ref(&input), target, EncoderMode::Software).unwrap();
         let output = requests[0].output.clone();
         let failures = run_batch(requests);
         if let Some((_, message)) = failures.into_iter().next() {

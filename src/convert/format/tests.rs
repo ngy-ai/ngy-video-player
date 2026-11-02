@@ -1,4 +1,5 @@
 use super::*;
+use crate::encoder::EncoderMode;
 use crate::formats;
 
 #[test]
@@ -37,17 +38,19 @@ fn 覆盖了现有的全部视频与音频扩展名() {
 fn 每个格式都有说明和编码参数() {
     for format in TargetFormat::ALL {
         assert!(!format.hint().is_empty(), "{}", format.extension);
+        // 用软件模式：这条测试只关心表格结构，不该受本机有没有显卡影响。
+        let video = format.video_args(EncoderMode::Software).unwrap();
         match format.kind() {
             TargetKind::Video => {
                 assert!(
-                    !format.video_args().is_empty(),
+                    !video.is_empty(),
                     "{} 是视频容器却没有视频参数",
                     format.extension
                 );
             }
             TargetKind::Audio => {
                 assert!(
-                    format.video_args().is_empty(),
+                    video.is_empty(),
                     "{} 是音频容器不该有视频参数",
                     format.extension
                 );
@@ -79,7 +82,7 @@ fn 默认是_mp4() {
 #[test]
 fn 没有探测到硬编时用_x264_参数() {
     let mp4 = TargetFormat::by_extension("mp4").unwrap();
-    let args = mp4.video_args_with(None, None);
+    let args = mp4.video_args_with(EncoderMode::Auto, None, None).unwrap();
     assert!(args.windows(2).any(|pair| pair == ["-c:v", "libx264"]));
     assert!(args.windows(2).any(|pair| pair == ["-crf", "20"]));
     assert!(
@@ -92,7 +95,9 @@ fn 没有探测到硬编时用_x264_参数() {
 #[test]
 fn 探测到硬编就换成显卡并给码率() {
     let mp4 = TargetFormat::by_extension("mp4").unwrap();
-    let args = mp4.video_args_with(Some("h264_nvenc"), None);
+    let args = mp4
+        .video_args_with(EncoderMode::Auto, Some("h264_nvenc"), None)
+        .unwrap();
     assert!(
         args.windows(2).any(|pair| pair == ["-c:v", "h264_nvenc"]),
         "{args:?}"
@@ -109,9 +114,13 @@ fn 探测到硬编就换成显卡并给码率() {
 
     // HEVC 目标只认 HEVC 的编码器，不能把 H.264 的硬编塞进去。
     let hevc = TargetFormat::by_extension("h265").unwrap();
-    let software = hevc.video_args_with(Some("h264_nvenc"), None);
+    let software = hevc
+        .video_args_with(EncoderMode::Auto, Some("h264_nvenc"), None)
+        .unwrap();
     assert!(software.windows(2).any(|pair| pair == ["-c:v", "libx265"]));
-    let hardware = hevc.video_args_with(None, Some("hevc_nvenc"));
+    let hardware = hevc
+        .video_args_with(EncoderMode::Auto, None, Some("hevc_nvenc"))
+        .unwrap();
     assert!(
         hardware
             .windows(2)
@@ -120,28 +129,74 @@ fn 探测到硬编就换成显卡并给码率() {
 }
 
 #[test]
+fn 软件模式即使有硬编也不用() {
+    let mp4 = TargetFormat::by_extension("mp4").unwrap();
+    let args = mp4
+        .video_args_with(
+            EncoderMode::Software,
+            Some("h264_nvenc"),
+            Some("hevc_nvenc"),
+        )
+        .unwrap();
+    assert!(args.windows(2).any(|pair| pair == ["-c:v", "libx264"]));
+    assert!(!args.iter().any(|arg| arg.contains("nvenc")), "{args:?}");
+}
+
+#[test]
+fn 强制硬件却探测不到时报可执行的错误() {
+    let mp4 = TargetFormat::by_extension("mp4").unwrap();
+    let error = mp4
+        .video_args_with(EncoderMode::Hardware, None, None)
+        .unwrap_err();
+    assert!(error.contains("没有检测到可用的 H.264 硬件编码器"));
+    assert!(error.contains("自动"));
+    assert!(error.contains("软件"));
+
+    // HEVC 目标只探测到 H.264 硬编时不能凑合。
+    let hevc = TargetFormat::by_extension("h265").unwrap();
+    let error = hevc
+        .video_args_with(EncoderMode::Hardware, Some("h264_nvenc"), None)
+        .unwrap_err();
+    assert!(error.contains("H.265"), "{error}");
+}
+
+#[test]
 fn 老设备档位保留_baseline_且不换硬编() {
     let threegp = TargetFormat::by_extension("3gp").unwrap();
-    let args = threegp.video_args_with(Some("h264_nvenc"), None);
+    let args = threegp
+        .video_args_with(EncoderMode::Auto, Some("h264_nvenc"), None)
+        .unwrap();
     assert!(args.windows(2).any(|pair| pair == ["-c:v", "libx264"]));
     assert!(
         args.windows(2)
             .any(|pair| pair == ["-profile:v", "baseline"]),
         "{args:?}"
     );
+
+    // 用户坚持要硬件编码时明说不支持，而不是悄悄改用软件。
+    let error = threegp
+        .video_args_with(EncoderMode::Hardware, Some("h264_nvenc"), None)
+        .unwrap_err();
+    assert!(error.contains("baseline"));
+    assert!(error.contains("自动"));
 }
 
 #[test]
 fn 固定编码器与音频目标不受探测影响() {
     let webm = TargetFormat::by_extension("webm").unwrap();
     assert_eq!(
-        webm.video_args_with(Some("h264_nvenc"), Some("hevc_nvenc")),
-        webm.video_args_with(None, None),
+        webm.video_args_with(EncoderMode::Auto, Some("h264_nvenc"), Some("hevc_nvenc"))
+            .unwrap(),
+        webm.video_args_with(EncoderMode::Auto, None, None).unwrap(),
         "VP9 这类固定档位不能被换成显卡编码器"
     );
 
     let mp3 = TargetFormat::by_extension("mp3").unwrap();
-    assert!(mp3.video_args_with(Some("h264_nvenc"), None).is_empty());
+    assert!(
+        mp3.video_args_with(EncoderMode::Auto, Some("h264_nvenc"), None)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

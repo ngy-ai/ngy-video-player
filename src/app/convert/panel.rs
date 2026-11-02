@@ -6,6 +6,7 @@
 use super::super::*;
 use super::state::{ConvertDialog, ConvertSource, ConvertState, ScanState};
 use crate::convert::TargetFormat;
+use crate::encoder::EncoderMode;
 
 /// 结果页最多列几条失败原因，剩下的只报个数。
 const MAX_FAILURES_SHOWN: usize = 3;
@@ -147,16 +148,17 @@ impl PlayerApp {
             .child(self.render_format_trigger(dialog, cx))
             // 列表展开时把说明和按钮让出去：这时候视线都在列表上，不该开始转换。
             .when(!picking, |this| {
-                this.child(
-                    div()
-                        .text_size(px(10.0))
-                        .text_color(text_faint())
-                        .whitespace_normal()
-                        .child(
-                            "输出保存在原文件同目录，命名如「片名 - 转换.mkv」；同名文件已存在时\
-                             自动编号，不会覆盖原片。",
-                        ),
-                )
+                this.child(self.render_encoder_choices(dialog, cx))
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(text_faint())
+                            .whitespace_normal()
+                            .child(
+                                "输出保存在原文件同目录，命名如「片名 - 转换.mkv」；同名文件已存在时\
+                                 自动编号，不会覆盖原片。",
+                            ),
+                    )
                 .child(
                     div()
                         .flex()
@@ -230,6 +232,50 @@ impl PlayerApp {
                     ),
             )
             .child(icon(IconName::ChevronDown, 14.0, text_muted()))
+            .into_any_element()
+    }
+
+    /// 编码器偏好：三颗小按钮 + 一句当前档位的说明。
+    ///
+    /// 纯音频目标没有视频编码器可言，这一行直接不显示：转 mp3 时选「硬件」不会
+    /// 更快，摆出来只会让人以为它有用。
+    fn render_encoder_choices(&self, dialog: &ConvertDialog, cx: &mut Context<Self>) -> AnyElement {
+        if !dialog.target.keeps_video() {
+            return div().into_any_element();
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(text_faint())
+                            .child("编码器"),
+                    )
+                    .children(EncoderMode::ALL.map(|mode| {
+                        convert_chip(
+                            convert_id("convert-encoder", mode.label()),
+                            mode.label(),
+                            dialog.encoder_mode == mode,
+                            cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                                this.convert_pick_encoder(mode, cx);
+                            }),
+                        )
+                    })),
+            )
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(text_faint())
+                    .whitespace_normal()
+                    .child(dialog.encoder_mode.hint()),
+            )
             .into_any_element()
     }
 
@@ -633,9 +679,14 @@ fn section_title(text: &'static str) -> AnyElement {
         .into_any_element()
 }
 
-/// 来源切换的两颗小按钮。选中那科用强调色填充，一眼看得出这一批从哪来。
+/// 元素 id 要全局唯一；选项标签里带中文，拼一个稳定前缀避免和别处撞车。
+fn convert_id(prefix: &'static str, label: &'static str) -> SharedString {
+    SharedString::from(format!("{prefix}-{label}"))
+}
+
+/// 来源切换与编码器档位共用的小按钮。选中那科用强调色填充，一眼看得出当前选择。
 fn convert_chip(
-    id: &'static str,
+    id: impl Into<ElementId>,
     label: &'static str,
     active: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
