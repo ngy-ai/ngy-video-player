@@ -8,6 +8,7 @@
 //! 到原文件同目录的新 mkv，原文件不动。
 
 use super::*;
+use crate::clip::{self as clip_core, ParsedTime};
 use crate::metadata::{
     self as metadata_core, ChapterEdit, MetadataEvent, MetadataJob, MetadataOutcome, Tags,
 };
@@ -25,8 +26,9 @@ enum MetadataState {
 
 /// 一条可编辑的章节。
 struct ChapterRow {
-    /// 起点（秒）。章节按起点排序，保存时结束时间由下一条推出。
-    start: f64,
+    /// 起点文本，接受 `90`、`1:30`、`01:02:03.500`；保存时才解析。
+    /// 用输入框而不是只读文本，是为了能直接改时间码修章节。
+    start: Entity<InputState>,
     title: Entity<InputState>,
 }
 
@@ -76,13 +78,20 @@ impl MetadataDialog {
         chapters.sort_by(|a, b| a.1.total_cmp(&b.1));
         let chapters = chapters
             .into_iter()
-            .map(|(title, start)| ChapterRow {
-                start,
-                title: cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .default_value(title)
-                        .placeholder("章节标题")
-                }),
+            .map(|(title, start)| {
+                let start_text = clip_core::format_time(start);
+                ChapterRow {
+                    start: cx.new(|cx| {
+                        InputState::new(window, cx)
+                            .default_value(start_text)
+                            .placeholder("00:00.000")
+                    }),
+                    title: cx.new(|cx| {
+                        InputState::new(window, cx)
+                            .default_value(title)
+                            .placeholder("章节标题")
+                    }),
+                }
             })
             .collect();
 
@@ -116,12 +125,38 @@ impl MetadataDialog {
         }
     }
 
-    fn chapter_edits(&self, cx: &App) -> Vec<ChapterEdit> {
+    /// 解析所有时间框。任何一条不合法都整体拒绝：带着错的章节去写文件，
+    /// 用户会得到一个「保存成功但章节不对」的结果，比直接报错更难查。
+    fn chapter_edits(&self, cx: &App, duration: f64) -> Result<Vec<ChapterEdit>, String> {
         self.chapters
             .iter()
-            .map(|row| ChapterEdit {
-                title: row.title.read(cx).value().trim().to_string(),
-                start: row.start,
+            .enumerate()
+            .map(|(index, row)| {
+                let text = row.start.read(cx).value();
+                let start = match clip_core::parse_time(&text) {
+                    ParsedTime::Value(start) if start < duration => start,
+                    ParsedTime::Value(_) => {
+                        return Err(format!(
+                            "第 {} 条章节超出片长（{}）",
+                            index + 1,
+                            clip_core::format_time(duration)
+                        ));
+                    }
+                    ParsedTime::Empty => {
+                        return Err(format!("第 {} 条章节的时间是空的", index + 1));
+                    }
+                    ParsedTime::Invalid => {
+                        return Err(format!(
+                            "第 {} 条章节的时间格式不对：{}（可写 90、1:30、01:02:03.500）",
+                            index + 1,
+                            text
+                        ));
+                    }
+                };
+                Ok(ChapterEdit {
+                    title: row.title.read(cx).value().trim().to_string(),
+                    start,
+                })
             })
             .collect()
     }
@@ -148,6 +183,9 @@ impl PlayerApp {
         // 与轨道编辑一样是模态的：叠着会互相挡住，也会抢同一份按键。
         self.close_remux_dialog(cx);
         self.close_clip_dialog(cx);
+        self.close_proxy_dialog(cx);
+        self.close_scope_dialog(cx);
+        self.close_multicam_dialog(cx);
         self.metadata_generation += 1;
 
         let chapters = self
@@ -232,28 +270,40 @@ impl PlayerApp {
         if !dialog.editing() {
             return;
         }
-        if dialog
-            .chapters
-            .iter()
-            .any(|row| (row.start - position).abs() < 0.1)
-        {
+        let duplicate = dialog.chapters.iter().any(|row| {
+            matches!(
+                clip_core::parse_time(&row.start.read(cx).value()),
+                ParsedTime::Value(start) if (start - position).abs() < 0.1
+            )
+        });
+        if duplicate {
             self.flash("这个位置已经有章节了");
             cx.notify();
             return;
         }
 
+        let start_text = clip_core::format_time(position);
+        let start = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(start_text)
+                .placeholder("00:00.000")
+        });
         let title = format!("章节 {}", dialog.chapters.len() + 1);
-        let input = cx.new(|cx| {
+        let title = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(title)
                 .placeholder("章节标题")
         });
-        input.update(cx, |state, cx| state.focus(window, cx));
-        dialog.chapters.push(ChapterRow {
-            start: position,
-            title: input,
+        title.update(cx, |state, cx| state.focus(window, cx));
+        dialog.chapters.push(ChapterRow { start, title });
+        // 按当前时间码排一下：用户可能先改过某一条的时间，再添加新的一条。
+        // 解析失败的条目排到最后，保存时的校验会把它挑出来。
+        dialog.chapters.sort_by_key(|row| {
+            match clip_core::parse_time(&row.start.read(cx).value()) {
+                ParsedTime::Value(value) => (0, (value * 1000.0).round() as i64),
+                _ => (1, 0),
+            }
         });
-        dialog.chapters.sort_by(|a, b| a.start.total_cmp(&b.start));
         cx.notify();
     }
 
@@ -276,12 +326,20 @@ impl PlayerApp {
             return;
         }
 
+        let chapters = match dialog.chapter_edits(cx, dialog.duration) {
+            Ok(chapters) => metadata_core::normalize_chapters(chapters, dialog.duration),
+            Err(message) => {
+                dialog.state = MetadataState::Failed(message);
+                cx.notify();
+                return;
+            }
+        };
         let request = crate::metadata::MetadataRequest {
             output: metadata_core::output_path(&dialog.path),
             input: dialog.path.clone(),
             duration: dialog.duration,
             tags: dialog.tags(cx),
-            chapters: metadata_core::normalize_chapters(dialog.chapter_edits(cx), dialog.duration),
+            chapters,
             subtitle_codecs: dialog.subtitle_codecs.clone(),
         };
         let (tx, mut rx) = futures::channel::mpsc::unbounded();
@@ -461,12 +519,13 @@ impl PlayerApp {
                         .items_center()
                         .gap(px(8.0))
                         .child(
-                            div()
-                                .w(px(72.0))
-                                .flex_none()
-                                .text_size(px(11.0))
-                                .text_color(text_faint())
-                                .child(format_time(row.start)),
+                            div().w(px(118.0)).flex_none().child(
+                                Input::new(&row.start)
+                                    .id(SharedString::from(format!(
+                                        "metadata-chapter-start-{index}"
+                                    )))
+                                    .w_full(),
+                            ),
                         )
                         .child(
                             div().flex_1().min_w(px(0.0)).child(
