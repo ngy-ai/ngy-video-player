@@ -47,6 +47,76 @@ fn 默认仍然精确重编码为_h264() {
     assert!(has(&args, &["-map", "0:a?"]));
     assert!(has(&args, &["-map", "0:s?"]));
     assert!(has(&args, &["-map_chapters", "0"]));
+    // 默认跟随源：不写 -pix_fmt，10bit 源才不会被压成 8bit。
+    assert!(!args.iter().any(|arg| arg == "-pix_fmt"));
+}
+
+#[test]
+fn 强制_8bit_时才写_pix_fmt() {
+    let options = ExportOptions {
+        pixel_format: PixelFormat::Yuv420p,
+        ..ExportOptions::default()
+    };
+    assert!(has(&args(options), &["-pix_fmt", "yuv420p"]));
+}
+
+#[test]
+fn 硬件编码器始终写死_8bit() {
+    // NVENC / QSV / AMF 多数型号只吃 8bit 4:2:0，不指定 -pix_fmt 会初始化失败。
+    let args: Vec<String> = build_command(
+        Path::new("ffmpeg"),
+        &request(ExportOptions::default()),
+        "h264_nvenc",
+    )
+    .get_args()
+    .map(|arg| arg.to_string_lossy().into_owned())
+    .collect();
+    assert!(has(&args, &["-pix_fmt", "yuv420p"]));
+}
+
+#[test]
+fn 音频复制只给_codec_copy() {
+    let options = ExportOptions {
+        audio_copy: true,
+        ..ExportOptions::default()
+    };
+    let args = args(options);
+    assert!(has(&args, &["-c:a", "copy"]));
+    assert!(!args.iter().any(|arg| arg == "-b:a"));
+}
+
+#[test]
+fn 音频复制时音频滤镜与采样率一起消失() {
+    let options = ExportOptions {
+        audio_copy: true,
+        normalize_audio: true,
+        audio_offset: 0.3,
+        sync_audio: true,
+        ..ExportOptions::default()
+    };
+    // 勾了响度/偏移也不能落地：样本根本不解出来。
+    assert!(!options.audio_filters_available());
+    assert_eq!(options.audio_filters(), None);
+    let args = args(options);
+    assert!(!args.iter().any(|arg| arg == "-af"));
+    assert!(!args.iter().any(|arg| arg == "-ar"));
+}
+
+#[test]
+fn hls_下音频复制退化成_aac() {
+    let options = ExportOptions {
+        format: OutputFormat::Hls,
+        audio_copy: true,
+        normalize_audio: true,
+        ..ExportOptions::default()
+    };
+    // TS 分片装不下 FLAC / Opus，复制会让整批导出失败。
+    let args = args(options.clone());
+    assert!(has(&args, &["-c:a", "aac"]));
+    assert!(!has(&args, &["-c:a", "copy"]));
+    // 既然退回了转码，音频滤镜就应该照常生效。
+    assert!(options.audio_filters_available());
+    assert!(args.iter().any(|arg| arg == "-af"));
 }
 
 #[test]
@@ -61,7 +131,7 @@ fn 无损流复制不带任何编码与滤镜参数() {
     options.normalize_audio = true;
     let args = args(options);
     assert!(has(&args, &["-c", "copy"]));
-    for forbidden in ["-c:v", "-crf", "-vf", "-af", "-c:a", "-c:s"] {
+    for forbidden in ["-c:v", "-crf", "-vf", "-af", "-c:a", "-c:s", "-pix_fmt"] {
         assert!(
             !args.iter().any(|arg| arg == forbidden),
             "流复制不该带 {forbidden}"
@@ -207,6 +277,8 @@ fn hls_输出播放列表与分片() {
     assert!(has(&args, &["-map_chapters", "-1"]));
     assert!(!has(&args, &["-map", "0:s?"]));
     assert!(args.last().unwrap().ends_with(".m3u8"));
+    // TS 分片里的 10bit H.264 支持面太窄，这条路固定 8bit。
+    assert!(has(&args, &["-pix_fmt", "yuv420p"]));
 }
 
 #[test]

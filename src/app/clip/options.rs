@@ -4,7 +4,9 @@
 //! 偏好。用户选完、点「开始」、关掉面板，下一次回到默认值。
 
 use super::*;
-use crate::clip::{EncoderMode, ExportMode, ExportOptions, OutputFormat, Quality, VideoCodec};
+use crate::clip::{
+    EncoderMode, ExportMode, ExportOptions, OutputFormat, PixelFormat, Quality, VideoCodec,
+};
 
 impl PlayerApp {
     /// 改一项导出参数。面板开着才生效，改完立刻重绘。
@@ -129,6 +131,27 @@ impl PlayerApp {
                             )
                         })),
                 )
+                .child(section_title("像素格式"))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .children(PixelFormat::ALL.map(|format| {
+                            option_chip(
+                                static_id("clip-pixfmt", format.label()),
+                                format.label(),
+                                options.pixel_format == format,
+                                cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                                    this.update_clip_options(
+                                        |options| options.pixel_format = format,
+                                        cx,
+                                    );
+                                }),
+                            )
+                        })),
+                )
+                .child(note(options.pixel_format.hint()))
                 .child(section_title("画面处理"))
                 .child(toggle_row(
                     "clip-option-tonemap",
@@ -181,26 +204,50 @@ impl PlayerApp {
                     },
                     cx,
                 ))
-                .child(section_title("音频"))
-                .child(toggle_row(
-                    "clip-option-loudnorm",
-                    "响度标准化（-16 LUFS）",
-                    options.normalize_audio,
-                    |this, cx| {
-                        this.update_clip_options(|options| options.normalize_audio ^= true, cx);
-                    },
-                    cx,
-                ))
-                .child(toggle_row(
-                    "clip-option-sync-audio",
-                    "音频漂移校正（长录制）",
-                    options.sync_audio,
-                    |this, cx| {
-                        this.update_clip_options(|options| options.sync_audio ^= true, cx);
-                    },
-                    cx,
-                ))
-                .child(audio_offset_row(options.audio_offset, cx));
+                .child(section_title("音频"));
+
+            // HLS 的 TS 分片装不下 FLAC / Opus，那条路上复制音频必然失败，
+            // 所以干脆不提供这个开关。
+            if options.format == OutputFormat::Mkv {
+                body = body
+                    .child(toggle_row(
+                        "clip-option-audio-copy",
+                        "直接复制音频（不重编码）",
+                        options.audio_copy,
+                        |this, cx| {
+                            this.update_clip_options(|options| options.audio_copy ^= true, cx);
+                        },
+                        cx,
+                    ))
+                    .child(note(
+                        "保住 DTS-HD / TrueHD 等原始音轨；此时响度、偏移与漂移校正都不生效。",
+                    ));
+            }
+
+            // 直接复制时下面三行没有任何作用：样本根本不解出来。收起来比置灰更
+            // 不容易让人以为「勾了只是暂时没生效」。
+            if options.audio_filters_available() {
+                body = body
+                    .child(toggle_row(
+                        "clip-option-loudnorm",
+                        "响度标准化（-16 LUFS）",
+                        options.normalize_audio,
+                        |this, cx| {
+                            this.update_clip_options(|options| options.normalize_audio ^= true, cx);
+                        },
+                        cx,
+                    ))
+                    .child(toggle_row(
+                        "clip-option-sync-audio",
+                        "音频漂移校正（长录制）",
+                        options.sync_audio,
+                        |this, cx| {
+                            this.update_clip_options(|options| options.sync_audio ^= true, cx);
+                        },
+                        cx,
+                    ))
+                    .child(audio_offset_row(options.audio_offset, cx));
+            }
         }
 
         body = body

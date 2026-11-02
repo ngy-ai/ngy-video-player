@@ -9,7 +9,7 @@
 mod types;
 
 use super::ClipRequest;
-pub use types::{EncoderMode, ExportMode, OutputFormat, Quality, VideoCodec};
+pub use types::{EncoderMode, ExportMode, OutputFormat, PixelFormat, Quality, VideoCodec};
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -23,6 +23,8 @@ pub struct ExportOptions {
     /// 编码器偏好。实际选中的编码器由任务启动时探测决定。
     pub encoder_mode: EncoderMode,
     pub quality: Quality,
+    /// 输出像素格式。默认跟随源，10bit 不会被悄悄压成 8bit。
+    pub pixel_format: PixelFormat,
     /// HDR（PQ/HLG）转 SDR：把高光压进 BT.709，否则导出的画面会发灰。
     pub tonemap_hdr: bool,
     /// 去隔行。老电视录制、DVD 转录常见。
@@ -31,6 +33,11 @@ pub struct ExportOptions {
     pub denoise: bool,
     /// 锐化。适合重编码后偏软的片源。
     pub sharpen: bool,
+    /// 音频不重编码，直接搬原码流。
+    ///
+    /// 用于保住 DTS-HD / TrueHD 这类高码率音轨：转成 AAC 192k 是听得出的降级。
+    /// 代价是响度、偏移、漂移校正全部失效——没有解码后的样本可以加工。
+    pub audio_copy: bool,
     /// EBU R128 响度标准化，导出后音量与常见平台一致。
     pub normalize_audio: bool,
     /// 音频偏移（秒）。正数表示声音延后、负数表示提前，用来修音画不同步。
@@ -58,10 +65,12 @@ impl Default for ExportOptions {
             codec: VideoCodec::H264,
             encoder_mode: EncoderMode::Auto,
             quality: Quality::Standard,
+            pixel_format: PixelFormat::Source,
             tonemap_hdr: false,
             deinterlace: false,
             denoise: false,
             sharpen: false,
+            audio_copy: false,
             normalize_audio: false,
             audio_offset: 0.0,
             sync_audio: false,
@@ -78,6 +87,20 @@ impl ExportOptions {
     /// 流复制时滤镜与响度没有意义，界面据此把那些开关置灰。
     pub fn filters_available(&self) -> bool {
         self.mode == ExportMode::Exact
+    }
+
+    /// 这次导出是否真的把音频原样搬过去。
+    ///
+    /// HLS 的 TS 分片只认 AAC / AC3 / MP3，源是 FLAC、Opus 时复制会让整批导出失败，
+    /// 所以这条路上勾了也按转码处理。
+    fn copies_audio(&self) -> bool {
+        self.audio_copy && self.format == OutputFormat::Mkv
+    }
+
+    /// 音频还能不能挂滤镜。`-c:a copy` 时样本根本不解出来，`-af` 会被忽略，
+    /// 界面据此把响度、偏移、漂移校正收起来，而不是让用户勾了没反应。
+    pub fn audio_filters_available(&self) -> bool {
+        self.filters_available() && !self.copies_audio()
     }
 
     /// 视频滤镜链。顺序按「先修时间/色彩、再修噪点、最后锐化」排。
@@ -116,7 +139,7 @@ impl ExportOptions {
     /// 音频偏移用「延迟」与「裁掉开头」两种写法实现：`adelay` 只推迟音频，
     /// 不碰画面；负数则把开头剪掉，等价于让声音提前。
     pub fn audio_filters(&self) -> Option<String> {
-        if !self.filters_available() {
+        if !self.audio_filters_available() {
             return None;
         }
         let mut filters: Vec<String> = Vec::new();
@@ -198,7 +221,16 @@ pub(super) fn build_command(executable: &Path, request: &ClipRequest, encoder: &
         for arg in super::encoder::video_args(encoder, options.quality) {
             command.arg(arg);
         }
-        command.arg("-pix_fmt").arg("yuv420p");
+        // 默认不写 `-pix_fmt`：省略它，ffmpeg 会在「源格式 ∩ 编码器支持列表」里
+        // 挑最接近的一个，10bit 源因此能保住 10bit。三种情况必须写死 yuv420p：
+        // 用户主动要求兼容性、硬件编码器（多数型号只吃 8bit 4:2:0，不指定会初始化
+        // 失败）、HLS（TS 分片里的 10bit H.264 在老设备和浏览器上支持面太窄）。
+        let force_8bit = options.pixel_format == PixelFormat::Yuv420p
+            || hls
+            || super::encoder::is_hardware(encoder);
+        if force_8bit {
+            command.arg("-pix_fmt").arg("yuv420p");
+        }
         if let Some(filters) = options.video_filters() {
             command.arg("-vf").arg(filters);
         }
@@ -215,10 +247,14 @@ pub(super) fn build_command(executable: &Path, request: &ClipRequest, encoder: &
                 .arg("expr:gte(t,n_forced*6)");
         }
         if options.keep_audio {
-            command.arg("-c:a").arg("aac").arg("-b:a").arg("192k");
-            if let Some(filters) = options.audio_filters() {
-                // loudnorm 内部工作在 192kHz，不指定采样率时输出会被它顶上去。
-                command.arg("-af").arg(filters).arg("-ar").arg("48000");
+            if options.copies_audio() {
+                command.arg("-c:a").arg("copy");
+            } else {
+                command.arg("-c:a").arg("aac").arg("-b:a").arg("192k");
+                if let Some(filters) = options.audio_filters() {
+                    // loudnorm 内部工作在 192kHz，不指定采样率时输出会被它顶上去。
+                    command.arg("-af").arg(filters).arg("-ar").arg("48000");
+                }
             }
         }
         if options.keep_subtitles {

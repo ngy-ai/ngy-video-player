@@ -160,3 +160,37 @@ impl Quality {
         }
     }
 }
+
+/// 输出像素格式。
+///
+/// 位深是重编码里唯一补不回来的损失：10bit 源写成 8bit，色阶就永久断成 256 级，
+/// 和 CRF、码率完全无关。所以默认跟随源，只留一个「强制 8bit」的退路。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PixelFormat {
+    /// 跟随源：不写 `-pix_fmt`，由 ffmpeg 在「源格式 ∩ 编码器支持」里挑最接近的。
+    /// 10bit 源得 10bit，8bit 源得 8bit。
+    #[default]
+    Source,
+    /// 强制 yuv420p：老播放器、老电视、老手机都能解。
+    Yuv420p,
+}
+
+impl PixelFormat {
+    pub const ALL: [PixelFormat; 2] = [PixelFormat::Source, PixelFormat::Yuv420p];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PixelFormat::Source => "跟随源",
+            PixelFormat::Yuv420p => "强制 8bit",
+        }
+    }
+
+    pub fn hint(self) -> &'static str {
+        match self {
+            PixelFormat::Source => {
+                "10bit / HDR 源保持 10bit，不掉色阶；硬件编码与 HLS 仍按 8bit 输出"
+            }
+            PixelFormat::Yuv420p => "统一 8bit 4:2:0：兼容性最好，10bit 源会掉色阶",
+        }
+    }
+}

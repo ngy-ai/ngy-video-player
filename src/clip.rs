@@ -20,7 +20,9 @@ mod encoder;
 mod export;
 
 pub(crate) use encoder::warm_up as warm_up_encoders;
-pub use export::{EncoderMode, ExportMode, ExportOptions, OutputFormat, Quality, VideoCodec};
+pub use export::{
+    EncoderMode, ExportMode, ExportOptions, OutputFormat, PixelFormat, Quality, VideoCodec,
+};
 
 /// 两端时间输入框允许的最短区间。低于这个值的请求基本是误操作，也让进度条失去意义。
 const MIN_DURATION: f64 = 0.05;

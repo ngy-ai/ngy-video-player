@@ -167,7 +167,7 @@ pub(super) fn video_args(encoder: &str, quality: Quality) -> Vec<String> {
     args.iter().map(|arg| arg.to_string()).collect()
 }
 
-fn is_hardware(encoder: &str) -> bool {
+pub(super) fn is_hardware(encoder: &str) -> bool {
     KNOWN.contains(&encoder)
 }
 
