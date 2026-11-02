@@ -31,6 +31,9 @@ impl PlayerApp {
                 items.push(BarItem::Entry(
                     BarEntry::new("内嵌字幕…", EditSubtitle).enabled(self.file_editable()),
                 ));
+                items.push(BarItem::Entry(
+                    BarEntry::new("编辑章节与元数据…", EditMetadata).enabled(self.file_editable()),
+                ));
                 items.push(BarItem::Separator);
                 items.push(BarItem::Entry(BarEntry::new("退出", Quit)));
             }
@@ -284,6 +287,7 @@ impl PlayerApp {
             BarAction::ClearAbLoop => self.clear_ab_loop(cx),
             BarAction::EditAudio => self.open_remux_dialog(EditTarget::Audio, cx),
             BarAction::EditSubtitle => self.open_remux_dialog(EditTarget::Subtitle, cx),
+            BarAction::EditMetadata => self.open_metadata_dialog(window, cx),
             BarAction::SetAsDefaultPlayer => self.set_default_player(),
             BarAction::OpenDefaultApps => self.open_default_apps(),
             BarAction::RemoveAssociations => self.remove_associations(window, cx),

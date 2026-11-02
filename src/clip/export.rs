@@ -97,7 +97,7 @@ impl Quality {
 }
 
 /// 一次裁切要带上的全部导出选项。
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ExportOptions {
     pub mode: ExportMode,
     pub codec: VideoCodec,
@@ -112,6 +112,11 @@ pub struct ExportOptions {
     pub sharpen: bool,
     /// EBU R128 响度标准化，导出后音量与常见平台一致。
     pub normalize_audio: bool,
+    /// 音频偏移（秒）。正数表示声音延后、负数表示提前，用来修音画不同步。
+    pub audio_offset: f64,
+    /// 强制恒定帧率。手机拍的 VFR 素材在剪辑软件里会出现音画抖动，
+    /// 转成 CFR 后时间轴才稳定。
+    pub force_cfr: bool,
     /// 音轨：一条不留时只导出画面与字幕。
     pub keep_audio: bool,
     /// 字幕：点阵字幕会原样复制，文本字幕按容器支持转码。
@@ -131,6 +136,8 @@ impl Default for ExportOptions {
             denoise: false,
             sharpen: false,
             normalize_audio: false,
+            audio_offset: 0.0,
+            force_cfr: false,
             keep_audio: true,
             keep_subtitles: true,
             keep_chapters: true,
@@ -176,9 +183,26 @@ impl ExportOptions {
 
     /// 音频滤镜。响度标准化按单遍处理：裁切出来的片段通常不长，两遍扫描
     /// 要多解一遍音频，收益不明显。
-    pub fn audio_filters(&self) -> Option<&'static str> {
-        (self.filters_available() && self.normalize_audio)
-            .then_some("loudnorm=I=-16:TP=-1.5:LRA=11")
+    ///
+    /// 音频偏移用「延迟」与「裁掉开头」两种写法实现：`adelay` 只推迟音频，
+    /// 不碰画面；负数则把开头剪掉，等价于让声音提前。
+    pub fn audio_filters(&self) -> Option<String> {
+        if !self.filters_available() {
+            return None;
+        }
+        let mut filters: Vec<String> = Vec::new();
+        let offset = self.audio_offset.clamp(-5.0, 5.0);
+        // 偏移必须排在 loudnorm 前面：loudnorm 输出的是动态声道布局，
+        // `adelay=...:all=1` 接在它后面会报「Cannot select channel layout」。
+        if offset > 0.0005 {
+            filters.push(format!("adelay={}:all=1", (offset * 1000.0).round() as i64));
+        } else if offset < -0.0005 {
+            filters.push(format!("atrim=start={:.3},asetpts=PTS-STARTPTS", -offset));
+        }
+        if self.normalize_audio {
+            filters.push("loudnorm=I=-16:TP=-1.5:LRA=11".to_string());
+        }
+        (!filters.is_empty()).then(|| filters.join(","))
     }
 }
 
@@ -235,6 +259,11 @@ pub(super) fn build_command(executable: &Path, request: &ClipRequest) -> Command
             .arg("yuv420p");
         if let Some(filters) = options.video_filters() {
             command.arg("-vf").arg(filters);
+        }
+        if options.force_cfr {
+            // `-fps_mode` 是 ffmpeg 5.1+ 的写法，`-vsync cfr` 在新版本会告警。
+            // 不指定目标帧率时按源的名义帧率补齐/丢帧，足以治好手机 VFR 的抖动。
+            command.arg("-fps_mode").arg("cfr");
         }
         if options.keep_audio {
             command.arg("-c:a").arg("aac").arg("-b:a").arg("192k");
@@ -378,6 +407,54 @@ mod tests {
         let args = args(options);
         assert!(has(&args, &["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"]));
         assert!(has(&args, &["-ar", "48000"]));
+    }
+
+    #[test]
+    fn 音频偏移正数延迟负数裁剪开头() {
+        let ahead = ExportOptions {
+            audio_offset: 0.3,
+            ..ExportOptions::default()
+        };
+        assert_eq!(
+            ahead.audio_filters().as_deref(),
+            Some("adelay=300:all=1"),
+            "声音延后 300ms"
+        );
+
+        let behind = ExportOptions {
+            audio_offset: -0.25,
+            ..ExportOptions::default()
+        };
+        assert_eq!(
+            behind.audio_filters().as_deref(),
+            Some("atrim=start=0.250,asetpts=PTS-STARTPTS"),
+            "声音提前 250ms"
+        );
+
+        let both = ExportOptions {
+            audio_offset: 0.2,
+            normalize_audio: true,
+            ..ExportOptions::default()
+        };
+        assert_eq!(
+            both.audio_filters().as_deref(),
+            Some("adelay=200:all=1,loudnorm=I=-16:TP=-1.5:LRA=11")
+        );
+    }
+
+    #[test]
+    fn 恒定帧率只在重编码时出现() {
+        let mut options = ExportOptions {
+            force_cfr: true,
+            ..ExportOptions::default()
+        };
+        let exact = args(options.clone());
+        assert!(has(&exact, &["-fps_mode", "cfr"]));
+
+        // 流复制改不了时间戳节奏，这个开关必须被忽略。
+        options.mode = ExportMode::Copy;
+        let copy = args(options);
+        assert!(!copy.iter().any(|arg| arg == "-fps_mode"));
     }
 
     #[test]

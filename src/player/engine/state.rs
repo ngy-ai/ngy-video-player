@@ -68,6 +68,14 @@ pub struct Chapter {
     pub time: f64,
 }
 
+/// 容器里的全局元数据。只取编辑面板用得到的三项，其余原样保留在文件里。
+#[derive(Clone, Debug, Default)]
+pub struct MediaTags {
+    pub title: String,
+    pub artist: String,
+    pub comment: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum LoopMode {
     #[default]
@@ -123,6 +131,7 @@ pub struct Snapshot {
     pub path: Option<PathBuf>,
     pub tracks: Vec<Track>,
     pub chapters: Vec<Chapter>,
+    pub tags: MediaTags,
     pub audio_device: String,
     pub error: Option<String>,
 }
@@ -145,6 +154,7 @@ impl Default for Snapshot {
             path: None,
             tracks: Vec::new(),
             chapters: Vec::new(),
+            tags: MediaTags::default(),
             audio_device: String::new(),
             error: None,
         }

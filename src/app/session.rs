@@ -51,6 +51,8 @@ impl PlayerApp {
             ab_loop: AbLoop::default(),
             remux: None,
             remux_generation: 0,
+            metadata: None,
+            metadata_generation: 0,
             settings,
             on_top_applied: false,
             focus,

@@ -33,7 +33,8 @@ src/app.rs       主视图入口：状态类型、PlayerApp 字段、快捷键�
 src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  session（初始化/事件循环）、playback、window（迷你窗/置顶）、
                  picture、playlist_ops、video_area、controls、menus、bar、
-                 menu_bar、associations、ab_loop（A-B 循环）、playlist_ui、
+                 menu_bar、associations、ab_loop（A-B 循环）、
+                 metadata（章节/元数据编辑，模态）、playlist_ui、
                  playlist_menu（面板上的弹出菜单：添加/排序/全部列表）、
                  playlist_sort（排序 + 拖动重排）、
                  clip/（裁切面板：状态、绘制、高级导出选项，与播放列表共用右侧通道）、
@@ -45,7 +46,9 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
 src/ui.rs        配色、图标按钮、时间格式、等比画面
 src/formats.rs   扩展名清单（文件过滤器 + 拖入判断）
 src/clip.rs      裁切片段：时间解析、区间校验、ffmpeg 任务与进度
-src/clip/export.rs  导出参数：无损剪切、编码、滤镜、响度、轨道保留
+src/clip/export.rs  导出参数：无损剪切、编码、滤镜、响度、音频偏移、轨道保留
+src/metadata.rs  章节与元数据编辑：ffmetadata、流复制任务
+src/subtitle_codec.rs 字幕编码选择（轨道编辑与元数据编辑共用）
 src/convert.rs   格式转换：把当前文件或整个文件夹转成指定格式
 src/convert/format.rs  目标格式表：覆盖 formats 里所有能写出的容器（封装器 + 编码参数）
 src/convert/scan.rs    文件夹递归扫描（自然序、跳过符号链接）

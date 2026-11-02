@@ -127,6 +127,9 @@ fn 滤镜与响度处理能被_ffmpeg_接受() {
             denoise: true,
             sharpen: true,
             normalize_audio: true,
+            // 一并验证恒定帧率与音频延迟的真实参数。
+            force_cfr: true,
+            audio_offset: 0.2,
             ..ExportOptions::default()
         },
     };

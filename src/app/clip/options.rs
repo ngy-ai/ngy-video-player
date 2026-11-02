@@ -134,6 +134,15 @@ impl PlayerApp {
                     },
                     cx,
                 ))
+                .child(toggle_row(
+                    "clip-option-cfr",
+                    "恒定帧率（修复 VFR 抖动）",
+                    options.force_cfr,
+                    |this, cx| {
+                        this.update_clip_options(|options| options.force_cfr ^= true, cx);
+                    },
+                    cx,
+                ))
                 .child(section_title("音频"))
                 .child(toggle_row(
                     "clip-option-loudnorm",
@@ -143,7 +152,8 @@ impl PlayerApp {
                         this.update_clip_options(|options| options.normalize_audio ^= true, cx);
                     },
                     cx,
-                ));
+                ))
+                .child(audio_offset_row(options.audio_offset, cx));
         }
 
         body.child(section_title("轨道"))
@@ -254,4 +264,89 @@ fn toggle_row(
 /// 元素 id 要全局唯一；选项标签里带符号与空格，拼一个稳定前缀避免和别处撞车。
 fn static_id(prefix: &'static str, label: &'static str) -> SharedString {
     SharedString::from(format!("{prefix}-{label}"))
+}
+
+/// 音频偏移一行：`-0.1s` / 当前值 / `+0.1s`，点数字归零。
+///
+/// 用步进按钮而不是滑块：±5 秒的量程里，滑块拖到 0.1 秒精度几乎不可能，
+/// 而修音画不同步恰恰是 0.1 秒一级的调整。
+fn audio_offset_row(offset: f64, cx: &mut Context<PlayerApp>) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(4.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(text())
+                        .child("音频偏移"),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .child(settings_button(
+                            "clip-offset-back",
+                            "-0.1s",
+                            true,
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.nudge_audio_offset(-0.1, cx);
+                            }),
+                        ))
+                        .child(
+                            div()
+                                .id("clip-offset-value")
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .w(px(52.0))
+                                .h(px(32.0))
+                                .rounded(px(6.0))
+                                .bg(ui::surface_hover())
+                                .text_size(px(11.0))
+                                .text_color(ui::accent())
+                                .cursor(CursorStyle::PointingHand)
+                                .hover(|style| style.bg(ui::surface_active()))
+                                .child(format!("{offset:+.1}s"))
+                                .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                    cx.stop_propagation();
+                                    this.update_clip_options(
+                                        |options| options.audio_offset = 0.0,
+                                        cx,
+                                    );
+                                })),
+                        )
+                        .child(settings_button(
+                            "clip-offset-forward",
+                            "+0.1s",
+                            true,
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.nudge_audio_offset(0.1, cx);
+                            }),
+                        )),
+                ),
+        )
+        .child(note("正数=声音延后，负数=提前；点数值归零"))
+        .into_any_element()
+}
+
+impl PlayerApp {
+    fn nudge_audio_offset(&mut self, delta: f64, cx: &mut Context<Self>) {
+        self.update_clip_options(
+            |options| {
+                // 一次加 0.1 秒，浮点累加会跑出 0.30000000000000004 这类值；
+                // 每步取整到一位小数，显示和传参都稳定。
+                let next = ((options.audio_offset + delta) * 10.0).round() / 10.0;
+                options.audio_offset = next.clamp(-5.0, 5.0);
+            },
+            cx,
+        );
+    }
 }

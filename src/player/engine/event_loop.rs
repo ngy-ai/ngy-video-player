@@ -272,6 +272,19 @@ fn refresh_metadata(api: &Arc<MpvApi>, handle: *mut ffi::MpvHandle, shared: &Arc
         }
     }
 
+    // 编辑面板要预填现有标签；`media-title` 会退回文件名，不能用它当标题。
+    let tags = MediaTags {
+        title: api
+            .property_string(handle, "metadata/by-key/title")
+            .unwrap_or_default(),
+        artist: api
+            .property_string(handle, "metadata/by-key/artist")
+            .unwrap_or_default(),
+        comment: api
+            .property_string(handle, "metadata/by-key/comment")
+            .unwrap_or_default(),
+    };
+
     let duration = api.property_f64(handle, "duration").unwrap_or(0.0);
     let width = api.property_i64(handle, "width").unwrap_or(0);
     let height = api.property_i64(handle, "height").unwrap_or(0);
@@ -285,6 +298,7 @@ fn refresh_metadata(api: &Arc<MpvApi>, handle: *mut ffi::MpvHandle, shared: &Arc
     let mut state = shared.state();
     state.tracks = tracks;
     state.chapters = chapters;
+    state.tags = tags;
     if duration > 0.0 {
         state.duration = duration;
     }

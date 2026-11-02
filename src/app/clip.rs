@@ -105,8 +105,9 @@ impl PlayerApp {
             return;
         }
 
-        // 轨道编辑还是模态的，叠在面板上会挡住画面与进度条。
+        // 轨道编辑与元数据编辑都是模态的，叠在面板上会挡住画面与进度条。
         self.close_remux_dialog(cx);
+        self.close_metadata_dialog(cx);
         // 转换面板与裁切抢同一条右侧通道，先让位（正在跑的任务一并取消）。
         self.dismiss_convert_panel();
         self.clip_generation += 1;

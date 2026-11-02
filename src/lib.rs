@@ -10,12 +10,15 @@ pub mod convert;
 // 内嵌资源（libmpv / ffmpeg）的解压与缓存：对外没有 API，只是两个模块共用的落盘逻辑。
 mod embed;
 pub mod formats;
+pub mod metadata;
 pub mod platform;
 pub mod player;
 pub mod playlist;
 pub mod remux;
 pub mod screenshot;
 pub mod settings;
+// 字幕编码判断：轨道编辑与元数据编辑共用，不对外暴露。
+mod subtitle_codec;
 pub mod ui;
 
 pub use player::Engine;

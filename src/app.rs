@@ -81,6 +81,7 @@ mod convert;
 mod format;
 mod menu_bar;
 mod menus;
+mod metadata;
 mod mini;
 mod overlays;
 mod picture;
@@ -101,6 +102,7 @@ use self::clip::ClipDialog;
 use self::constants::*;
 use self::convert::ConvertDialog;
 use self::format::*;
+use self::metadata::MetadataDialog;
 use self::mini::MiniPlayer;
 use self::playlist_menu::PanelMenu;
 use self::remux::RemuxDialog;
@@ -261,6 +263,10 @@ pub struct PlayerApp {
     remux: Option<RemuxDialog>,
     /// 轨道编辑任务代次，作用同 `clip_generation`。
     remux_generation: u64,
+    /// 章节 / 元数据编辑对话框；`None` 表示没打开。
+    metadata: Option<MetadataDialog>,
+    /// 元数据编辑任务代次，作用同 `clip_generation`。
+    metadata_generation: u64,
     settings: Settings,
     /// 上一次真正下发给窗口系统的置顶状态。
     ///
@@ -511,6 +517,8 @@ enum BarAction {
     EditAudio,
     /// 把外部字幕内嵌进容器。
     EditSubtitle,
+    /// 编辑章节与容器元数据。
+    EditMetadata,
     SetAsDefaultPlayer,
     OpenDefaultApps,
     RemoveAssociations,
@@ -610,6 +618,9 @@ pub fn run(options: LaunchOptions) -> Result<()> {
         .run(move |cx: &mut App| {
             crate::logging::init();
             gpui_kit::init(cx);
+            // 组件库默认是浅色主题；本项目整套界面是深色的，只用到它的输入框，
+            // 强制深色至少不会在元数据对话框里出现一块白色输入区。
+            gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx);
             cx.bind_keys(key_bindings());
 
             let bounds = Bounds::new(

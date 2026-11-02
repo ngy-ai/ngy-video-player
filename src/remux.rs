@@ -294,13 +294,15 @@ fn build_command(executable: &Path, request: &RemuxRequest) -> Command {
             command.arg("-map").arg("0:s?");
             command
                 .arg("-c:s")
-                .arg(kept_subtitle_codec(&request.subtitle_codecs));
+                .arg(crate::subtitle_codec::kept(&request.subtitle_codecs));
         }
         TrackAction::Replace(path) => {
             command
                 .arg("-map")
                 .arg(format!("{}:s:0", subtitle_input.unwrap_or(1)));
-            command.arg("-c:s").arg(replacement_subtitle_codec(path));
+            command
+                .arg("-c:s")
+                .arg(crate::subtitle_codec::from_path(path));
         }
         TrackAction::Remove => {}
     }
@@ -334,42 +336,6 @@ fn build_command(executable: &Path, request: &RemuxRequest) -> Command {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     command
-}
-
-/// 「保留原字幕」时的输出编码。
-///
-/// 点阵字幕（PGS/DVD/DVB）只能流复制；ASS 要留住样式；其余（srt、vtt、mp4 的
-/// mov_text……）统一转成 srt——尤其 mov_text 在 mkv 里根本不存在，原样复制会
-/// 让整个任务在最后一步失败。
-fn kept_subtitle_codec(codecs: &[String]) -> &'static str {
-    let lower: Vec<String> = codecs.iter().map(|codec| codec.to_lowercase()).collect();
-    if lower.iter().any(|codec| is_bitmap_subtitle(codec)) {
-        "copy"
-    } else if lower.iter().any(|codec| is_ass_subtitle(codec)) {
-        "ass"
-    } else {
-        "srt"
-    }
-}
-
-/// 换进来的字幕文件按扩展名选编码：ASS/SSA 保住样式，`.sup` 是点阵图形只能复制，
-/// 其余文本格式统一转成 srt。
-fn replacement_subtitle_codec(path: &Path) -> &'static str {
-    match crate::formats::extension(path).as_deref() {
-        Some("ass" | "ssa") => "ass",
-        Some("sup") => "copy",
-        _ => "srt",
-    }
-}
-
-fn is_bitmap_subtitle(codec: &str) -> bool {
-    ["pgs", "dvd_sub", "dvb_sub", "xsub"]
-        .iter()
-        .any(|key| codec.contains(key))
-}
-
-fn is_ass_subtitle(codec: &str) -> bool {
-    codec.contains("ass") || codec.contains("ssa")
 }
 
 /// 新轨道的标题：文件名去掉扩展名，空名字就不要标题。
@@ -477,22 +443,6 @@ mod tests {
         assert!(!has(&args, &["-map", "0:s?"]));
         assert!(!args.iter().any(|arg| arg == "-c:s"));
         assert!(has(&args, &["-map", "0:a?"]));
-    }
-
-    #[test]
-    fn 保留字幕按编码决定复制还是转码() {
-        let codec = |list: &[&str]| {
-            kept_subtitle_codec(&list.iter().map(|s| s.to_string()).collect::<Vec<_>>())
-        };
-        assert_eq!(codec(&[]), "srt");
-        assert_eq!(codec(&["subrip"]), "srt");
-        // mp4 的 mov_text 装不进 mkv，必须转码。
-        assert_eq!(codec(&["mov_text"]), "srt");
-        assert_eq!(codec(&["ass"]), "ass");
-        assert_eq!(codec(&["hdmv_pgs_subtitle"]), "copy");
-        assert_eq!(codec(&["dvd_subtitle"]), "copy");
-        // 混合时以点阵为准：转成文字会把图形字幕整条丢掉。
-        assert_eq!(codec(&["subrip", "hdmv_pgs_subtitle"]), "copy");
     }
 
     #[test]
