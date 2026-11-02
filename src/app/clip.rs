@@ -42,6 +42,11 @@ pub(super) struct ClipDialog {
     field: Option<ClipField>,
     state: ClipState,
     job: Option<Arc<ClipJob>>,
+    /// 流复制吸附到关键帧后的实际起点；与输入相同时为 `None`。
+    ///
+    /// 无损剪切只能从关键帧起步，用户输入的时间几乎总落在两个关键帧之间，
+    /// 这个差值必须显示出来，否则用户会以为剪切位置不准。
+    aligned: Option<f64>,
     /// 导出参数：剪切方式、编码、滤镜与轨道保留。
     options: clip_core::ExportOptions,
     /// 正在预览片段时的终点与开始时刻（秒）。
@@ -62,6 +67,7 @@ impl ClipDialog {
             field: None,
             state: ClipState::Editing,
             job: None,
+            aligned: None,
             options: clip_core::ExportOptions::default(),
             preview: None,
         }
@@ -327,6 +333,7 @@ impl PlayerApp {
         let (tx, mut rx) = futures::channel::mpsc::unbounded();
         match ClipJob::start(request, tx) {
             Ok(job) => {
+                dialog.aligned = job.aligned;
                 dialog.job = Some(Arc::new(job));
                 dialog.state = ClipState::Running { progress: 0.0 };
                 // 正在预览的那一段不该在裁切跑起来之后再把视频按停。

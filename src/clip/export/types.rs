@@ -10,7 +10,7 @@ pub enum ExportMode {
     /// 逐帧重编码：切点精确到帧，兼容性最好。
     #[default]
     Exact,
-    /// 流复制：不动画面与音频，速度快，切点对齐到前一个关键帧。
+    /// 流复制：不动画面与音频，速度快，切点对齐到关键帧。
     Copy,
 }
 
@@ -28,7 +28,7 @@ impl ExportMode {
     pub fn hint(self) -> &'static str {
         match self {
             ExportMode::Exact => "切点精确到帧，H.264/AAC 兼容性最好，速度取决于片长",
-            ExportMode::Copy => "不重新编码，几秒完成；起点会对齐到前一个关键帧，滤镜与响度不可用",
+            ExportMode::Copy => "不重新编码，几秒完成；起点会吸附到关键帧，滤镜与响度不可用",
         }
     }
 }
@@ -121,6 +121,37 @@ impl Quality {
             // 与之前的默认值一致：重编码一次不该悄悄改变画质。
             Quality::Standard => 20,
             Quality::Small => 23,
+        }
+    }
+}
+
+/// 流复制的切点对齐方向。
+///
+/// 流复制只能从关键帧起步，而用户输入的时间几乎总落在两个关键帧之间，
+/// 于是必然要选一边吃亏：往前多含一段，还是往后少含一段。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KeyframeAlign {
+    /// 吸附到前一个关键帧：画面比设定时间开始得早，但绝不丢用户要的内容。
+    #[default]
+    Previous,
+    /// 吸附到后一个关键帧：画面开始得晚，但绝不包含用户不要的内容。
+    Next,
+}
+
+impl KeyframeAlign {
+    pub const ALL: [KeyframeAlign; 2] = [KeyframeAlign::Previous, KeyframeAlign::Next];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            KeyframeAlign::Previous => "向前对齐",
+            KeyframeAlign::Next => "向后对齐",
+        }
+    }
+
+    pub fn hint(self) -> &'static str {
+        match self {
+            KeyframeAlign::Previous => "多包含开头一段，确保要的内容一帧不少",
+            KeyframeAlign::Next => "少包含开头一段，确保不要的内容一帧不进",
         }
     }
 }

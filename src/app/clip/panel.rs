@@ -279,8 +279,8 @@ impl PlayerApp {
                 .child(if dialog.options.format == clip_core::OutputFormat::Hls {
                     "输出 m3u8 与同名 .ts 分片；只保留画面与音轨，字幕与章节不写入。"
                 } else if dialog.options.mode == clip_core::ExportMode::Copy {
-                    "流复制为 mkv：不重新编码，几秒完成；切点会落在前一个关键帧上，\
-                     画面可能比设定时间多出几秒。"
+                    "流复制为 mkv：不重新编码，几秒完成；切点会吸附到关键帧上，\
+                     实际起点与设定值可能差一小段，导出完成后会告诉你差多少。"
                 } else {
                     "重编码为 mkv，耗时与片长相关；开始后可取消。"
                 }),
@@ -421,7 +421,7 @@ impl PlayerApp {
     }
 
     fn render_clip_done(&self, path: &Path, cx: &mut Context<Self>) -> AnyElement {
-        div()
+        let mut body = div()
             .flex()
             .flex_col()
             .gap(px(10.0))
@@ -437,38 +437,69 @@ impl PlayerApp {
                     .text_color(text_muted())
                     .whitespace_normal()
                     .child(path.display().to_string()),
-            )
-            .child(
+            );
+
+        // 无损剪切只能在关键帧上起步，实际起点与设定值几乎总差一截。
+        // 不说清楚的话，用户会以为剪切位置不准。
+        if let Some(dialog) = self.clip.as_ref()
+            && let Some(actual) = dialog.aligned
+        {
+            let wanted = dialog
+                .range()
+                .ok()
+                .flatten()
+                .map(|range| range.start)
+                .unwrap_or(actual);
+            let delta = actual - wanted;
+            let offset = if delta < 0.0 {
+                format!("多含 {:.2} 秒", -delta)
+            } else {
+                format!("少含 {:.2} 秒", delta)
+            };
+            body = body.child(
                 div()
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .gap(px(8.0))
-                    .child(settings_button(
-                        "clip-reveal",
-                        "定位",
-                        true,
-                        cx.listener(|this, _: &ClickEvent, _window, cx| {
-                            this.clip_reveal_result(cx);
-                        }),
-                    ))
-                    .child(settings_button(
-                        "clip-open",
-                        "打开",
-                        true,
-                        cx.listener(|this, _: &ClickEvent, _window, cx| {
-                            this.clip_open_result(cx);
-                        }),
-                    ))
-                    .child(primary_button(
-                        "clip-finish",
-                        "完成",
-                        true,
-                        cx.listener(|this, _: &ClickEvent, _window, cx| {
-                            this.close_clip_dialog(cx);
-                        }),
+                    .text_size(px(11.0))
+                    .text_color(ui::accent())
+                    .whitespace_normal()
+                    .child(format!(
+                        "无损剪切只能从关键帧起步：设定 {}，实际 {} 开始，{offset}。",
+                        clip_core::format_time(wanted),
+                        clip_core::format_time(actual),
                     )),
-            )
-            .into_any_element()
+            );
+        }
+
+        body.child(
+            div()
+                .flex()
+                .items_center()
+                .justify_end()
+                .gap(px(8.0))
+                .child(settings_button(
+                    "clip-reveal",
+                    "定位",
+                    true,
+                    cx.listener(|this, _: &ClickEvent, _window, cx| {
+                        this.clip_reveal_result(cx);
+                    }),
+                ))
+                .child(settings_button(
+                    "clip-open",
+                    "打开",
+                    true,
+                    cx.listener(|this, _: &ClickEvent, _window, cx| {
+                        this.clip_open_result(cx);
+                    }),
+                ))
+                .child(primary_button(
+                    "clip-finish",
+                    "完成",
+                    true,
+                    cx.listener(|this, _: &ClickEvent, _window, cx| {
+                        this.close_clip_dialog(cx);
+                    }),
+                )),
+        )
+        .into_any_element()
     }
 }

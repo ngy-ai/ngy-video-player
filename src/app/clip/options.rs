@@ -5,7 +5,8 @@
 
 use super::*;
 use crate::clip::{
-    EncoderMode, ExportMode, ExportOptions, OutputFormat, PixelFormat, Quality, VideoCodec,
+    EncoderMode, ExportMode, ExportOptions, KeyframeAlign, OutputFormat, PixelFormat, Quality,
+    VideoCodec,
 };
 
 impl PlayerApp {
@@ -72,6 +73,29 @@ impl PlayerApp {
                     })),
             )
             .child(note(options.format.hint()));
+
+        // 流复制只能在关键帧上起步，用户给的秒数几乎总落在两个关键帧之间，
+        // 于是必然要选一边吃亏。其余模式是帧精确的，不需要这个选择。
+        if options.mode == ExportMode::Copy {
+            body =
+                body.child(section_title("关键帧对齐"))
+                    .child(div().flex().items_center().gap(px(6.0)).children(
+                        KeyframeAlign::ALL.map(|align| {
+                            option_chip(
+                                static_id("clip-align", align.label()),
+                                align.label(),
+                                options.keyframe_align == align,
+                                cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                                    this.update_clip_options(
+                                        |options| options.keyframe_align = align,
+                                        cx,
+                                    );
+                                }),
+                            )
+                        }),
+                    ))
+                    .child(note(options.keyframe_align.hint()));
+        }
 
         if exact {
             body = body

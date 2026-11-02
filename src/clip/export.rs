@@ -1,8 +1,9 @@
 //! 剪切片段的导出参数：剪切方式、编码、滤镜与轨道保留。
 //!
 //! 「精确重编码」和「无损流复制」是同一件事的两条路：前者逐帧解码再编码，
-//! 切点精确但慢；后者直接搬流，快但只能落在关键帧上，起点可能比输入的时间早。
-//! 两条路的参数集合完全不同，所以集中在这里拼，裁切面板只负责选。
+//! 切点精确但慢；后者直接搬码流，快但只能从关键帧起步，实际起点由
+//! `clip::keyframe` 探测后替换。两条路的参数集合完全不同，所以集中在这里拼，
+//! 裁切面板只负责选。
 //!
 //! 滤镜与响度处理只在重编码时可用：流复制根本没有解码后的样本可以加工。
 
@@ -12,7 +13,7 @@ use super::ClipRequest;
 // 编码器偏好是裁切与格式转换共用的，定义在 `crate::encoder`，这里只重新导出，
 // 保持 `clip::EncoderMode` 这个既有入口不变。
 pub use crate::encoder::EncoderMode;
-pub use types::{ExportMode, OutputFormat, PixelFormat, Quality, VideoCodec};
+pub use types::{ExportMode, KeyframeAlign, OutputFormat, PixelFormat, Quality, VideoCodec};
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -21,6 +22,8 @@ use std::process::{Command, Stdio};
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExportOptions {
     pub mode: ExportMode,
+    /// 流复制时起点吸附到哪一侧的关键帧。`Exact` 模式下不生效。
+    pub keyframe_align: KeyframeAlign,
     pub format: OutputFormat,
     pub codec: VideoCodec,
     /// 编码器偏好。实际选中的编码器由任务启动时探测决定。
@@ -64,6 +67,7 @@ impl Default for ExportOptions {
     fn default() -> Self {
         Self {
             mode: ExportMode::Exact,
+            keyframe_align: KeyframeAlign::Previous,
             format: OutputFormat::Mkv,
             codec: VideoCodec::H264,
             encoder_mode: EncoderMode::Auto,

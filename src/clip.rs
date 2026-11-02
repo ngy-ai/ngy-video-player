@@ -1,11 +1,12 @@
-//! 视频裁切：把 `[开始, 结束]` 区间精确重编码成新文件。
+//! 视频裁切：把 `[开始, 结束]` 区间导出成新文件。
 //!
 //! 两端都可以留空：开始留空表示从头，结束留空表示到最后。两端都留空时没有可裁的
 //! 区间，界面会拒绝执行——这里不是「复制整份文件」的入口。
 //!
-//! 走重编码而不是流复制：流复制只能从关键帧开始，起点会偏前，而用户输入的时间是
-//! 精确到毫秒的。代价是慢，所以任务放在后台线程，并用 ffmpeg 的 `-progress` 回报
-//! 进度；取消时直接杀掉子进程并清掉半成品。
+//! 两条导出路径：重编码的切点精确到帧但慢；流复制直接搬码流、几秒完成，但起点
+//! 必须落在关键帧上，所以要先探一次关键帧再替换掉用户给的秒数（见 `keyframe`）。
+//! 两条路都在后台线程跑，用 ffmpeg 的 `-progress` 回报进度；取消时直接杀掉子进程
+//! 并清掉半成品。
 
 use anyhow::{Context as _, Result};
 use futures::channel::mpsc::UnboundedSender;
@@ -18,9 +19,11 @@ use std::sync::{Arc, Mutex};
 
 mod encoder;
 mod export;
+mod keyframe;
 
 pub use export::{
-    EncoderMode, ExportMode, ExportOptions, OutputFormat, PixelFormat, Quality, VideoCodec,
+    EncoderMode, ExportMode, ExportOptions, KeyframeAlign, OutputFormat, PixelFormat, Quality,
+    VideoCodec,
 };
 
 /// 两端时间输入框允许的最短区间。低于这个值的请求基本是误操作，也让进度条失去意义。
@@ -266,12 +269,60 @@ fn remove_output(output: &Path) {
     }
 }
 
+/// 流复制前把起点对到关键帧。
+///
+/// 返回调整后的请求与实际起点（没调整时为 `None`）。
+///
+/// 不对齐的后果不只是「多几秒」：ffmpeg 会从目标时间之前的关键帧开始复制，
+/// 再把关键帧到目标时间之间的包全部丢掉，于是输出的首帧成了没有参考画面的
+/// P 帧，播放器要花屏到下一个关键帧。所以这一步是正确性要求，不是体验优化。
+///
+/// 探测失败不阻断导出：按用户设定的时间切，至少还能拿到文件，只是开头可能坏。
+fn align_to_keyframe(executable: &Path, mut request: ClipRequest) -> (ClipRequest, Option<f64>) {
+    if request.options.mode != ExportMode::Copy {
+        return (request, None);
+    }
+    let wanted = request.range;
+
+    let frames = match keyframe::around(executable, &request.input, wanted.start) {
+        Ok(frames) => frames,
+        Err(error) => {
+            log_warn!("探测关键帧失败，按设定时间流复制：{error:#}");
+            return (request, None);
+        }
+    };
+
+    let mut start = frames.pick(request.options.keyframe_align);
+    // 向后对齐时下一个关键帧可能已经越过终点，这时退回前一个，
+    // 而不是切出一个空区间。
+    if start >= wanted.end - MIN_DURATION {
+        start = frames.prev;
+    }
+    // 整段比一个 GOP 还短：两侧都对不上，原样切。
+    if start >= wanted.end - MIN_DURATION {
+        return (request, None);
+    }
+    // 输入本来就落在关键帧上：没变化，不必打扰用户。
+    if (start - wanted.start).abs() < 0.0005 {
+        return (request, None);
+    }
+
+    request.range = ClipRange {
+        start,
+        end: wanted.end,
+    };
+    (request, Some(start))
+}
+
 /// 正在跑的 ffmpeg 子进程。
 ///
 /// 界面只持有一个句柄：进度通过事件通道回来，取消直接杀进程。
 pub struct ClipJob {
     child: Arc<Mutex<Option<Child>>>,
     cancelled: Arc<AtomicBool>,
+    /// 流复制吸附到关键帧之后的实际起点。与设定值相同时为 `None`，
+    /// 界面据此决定要不要告诉用户「实际从哪里开始」。
+    pub aligned: Option<f64>,
 }
 
 impl ClipJob {
@@ -281,6 +332,8 @@ impl ClipJob {
         // 编码器在任务线程里探测：`ffmpeg -encoders` 要起一个进程，不该卡界面。
         let encoder = encoder::pick(request.options.codec, request.options.encoder_mode)
             .map_err(anyhow::Error::msg)?;
+        // 流复制只能在关键帧上起步，探测放在拼命令之前。
+        let (request, aligned) = align_to_keyframe(&executable, request);
         let mut child = export::build_command(&executable, &request, encoder)
             .spawn()
             .with_context(|| format!("启动 ffmpeg 失败：{}", executable.display()))?;
@@ -347,7 +400,11 @@ impl ClipJob {
             let _ = tx.unbounded_send(ClipEvent::Done(outcome));
         });
 
-        Ok(Self { child, cancelled })
+        Ok(Self {
+            child,
+            cancelled,
+            aligned,
+        })
     }
 
     /// 取消裁切。子进程会在几百毫秒内被回收，任务线程负责删掉半成品。
