@@ -9,6 +9,8 @@ pub mod clip;
 pub mod convert;
 // 内嵌资源（libmpv / ffmpeg）的解压与缓存：对外没有 API，只是两个模块共用的落盘逻辑。
 mod embed;
+// 硬件编码器探测：裁切与格式转换共用，对外没有 API。
+mod encoder;
 pub mod formats;
 pub mod metadata;
 pub mod multicam;

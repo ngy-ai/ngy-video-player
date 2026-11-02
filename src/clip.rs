@@ -19,7 +19,6 @@ use std::sync::{Arc, Mutex};
 mod encoder;
 mod export;
 
-pub(crate) use encoder::warm_up as warm_up_encoders;
 pub use export::{
     EncoderMode, ExportMode, ExportOptions, OutputFormat, PixelFormat, Quality, VideoCodec,
 };
