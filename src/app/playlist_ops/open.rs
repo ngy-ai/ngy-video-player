@@ -49,11 +49,11 @@ impl PlayerApp {
             .unwrap_or_else(|| folder.to_string_lossy().into_owned());
         // 页名两头不留空白：`find_tab` 按名字复用，带空格的话每次打开都会新开一页。
         let name = name.trim().to_string();
-        let tab = match self.playlists.find_tab(&name) {
-            Some(tab) => tab,
+        let (tab, created) = match self.playlists.find_tab(&name) {
+            Some(tab) => (tab, false),
             None => {
                 let name = self.playlists.unique_name(&name);
-                self.playlists.add(name)
+                (self.playlists.add(name), true)
             }
         };
         self.playlists.set_active(tab);
@@ -64,6 +64,19 @@ impl PlayerApp {
         if let Some(index) = self.playlist().index() {
             self.play_index(index);
         }
+        // 播放列表可能关着，页签看不见：提示里带上最终页名（重名时有后缀），
+        // 用户才知道列表是新建的还是切过去的。
+        let opened = self
+            .playlists
+            .tabs()
+            .get(tab)
+            .map(|tab| tab.name.clone())
+            .unwrap_or(name);
+        self.flash(if created {
+            format!("已新建列表「{opened}」")
+        } else {
+            format!("已切到列表「{opened}」")
+        });
         self.poke();
         cx.notify();
     }
