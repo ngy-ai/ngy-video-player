@@ -248,7 +248,9 @@ impl PlayerApp {
                 ))
                 .child(primary_button(
                     "clip-start",
-                    if dialog.options.mode == clip_core::ExportMode::Copy {
+                    if dialog.options.format == clip_core::OutputFormat::Hls {
+                        "开始导出 HLS"
+                    } else if dialog.options.mode == clip_core::ExportMode::Copy {
                         "开始无损剪切"
                     } else {
                         "开始裁切"
@@ -274,7 +276,9 @@ impl PlayerApp {
                 .text_size(px(10.0))
                 .text_color(text_faint())
                 .whitespace_normal()
-                .child(if dialog.options.mode == clip_core::ExportMode::Copy {
+                .child(if dialog.options.format == clip_core::OutputFormat::Hls {
+                    "输出 m3u8 与同名 .ts 分片；只保留画面与音轨，字幕与章节不写入。"
+                } else if dialog.options.mode == clip_core::ExportMode::Copy {
                     "流复制为 mkv：不重新编码，几秒完成；切点会落在前一个关键帧上，\
                      画面可能比设定时间多出几秒。"
                 } else {

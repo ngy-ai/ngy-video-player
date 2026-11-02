@@ -6,6 +6,7 @@
 use futures::StreamExt as _;
 use ngy_video_player::clip::{
     ClipEvent, ClipJob, ClipOutcome, ClipRange, ClipRequest, ExportMode, ExportOptions,
+    OutputFormat,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -127,8 +128,10 @@ fn 滤镜与响度处理能被_ffmpeg_接受() {
             denoise: true,
             sharpen: true,
             normalize_audio: true,
-            // 一并验证恒定帧率与音频延迟的真实参数。
+            // 一并验证恒定帧率、时间戳修复、漂移校正与音频延迟的真实参数。
             force_cfr: true,
+            fix_timestamps: true,
+            sync_audio: true,
             audio_offset: 0.2,
             ..ExportOptions::default()
         },
@@ -140,6 +143,44 @@ fn 滤镜与响度处理能被_ffmpeg_接受() {
         other => panic!("滤镜链被 ffmpeg 拒绝: {other:?}"),
     }
     assert_output(&output);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+#[ignore = "需要本机安装 ffmpeg"]
+fn 导出_hls_切片() {
+    let ffmpeg = ngy_video_player::platform::ffmpeg::executable().expect("本机没有 ffmpeg");
+    let dir = std::env::temp_dir().join(format!("ngy-clip-hls-e2e-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = sample(&ffmpeg, &dir);
+
+    let output = dir.join("out.m3u8");
+    let request = ClipRequest {
+        input,
+        output: output.clone(),
+        range: ClipRange {
+            start: 0.0,
+            end: 4.0,
+        },
+        options: ExportOptions {
+            format: OutputFormat::Hls,
+            ..ExportOptions::default()
+        },
+    };
+    let (outcome, _progress) = run(request);
+
+    match outcome {
+        ClipOutcome::Finished(path) => assert_eq!(path, output),
+        other => panic!("HLS 导出失败: {other:?}"),
+    }
+    assert!(output.is_file(), "播放列表不存在");
+    let segments = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".ts"))
+        .count();
+    assert!(segments > 0, "没有生成任何 .ts 分片");
 
     std::fs::remove_dir_all(&dir).unwrap();
 }

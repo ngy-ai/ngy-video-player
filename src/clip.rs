@@ -16,15 +16,16 @@ use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+mod encoder;
 mod export;
 
-pub use export::{ExportMode, ExportOptions, Quality, VideoCodec};
+pub(crate) use encoder::warm_up as warm_up_encoders;
+pub use export::{EncoderMode, ExportMode, ExportOptions, OutputFormat, Quality, VideoCodec};
 
 /// 裁切输出的容器。
 ///
 /// 选 mkv 而不是 mp4：mkv 能原样装下任意来源的音频与字幕轨，换成 mp4 就要为
 /// PGS/ASS 之类找替身编码，失败面大得多。
-pub const OUTPUT_EXTENSION: &str = "mkv";
 
 /// 两端时间输入框允许的最短区间。低于这个值的请求基本是误操作，也让进度条失去意义。
 const MIN_DURATION: f64 = 0.05;
@@ -194,7 +195,8 @@ pub fn range_from_inputs(
 /// 裁切结果的落点：与原文件同目录，名字加「 - 片段」，已存在就往后编号。
 ///
 /// 不覆盖已有文件：裁切是个耗时操作，一次手滑把同名文件盖掉就找不回来了。
-pub fn output_path(input: &Path) -> PathBuf {
+/// HLS 只检查播放列表，同名分片交给 ffmpeg 覆盖——它们属于这一个播放列表。
+pub fn output_path(input: &Path, format: OutputFormat) -> PathBuf {
     let dir = input.parent().unwrap_or_else(|| Path::new("."));
     let stem = input
         .file_stem()
@@ -202,11 +204,12 @@ pub fn output_path(input: &Path) -> PathBuf {
         .filter(|stem| !stem.is_empty())
         .unwrap_or_else(|| "片段".to_string());
     let base = format!("{stem} - 片段");
+    let extension = format.extension();
 
-    let mut candidate = dir.join(format!("{base}.{OUTPUT_EXTENSION}"));
+    let mut candidate = dir.join(format!("{base}.{extension}"));
     let mut index = 2;
     while candidate.exists() {
-        candidate = dir.join(format!("{base} ({index}).{OUTPUT_EXTENSION}"));
+        candidate = dir.join(format!("{base} ({index}).{extension}"));
         index += 1;
         // 理论上不会走到这里；只是防止某个坏掉的目录让循环停不下来。
         if index > 999 {
@@ -240,6 +243,33 @@ pub enum ClipOutcome {
     Failed(String),
 }
 
+/// 删掉半成品。HLS 的输出是「播放列表 + 一堆分片」，只删 m3u8 会留下垃圾。
+fn remove_output(output: &Path) {
+    let _ = std::fs::remove_file(output);
+    if output.extension().and_then(|ext| ext.to_str()) != Some("m3u8") {
+        return;
+    }
+    let Some(dir) = output.parent() else {
+        return;
+    };
+    let Some(stem) = output
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+    else {
+        return;
+    };
+    let prefix = format!("{stem}_");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with(&prefix) && name.ends_with(".ts") {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// 正在跑的 ffmpeg 子进程。
 ///
 /// 界面只持有一个句柄：进度通过事件通道回来，取消直接杀进程。
@@ -252,7 +282,10 @@ impl ClipJob {
     /// 启动后台裁切。命令拼装或进程启动失败会立即返回错误，界面不必等事件。
     pub fn start(request: ClipRequest, tx: UnboundedSender<ClipEvent>) -> Result<Self> {
         let executable = crate::platform::ffmpeg::executable()?;
-        let mut child = export::build_command(&executable, &request)
+        // 编码器在任务线程里探测：`ffmpeg -encoders` 要起一个进程，不该卡界面。
+        let encoder = encoder::pick(request.options.codec, request.options.encoder_mode)
+            .map_err(anyhow::Error::msg)?;
+        let mut child = export::build_command(&executable, &request, encoder)
             .spawn()
             .with_context(|| format!("启动 ffmpeg 失败：{}", executable.display()))?;
 
@@ -289,8 +322,8 @@ impl ClipJob {
             let cancelled = task_cancelled.load(Ordering::SeqCst);
 
             let outcome = if cancelled {
-                // 半成品留着只会让用户以为裁切成功了。
-                let _ = std::fs::remove_file(&output);
+                // 半成品留着只会让用户以为裁切成功了。HLS 还要清掉分片。
+                remove_output(&output);
                 ClipOutcome::Cancelled
             } else {
                 match status {
@@ -450,12 +483,16 @@ mod tests {
         let input = dir.join("课程 01.mp4");
         std::fs::write(&input, b"x").unwrap();
 
-        let first = output_path(&input);
+        let first = output_path(&input, OutputFormat::Mkv);
         assert_eq!(first, dir.join("课程 01 - 片段.mkv"));
         std::fs::write(&first, b"x").unwrap();
 
-        let second = output_path(&input);
+        let second = output_path(&input, OutputFormat::Mkv);
         assert_eq!(second, dir.join("课程 01 - 片段 (2).mkv"));
+
+        // HLS 只认自己的播放列表，不会被已有的 mkv 影响。
+        let hls = output_path(&input, OutputFormat::Hls);
+        assert_eq!(hls, dir.join("课程 01 - 片段.m3u8"));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

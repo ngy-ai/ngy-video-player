@@ -641,6 +641,9 @@ pub fn run(options: LaunchOptions) -> Result<()> {
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx: &mut App| {
             crate::logging::init();
+            // 硬件编码器探测放后台：启用哪个编码器不阻塞界面，探测好之后
+            // 下一次裁切就会自动用上。
+            crate::clip::warm_up_encoders();
             gpui_kit::init(cx);
             // 组件库默认是浅色主题；本项目整套界面是深色的，只用到它的输入框，
             // 强制深色至少不会在元数据对话框里出现一块白色输入区。

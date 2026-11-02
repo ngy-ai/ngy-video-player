@@ -4,7 +4,7 @@
 //! 偏好。用户选完、点「开始」、关掉面板，下一次回到默认值。
 
 use super::*;
-use crate::clip::{ExportMode, ExportOptions, Quality, VideoCodec};
+use crate::clip::{EncoderMode, ExportMode, ExportOptions, OutputFormat, Quality, VideoCodec};
 
 impl PlayerApp {
     /// 改一项导出参数。面板开着才生效，改完立刻重绘。
@@ -51,7 +51,25 @@ impl PlayerApp {
                         )
                     })),
             )
-            .child(note(options.mode.hint()));
+            .child(note(options.mode.hint()))
+            .child(section_title("输出"))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .children(OutputFormat::ALL.map(|format| {
+                        option_chip(
+                            static_id("clip-format", format.label()),
+                            format.label(),
+                            options.format == format,
+                            cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                                this.update_clip_options(|options| options.format = format, cx);
+                            }),
+                        )
+                    })),
+            )
+            .child(note(options.format.hint()));
 
         if exact {
             body = body
@@ -72,6 +90,26 @@ impl PlayerApp {
                             )
                         })),
                 )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .children(EncoderMode::ALL.map(|encoder| {
+                            option_chip(
+                                static_id("clip-encoder", encoder.label()),
+                                encoder.label(),
+                                options.encoder_mode == encoder,
+                                cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                                    this.update_clip_options(
+                                        |options| options.encoder_mode = encoder,
+                                        cx,
+                                    );
+                                }),
+                            )
+                        })),
+                )
+                .child(note(options.encoder_mode.hint()))
                 .child(
                     div()
                         .flex()
@@ -153,10 +191,31 @@ impl PlayerApp {
                     },
                     cx,
                 ))
+                .child(toggle_row(
+                    "clip-option-sync-audio",
+                    "音频漂移校正（长录制）",
+                    options.sync_audio,
+                    |this, cx| {
+                        this.update_clip_options(|options| options.sync_audio ^= true, cx);
+                    },
+                    cx,
+                ))
                 .child(audio_offset_row(options.audio_offset, cx));
         }
 
-        body.child(section_title("轨道"))
+        body = body
+            .child(section_title("时间戳"))
+            .child(toggle_row(
+                "clip-option-fix-pts",
+                "修复缺失/负时间戳",
+                options.fix_timestamps,
+                |this, cx| {
+                    this.update_clip_options(|options| options.fix_timestamps ^= true, cx);
+                },
+                cx,
+            ))
+            .child(note("对流复制也生效；音频漂移校正只在重编码时可用。"))
+            .child(section_title("轨道"))
             .child(toggle_row(
                 "clip-option-audio",
                 "保留音轨",
@@ -165,26 +224,33 @@ impl PlayerApp {
                     this.update_clip_options(|options| options.keep_audio ^= true, cx);
                 },
                 cx,
-            ))
-            .child(toggle_row(
-                "clip-option-subtitles",
-                "保留字幕",
-                options.keep_subtitles,
-                |this, cx| {
-                    this.update_clip_options(|options| options.keep_subtitles ^= true, cx);
-                },
-                cx,
-            ))
-            .child(toggle_row(
-                "clip-option-chapters",
-                "章节与元数据",
-                options.keep_chapters,
-                |this, cx| {
-                    this.update_clip_options(|options| options.keep_chapters ^= true, cx);
-                },
-                cx,
-            ))
-            .into_any_element()
+            ));
+
+        if options.format == OutputFormat::Mkv {
+            body = body
+                .child(toggle_row(
+                    "clip-option-subtitles",
+                    "保留字幕",
+                    options.keep_subtitles,
+                    |this, cx| {
+                        this.update_clip_options(|options| options.keep_subtitles ^= true, cx);
+                    },
+                    cx,
+                ))
+                .child(toggle_row(
+                    "clip-option-chapters",
+                    "章节与元数据",
+                    options.keep_chapters,
+                    |this, cx| {
+                        this.update_clip_options(|options| options.keep_chapters ^= true, cx);
+                    },
+                    cx,
+                ));
+        } else {
+            body = body.child(note("HLS 只保留画面与音轨，字幕与章节不写入。"));
+        }
+
+        body.into_any_element()
     }
 }
 

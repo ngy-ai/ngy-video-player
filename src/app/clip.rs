@@ -108,6 +108,9 @@ impl PlayerApp {
         // 轨道编辑与元数据编辑都是模态的，叠在面板上会挡住画面与进度条。
         self.close_remux_dialog(cx);
         self.close_metadata_dialog(cx);
+        self.close_proxy_dialog(cx);
+        self.close_scope_dialog(cx);
+        self.close_multicam_dialog(cx);
         // 转换面板与裁切抢同一条右侧通道，先让位（正在跑的任务一并取消）。
         self.dismiss_convert_panel();
         self.clip_generation += 1;
@@ -308,11 +311,18 @@ impl PlayerApp {
             Ok(None) | Err(_) => return,
         };
 
+        let mut options = dialog.options.clone();
+        if options.format == clip_core::OutputFormat::Hls {
+            // HLS 的 TS 分片只装画面与音轨；界面上这两个开关会被隐藏，
+            // 这里再兜一次底，防止旧状态带进来。
+            options.keep_subtitles = false;
+            options.keep_chapters = false;
+        }
         let request = ClipRequest {
-            output: clip_core::output_path(&dialog.path),
+            output: clip_core::output_path(&dialog.path, options.format),
             input: dialog.path.clone(),
             range,
-            options: dialog.options.clone(),
+            options,
         };
         let (tx, mut rx) = futures::channel::mpsc::unbounded();
         match ClipJob::start(request, tx) {
