@@ -83,6 +83,7 @@ mod menu_bar;
 mod menus;
 mod metadata;
 mod mini;
+mod multicam;
 mod overlays;
 mod picture;
 mod playback;
@@ -90,8 +91,10 @@ mod playlist_menu;
 mod playlist_ops;
 mod playlist_sort;
 mod playlist_ui;
+mod proxy;
 mod remux;
 mod render;
+mod scope;
 mod session;
 mod settings_panel;
 mod video_area;
@@ -104,8 +107,11 @@ use self::convert::ConvertDialog;
 use self::format::*;
 use self::metadata::MetadataDialog;
 use self::mini::MiniPlayer;
+use self::multicam::MulticamDialog;
 use self::playlist_menu::PanelMenu;
+use self::proxy::ProxyDialog;
 use self::remux::RemuxDialog;
+use self::scope::ScopeDialog;
 use self::settings_panel::SettingsTab;
 use self::widgets::*;
 
@@ -267,6 +273,18 @@ pub struct PlayerApp {
     metadata: Option<MetadataDialog>,
     /// 元数据编辑任务代次，作用同 `clip_generation`。
     metadata_generation: u64,
+    /// 代理生成对话框；`None` 表示没打开。
+    proxy: Option<ProxyDialog>,
+    /// 代理任务代次，作用同 `clip_generation`。
+    proxy_generation: u64,
+    /// 亮度直方图对话框；`None` 表示没打开。
+    scope: Option<ScopeDialog>,
+    /// 直方图采样代次，作用同 `clip_generation`。
+    scope_generation: u64,
+    /// 双机位导出对话框；`None` 表示没打开。
+    multicam: Option<MulticamDialog>,
+    /// 双机位任务代次，作用同 `clip_generation`。
+    multicam_generation: u64,
     settings: Settings,
     /// 上一次真正下发给窗口系统的置顶状态。
     ///
@@ -519,6 +537,12 @@ enum BarAction {
     EditSubtitle,
     /// 编辑章节与容器元数据。
     EditMetadata,
+    /// 生成代理文件。
+    MakeProxy,
+    /// 查看当前帧的亮度直方图。
+    ShowScope,
+    /// 双机位并排导出。
+    MulticamExport,
     SetAsDefaultPlayer,
     OpenDefaultApps,
     RemoveAssociations,

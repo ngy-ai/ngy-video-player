@@ -11,10 +11,13 @@ pub mod convert;
 mod embed;
 pub mod formats;
 pub mod metadata;
+pub mod multicam;
 pub mod platform;
 pub mod player;
 pub mod playlist;
+pub mod proxy;
 pub mod remux;
+pub mod scope;
 pub mod screenshot;
 pub mod settings;
 // 字幕编码判断：轨道编辑与元数据编辑共用，不对外暴露。

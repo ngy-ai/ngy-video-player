@@ -34,6 +34,14 @@ impl PlayerApp {
                 items.push(BarItem::Entry(
                     BarEntry::new("编辑章节与元数据…", EditMetadata).enabled(self.file_editable()),
                 ));
+                items.push(BarItem::Entry(
+                    BarEntry::new("生成代理文件…", MakeProxy)
+                        .enabled(self.file_editable() && self.snapshot.has_video()),
+                ));
+                items.push(BarItem::Entry(
+                    BarEntry::new("双机位并排导出…", MulticamExport)
+                        .enabled(self.file_editable() && self.snapshot.has_video()),
+                ));
                 items.push(BarItem::Separator);
                 items.push(BarItem::Entry(BarEntry::new("退出", Quit)));
             }
@@ -115,6 +123,9 @@ impl PlayerApp {
                     BarEntry::new("截图", TakeScreenshot)
                         .hint("S")
                         .enabled(self.snapshot.has_video()),
+                ));
+                items.push(BarItem::Entry(
+                    BarEntry::new("亮度直方图…", ShowScope).enabled(self.snapshot.has_video()),
                 ));
             }
             BarMenu::Subtitle => {
@@ -288,6 +299,9 @@ impl PlayerApp {
             BarAction::EditAudio => self.open_remux_dialog(EditTarget::Audio, cx),
             BarAction::EditSubtitle => self.open_remux_dialog(EditTarget::Subtitle, cx),
             BarAction::EditMetadata => self.open_metadata_dialog(window, cx),
+            BarAction::MakeProxy => self.open_proxy_dialog(cx),
+            BarAction::ShowScope => self.open_scope_dialog(cx),
+            BarAction::MulticamExport => self.open_multicam_dialog(cx),
             BarAction::SetAsDefaultPlayer => self.set_default_player(),
             BarAction::OpenDefaultApps => self.open_default_apps(),
             BarAction::RemoveAssociations => self.remove_associations(window, cx),

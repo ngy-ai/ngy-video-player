@@ -127,6 +127,9 @@ impl PlayerApp {
         // 模态对话框叠在一起会互相挡住，也会抢同一份按键。
         self.close_clip_dialog(cx);
         self.close_metadata_dialog(cx);
+        self.close_proxy_dialog(cx);
+        self.close_scope_dialog(cx);
+        self.close_multicam_dialog(cx);
         self.remux_generation += 1;
         self.remux = Some(RemuxDialog::new(
             self.remux_generation,

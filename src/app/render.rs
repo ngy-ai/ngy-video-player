@@ -8,6 +8,9 @@ impl Render for PlayerApp {
         self.drop_retired_previews(window);
         self.sync_clip_source(cx);
         self.sync_metadata_source(cx);
+        self.sync_proxy_source(cx);
+        self.sync_scope_source(cx);
+        self.sync_multicam_source(cx);
         self.poll_clip_preview(cx);
         self.poll_ab_loop(cx);
         self.update_render_target(window);
@@ -120,6 +123,9 @@ impl Render for PlayerApp {
                     || this.on_clip_key(event, cx)
                     || this.on_remux_key(event, cx)
                     || this.on_metadata_key(event, cx)
+                    || this.on_proxy_key(event, cx)
+                    || this.on_scope_key(event, cx)
+                    || this.on_multicam_key(event, cx)
                     || this.on_convert_key(event, cx)
                 {
                     cx.stop_propagation();
@@ -258,6 +264,9 @@ impl Render for PlayerApp {
             .children(self.render_settings(window, cx))
             .children(self.render_remux_dialog(cx))
             .children(self.render_metadata_dialog(cx))
+            .children(self.render_proxy_dialog(cx))
+            .children(self.render_scope_dialog(cx))
+            .children(self.render_multicam_dialog(cx))
             .children(self.render_file_info(cx))
             // 重命名是模态的，压在所有东西上面。
             .children(self.render_tab_rename(cx))
