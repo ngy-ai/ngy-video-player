@@ -11,23 +11,72 @@ impl PlayerApp {
         if let Some(first) = paths.first() {
             self.remember_dir(first);
         }
-        // 只有「单独打开一个文件」才把同目录的其它集一起排队。打开的是文件夹
-        // 时不能这么干：那个文件夹里可能就一个文件，替换成父目录会完全跑题。
-        let single_file = paths.len() == 1 && !paths[0].is_dir();
+        // 文件夹和文件走两条路：文件夹开成自己的一页列表，文件才并进默认页。
+        // 拖入、菜单、命令行都从这里过，落点保持一致。
+        let mut files = Vec::new();
+        for path in paths {
+            if path.is_dir() {
+                self.open_folder(path, cx);
+            } else {
+                files.push(path);
+            }
+        }
+        if !files.is_empty() {
+            self.open_files(files, cx);
+        }
+    }
+
+    /// 「打开文件夹」：新开一页播放列表，页名取文件夹名，装进整棵树并播放第一项。
+    ///
+    /// 和「添加文件夹」（[`Self::add_paths`]）分工明确：这里是「换一批来看」，
+    /// 那边才是往当前这一页里补。同名页已经开着就切过去重装，连点两次不该
+    /// 多出两页一模一样的页签。
+    pub(in crate::app) fn open_folder(&mut self, folder: PathBuf, cx: &mut Context<Self>) {
+        let entries = playlist::collect_tree(&folder);
+        let focus = entries
+            .iter()
+            .find(|item| !item.is_dir())
+            .map(|item| item.path().to_path_buf());
+        let Some(focus) = focus else {
+            // 空文件夹不占页签：一页什么都放不了，用户还得自己关掉。
+            self.flash("这个文件夹里没有可播放的文件");
+            cx.notify();
+            return;
+        };
+        let name = folder
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| folder.to_string_lossy().into_owned());
+        // 页名两头不留空白：`find_tab` 按名字复用，带空格的话每次打开都会新开一页。
+        let name = name.trim().to_string();
+        let tab = match self.playlists.find_tab(&name) {
+            Some(tab) => tab,
+            None => {
+                let name = self.playlists.unique_name(&name);
+                self.playlists.add(name)
+            }
+        };
+        self.playlists.set_active(tab);
+        self.playlist_mut().replace_entries(entries, Some(&focus));
+        self.selection.clear();
+        self.selection_anchor = None;
+        // 打开就放：这一页的第一个可播项直接装进引擎。
+        if let Some(index) = self.playlist().index() {
+            self.play_index(index);
+        }
+        self.poke();
+        cx.notify();
+    }
+
+    /// 打开一批文件 / m3u：并进默认页并播放焦点项。
+    fn open_files(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        // 只有「单独打开一个文件」才把同目录的其它集一起排队。
+        let single_file = paths.len() == 1;
         let mut entries: Vec<playlist::Item> = Vec::new();
         let mut focus: Option<PathBuf> = None;
 
         for path in paths {
-            if path.is_dir() {
-                // 文件夹连同子文件夹一起收进来，列表里留下能折叠的树。
-                let mut tree = playlist::collect_tree(&path);
-                focus = focus.or_else(|| {
-                    tree.iter()
-                        .find(|item| !item.is_dir())
-                        .map(|item| item.path().to_path_buf())
-                });
-                entries.append(&mut tree);
-            } else if formats::is_playlist(&path) {
+            if formats::is_playlist(&path) {
                 let mut items: Vec<playlist::Item> = playlist::parse_playlist(&path)
                     .into_iter()
                     .map(playlist::Item::file)
@@ -68,16 +117,16 @@ impl PlayerApp {
             }
         }
 
-        // 「打开」的结果一律并进默认列表，并切到那一页。页签是用户手动整理用的：
-        // 打开动作不该覆盖当前正在看的这页，也不该再自动新开一页——双击文件
-        // 启动走的也是这里，落点必须稳定。
+        // 打开文件的结果一律并进默认列表，并切到那一页。页签是用户手动整理用的：
+        // 打开文件不该覆盖当前正在看的这页，也不该再自动新开一页——双击文件
+        // 启动走的也是这里，落点必须稳定；文件夹在 `open_folder` 里另开一页。
         let tab = self.playlists.default_index();
         self.playlists.set_active(tab);
         self.playlist_mut().append_entries(entries);
         self.selection.clear();
         self.selection_anchor = None;
         let Some(path) = focus else {
-            // 只并进来一些空文件夹：列表留着，正在放的片子不动。
+            // 保底：没有可播项时列表留着，正在放的片子不动。
             self.playlists.save();
             cx.notify();
             return;

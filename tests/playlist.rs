@@ -617,6 +617,29 @@ fn 新页默认名字跳过已占用的号() {
 }
 
 #[test]
+fn 打开文件夹的页名避开重名与保留名() {
+    let mut set = PlaylistSet::default();
+    assert_eq!(set.find_tab("默认"), None, "默认页不是文件夹页，不能被复用");
+
+    let tab = set.add(set.unique_name("剧集"));
+    assert_eq!(set.tabs()[tab].name, "剧集");
+    assert_eq!(
+        set.find_tab("剧集"),
+        Some(tab),
+        "同名文件夹复用已经开着的那页"
+    );
+
+    assert_eq!(set.unique_name("剧集"), "剧集 (2)", "第二份同名文件夹让开");
+    assert_eq!(
+        set.unique_name("默认"),
+        "默认 (2)",
+        "文件夹正好叫默认时也得让开"
+    );
+    assert_eq!(set.unique_name("  "), "默认 (2)", "空名字有个能认的兜底");
+    assert_eq!(set.find_tab("不存在"), None);
+}
+
+#[test]
 fn 页签可以新建和关闭且至少留一页() {
     let mut set = PlaylistSet::default();
     set.add("第二页");

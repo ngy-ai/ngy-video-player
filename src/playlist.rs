@@ -270,7 +270,7 @@ impl Playlist {
 
     /// 把一批已经展开好的条目并进列表，返回新增的可播放文件数。
     ///
-    /// 「打开」走这条路：目录展开、m3u 解析都在调用方做完，这里只管并进去
+    /// 「打开文件」走这条路：目录展开、m3u 解析都在调用方做完，这里只管并进去
     /// 并去重（规则和 [`Playlist::append_paths`] 一致）。
     pub fn append_entries(&mut self, entries: Vec<Item>) -> usize {
         self.push_entries(entries)
@@ -476,7 +476,7 @@ impl Playlist {
 /// 默认列表的名字。
 ///
 /// 第一页永远是它：名字由程序掌管（存档里改过也不作数），也不能改名、不能删。
-/// 「打开」和双击文件启动都把内容放进这一页，用户无论怎么整理页签都有个固定落点。
+/// 「打开文件」和双击文件启动都把内容放进这一页，用户无论怎么整理页签都有个固定落点。
 pub const DEFAULT_TAB_NAME: &str = "默认";
 
 /// 面板上的一页：一个名字 + 一份列表。
@@ -499,7 +499,7 @@ impl PlaylistTab {
 /// 全部列表 + 当前显示的是哪一页。
 ///
 /// 不变量：至少有一页，且第 0 页固定是「默认」列表。它不能被删、不能被改名，
-/// 保证界面永远有个落脚点，也保证「打开」永远有地方放。
+/// 保证界面永远有个落脚点，也保证「打开文件」永远有地方放。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PlaylistSet {
@@ -628,6 +628,37 @@ impl PlaylistSet {
             self.active = index.min(self.tabs.len() - 1);
         }
         true
+    }
+
+    /// 按名字找一页（默认页除外）。
+    ///
+    /// 「打开文件夹」用文件夹名当页名，同名页已经开着就复用它，而不是再堆一页。
+    pub fn find_tab(&self, name: &str) -> Option<usize> {
+        self.tabs
+            .iter()
+            .enumerate()
+            .find(|(index, tab)| !self.is_default(*index) && tab.name == name)
+            .map(|(index, _)| index)
+    }
+
+    /// 给新页起一个没被占用的名字：`base`、`base (2)`、`base (3)`……
+    ///
+    /// 「打开文件夹」直接拿文件夹名当页名。同名文件夹不止一个、或者文件夹正好
+    /// 叫「默认」时都得让开：页签重名分不清，而「默认」是保留名。
+    pub fn unique_name(&self, base: &str) -> String {
+        let base = base.trim();
+        let base = if base.is_empty() {
+            DEFAULT_TAB_NAME
+        } else {
+            base
+        };
+        let mut name = base.to_string();
+        let mut number = 2;
+        while self.tabs.iter().any(|tab| tab.name == name) {
+            name = format!("{base} ({number})");
+            number += 1;
+        }
+        name
     }
 
     /// 没用过的名字 `列表 N`，跳过已经被占用的号。
