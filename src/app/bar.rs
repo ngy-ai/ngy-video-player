@@ -163,6 +163,25 @@ impl PlayerApp {
                 }
 
                 items.push(BarItem::Separator);
+                // 外挂字幕与片源差几秒是最常见的毛病，微调就放在字幕菜单里。
+                items.push(BarItem::Entry(BarEntry::note(
+                    if self.subtitle_delay.abs() < 0.001 {
+                        "字幕延迟 0.0s".to_string()
+                    } else {
+                        format!("字幕延迟 {:+.1}s", self.subtitle_delay)
+                    },
+                )));
+                items.push(BarItem::Entry(
+                    BarEntry::new("字幕提前 0.1 秒", SubtitleDelay(-0.1)).hint("Z"),
+                ));
+                items.push(BarItem::Entry(
+                    BarEntry::new("字幕延后 0.1 秒", SubtitleDelay(0.1)).hint("X"),
+                ));
+                items.push(BarItem::Entry(BarEntry::new(
+                    "字幕延迟归零",
+                    SubtitleDelay(0.0),
+                )));
+                items.push(BarItem::Separator);
                 items.push(BarItem::Entry(BarEntry::new(
                     "从文件加载字幕…",
                     LoadSubtitle,
@@ -301,6 +320,7 @@ impl PlayerApp {
             BarAction::MarkAbStart => self.mark_ab_start(cx),
             BarAction::MarkAbEnd => self.mark_ab_end(cx),
             BarAction::ClearAbLoop => self.clear_ab_loop(cx),
+            BarAction::SubtitleDelay(delta) => self.set_subtitle_delay(delta, cx),
             BarAction::EditAudio => self.open_remux_dialog(EditTarget::Audio, cx),
             BarAction::EditSubtitle => self.open_remux_dialog(EditTarget::Subtitle, cx),
             BarAction::EditMetadata => self.open_metadata_dialog(window, cx),

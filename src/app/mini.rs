@@ -815,6 +815,12 @@ impl Render for MiniPlayer {
             .on_action(cx.listener(|this, _: &ToggleMute, _window, cx| {
                 this.forward(cx, |app, cx| app.toggle_mute(cx));
             }))
+            .on_action(cx.listener(|this, _: &SubtitleEarlier, _window, cx| {
+                this.forward(cx, |app, cx| app.set_subtitle_delay(-0.1, cx));
+            }))
+            .on_action(cx.listener(|this, _: &SubtitleLater, _window, cx| {
+                this.forward(cx, |app, cx| app.set_subtitle_delay(0.1, cx));
+            }))
             .on_action(cx.listener(|this, _: &SeekForward, _window, cx| {
                 this.forward(cx, |app, cx| app.seek_by(SEEK_STEP, cx));
             }))

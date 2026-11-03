@@ -67,6 +67,32 @@ impl PlayerApp {
                         })),
                     ));
                 }
+                // 外挂字幕和片源差几秒是最常见的毛病，微调放在轨道列表下面。
+                // 第一行只显示当前值，不可点——它也是一条分隔线。
+                entries.push((
+                    if self.subtitle_delay.abs() < 0.001 {
+                        "字幕延迟 0.0s".to_string()
+                    } else {
+                        format!("字幕延迟 {:+.1}s", self.subtitle_delay)
+                    },
+                    false,
+                    None,
+                ));
+                entries.push((
+                    "字幕提前 0.1 秒".to_string(),
+                    false,
+                    Some(MenuAction::SubtitleDelay(-0.1)),
+                ));
+                entries.push((
+                    "字幕延后 0.1 秒".to_string(),
+                    false,
+                    Some(MenuAction::SubtitleDelay(0.1)),
+                ));
+                entries.push((
+                    "字幕延迟归零".to_string(),
+                    false,
+                    Some(MenuAction::SubtitleDelay(0.0)),
+                ));
             }
             Menu::Audio => {
                 for track in self.snapshot.track(crate::player::TrackKind::Audio) {
@@ -146,6 +172,10 @@ impl PlayerApp {
                                             // 自定义面板是倍速菜单的第二层，不关菜单只换内容。
                                             MenuAction::SpeedCustom => {
                                                 this.menu = Some(Menu::SpeedCustom);
+                                            }
+                                            // 字幕延迟要连着按几次才对得上，不关菜单。
+                                            MenuAction::SubtitleDelay(delta) => {
+                                                this.set_subtitle_delay(delta, cx);
                                             }
                                         }
                                         this.poke();

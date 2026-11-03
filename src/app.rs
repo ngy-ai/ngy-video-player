@@ -67,6 +67,8 @@ actions!(
         OpenPictureSettings,
         ExitOverlay,
         DeleteSelected,
+        SubtitleEarlier,
+        SubtitleLater,
     ]
 );
 
@@ -265,6 +267,11 @@ pub struct PlayerApp {
     convert_generation: u64,
     /// A-B 循环的标记点。
     ab_loop: AbLoop,
+    /// 字幕延迟（秒）。正数表示字幕延后出现。
+    ///
+    /// mpv 的 `sub-delay` 是逐文件的，换片会自动归零；界面这份要跟着一起清掉，
+    /// 否则菜单里显示的数字和实际效果对不上。
+    subtitle_delay: f64,
     /// 音轨 / 字幕编辑对话框；`None` 表示没打开。
     remux: Option<RemuxDialog>,
     /// 轨道编辑任务代次，作用同 `clip_generation`。
@@ -393,6 +400,11 @@ enum MenuAction {
     Speed(f64),
     /// 从预设列表进入自定义倍速面板。
     SpeedCustom,
+    /// 字幕延迟（秒）：正数延后、负数提前、0 归零。
+    ///
+    /// 不能直接塞 `Command::SetOption` 发出去：界面要记一份当前值才能显示，
+    /// 而且换片时得跟着清掉。
+    SubtitleDelay(f64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -531,6 +543,8 @@ enum BarAction {
     MarkAbStart,
     MarkAbEnd,
     ClearAbLoop,
+    /// 字幕延迟（秒）：正数延后、负数提前、0 归零。
+    SubtitleDelay(f64),
     /// 换掉 / 删掉内置音轨。
     EditAudio,
     /// 把外部字幕内嵌进容器。
@@ -625,6 +639,9 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("p", PreviousFile, None),
         KeyBinding::new("[", SpeedDown, None),
         KeyBinding::new("]", SpeedUp, None),
+        // 与 mpv 一致：Z 提前、X 延后，一次 0.1 秒。
+        KeyBinding::new("z", SubtitleEarlier, None),
+        KeyBinding::new("x", SubtitleLater, None),
         KeyBinding::new("s", TakeScreenshot, None),
         KeyBinding::new("escape", ExitOverlay, None),
         KeyBinding::new("delete", DeleteSelected, None),

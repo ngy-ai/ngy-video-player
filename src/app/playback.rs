@@ -53,6 +53,34 @@ impl PlayerApp {
         self.send(Command::SetVolume(next));
     }
 
+    /// 调字幕延迟。`delta` 秒，正数延后、负数提前、0 归零。
+    ///
+    /// 修的是外挂字幕和片源差几秒这种常见问题（片头多了广告、帧率标错）。
+    /// 值不落盘：它是这一部片子的属性，换片就该归零。
+    pub(super) fn set_subtitle_delay(&mut self, delta: f64, cx: &mut Context<Self>) {
+        let next = if delta.abs() < f64::EPSILON {
+            0.0
+        } else {
+            // 一次 0.1 秒，浮点累加会跑出 0.30000000000000004，每步取整到一位。
+            ((self.subtitle_delay + delta) * 10.0).round() / 10.0
+        }
+        .clamp(-60.0, 60.0);
+        if (next - self.subtitle_delay).abs() < 0.001 {
+            return;
+        }
+        self.subtitle_delay = next;
+        self.send(Command::SetOption {
+            name: "sub-delay".to_string(),
+            value: format!("{next:.1}"),
+        });
+        self.flash(if next.abs() < 0.001 {
+            "字幕延迟已归零".to_string()
+        } else {
+            format!("字幕延迟 {next:+.1}s")
+        });
+        cx.notify();
+    }
+
     pub(super) fn toggle_mute(&mut self, cx: &mut Context<Self>) {
         let muted = !self.snapshot.muted;
         self.snapshot.muted = muted;

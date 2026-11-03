@@ -66,6 +66,14 @@ impl Render for PlayerApp {
                 }),
             )
             .on_action(cx.listener(|this, _: &ToggleMute, _window, cx| this.toggle_mute(cx)))
+            .on_action(cx.listener(|this, _: &SubtitleEarlier, _window, cx| {
+                this.set_subtitle_delay(-0.1, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &SubtitleLater, _window, cx| {
+                    this.set_subtitle_delay(0.1, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &ToggleFullscreen, window, cx| {
                 this.toggle_fullscreen(window);
                 cx.notify();

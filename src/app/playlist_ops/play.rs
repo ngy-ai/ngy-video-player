@@ -100,6 +100,13 @@ impl PlayerApp {
         // 否则它会一直占着文件和一路解码器。
         self.clear_preview();
         self.send(Command::Load { url, start: None });
+        // 字幕延迟是逐文件选项：换片后 mpv 会把它归零，界面这一份也得跟着清，
+        // 否则菜单里显示的还是上一部片子的数字。这里再显式发一次 0，不赌默认行为。
+        self.subtitle_delay = 0.0;
+        self.send(Command::SetOption {
+            name: "sub-delay".to_string(),
+            value: "0".to_string(),
+        });
         log_info!("打开 {}", path.display());
     }
 

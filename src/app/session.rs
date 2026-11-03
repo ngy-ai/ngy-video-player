@@ -49,6 +49,7 @@ impl PlayerApp {
             convert: None,
             convert_generation: 0,
             ab_loop: AbLoop::default(),
+            subtitle_delay: 0.0,
             remux: None,
             remux_generation: 0,
             metadata: None,
