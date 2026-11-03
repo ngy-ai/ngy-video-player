@@ -7,7 +7,9 @@
 use super::*;
 use crate::remux::{
     self as remux_core, RemuxEvent, RemuxJob, RemuxMode, RemuxOutcome, RemuxRequest, TrackAction,
+    TrackTag,
 };
+use gpui_kit::component::input::{Input, InputState};
 use std::path::Path;
 
 /// 对话框当前处在哪一步。
@@ -17,6 +19,28 @@ enum RemuxState {
     Running { progress: f32 },
     Done(PathBuf),
     Failed(String),
+}
+
+/// 一条内置轨道的可编辑标签。
+///
+/// 语言框用组件库的输入框：语言代码虽然是 ASCII，但用户常常是复制粘贴进来的，
+/// 自绘输入框没有选区，改错一个字只能整行删掉重打。
+struct TrackRow {
+    /// 轨道名（标题或「语言 · 编码」），只显示。
+    label: String,
+    language: Entity<InputState>,
+    /// 打开时的语言，用来判断「改过没有」。
+    original_language: String,
+    /// 是否默认轨。同一类轨道里互斥。
+    default: bool,
+    original_default: bool,
+}
+
+impl TrackRow {
+    fn edited(&self, cx: &App) -> bool {
+        let language = TrackTag::normalized(&self.language.read(cx).value());
+        language != self.original_language || self.default != self.original_default
+    }
 }
 
 /// 轨道编辑对话框的全部状态。
@@ -32,29 +56,59 @@ pub(super) struct RemuxDialog {
     /// 原文件内置字幕轨的编码名。编辑音轨时也要带上：字幕按原样保留，
     /// 但保留成什么编码得由它的原编码决定。
     subtitle_codecs: Vec<String>,
+    /// 当前这一路每条内置轨道的语言与默认标记，顺序与输出一致。
+    rows: Vec<TrackRow>,
     action: TrackAction,
     state: RemuxState,
     job: Option<Arc<RemuxJob>>,
 }
 
 impl RemuxDialog {
-    fn new(generation: u64, target: EditTarget, path: PathBuf, snapshot: &Snapshot) -> Self {
+    fn new(
+        generation: u64,
+        target: EditTarget,
+        path: PathBuf,
+        snapshot: &Snapshot,
+        window: &mut Window,
+        cx: &mut Context<PlayerApp>,
+    ) -> Self {
         // 外挂字幕不算「内置」：它们不在容器里，ffmpeg 根本看不到，写进摘要只会误导。
         let kind = match target {
             EditTarget::Audio => TrackKind::Audio,
             EditTarget::Subtitle => TrackKind::Subtitle,
         };
-        let builtin = snapshot
+        let tracks: Vec<_> = snapshot
             .track(kind)
             .into_iter()
             .filter(|track| !track.external)
-            .map(|track| track.display_name())
             .collect();
+        let builtin = tracks
+            .iter()
+            .map(|track| track.display_name())
+            .collect::<Vec<_>>();
         let subtitle_codecs = snapshot
             .track(TrackKind::Subtitle)
             .into_iter()
             .filter(|track| !track.external)
             .map(|track| track.codec.clone())
+            .collect();
+        let rows = tracks
+            .iter()
+            .map(|track| {
+                let language = TrackTag::normalized(&track.lang);
+                let language_input = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .default_value(language.clone())
+                        .placeholder("chi")
+                });
+                TrackRow {
+                    label: track.display_name(),
+                    language: language_input,
+                    original_language: language,
+                    default: track.default,
+                    original_default: track.default,
+                }
+            })
             .collect();
 
         Self {
@@ -64,6 +118,7 @@ impl RemuxDialog {
             duration: snapshot.duration,
             builtin,
             subtitle_codecs,
+            rows,
             action: TrackAction::Keep,
             state: RemuxState::Editing,
             job: None,
@@ -74,9 +129,36 @@ impl RemuxDialog {
         matches!(self.state, RemuxState::Editing | RemuxState::Failed(_))
     }
 
-    /// 保持原样时「开始」没有意义：这不是「复制一份文件」的入口。
-    fn changed(&self) -> bool {
-        !self.action.is_keep()
+    /// 保持原样、标签也没改时「开始」没有意义：这不是「复制一份文件」的入口。
+    fn changed(&self, cx: &App) -> bool {
+        if !self.action.is_keep() {
+            return true;
+        }
+        self.rows.iter().any(|row| row.edited(cx))
+    }
+
+    /// 表单里的语言与默认标记。任何一条的语言不合法都整体拒绝——
+    /// 写进容器的语言代码错了，播放器只会显示一串乱码，事后很难发现。
+    fn tags(&self, cx: &App) -> Result<Vec<TrackTag>, String> {
+        self.rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| {
+                let text = row.language.read(cx).value();
+                // 空字符串是「不写语言」，允许。
+                if !text.trim().is_empty() && !TrackTag::valid_language(&text) {
+                    return Err(format!(
+                        "第 {} 条轨道的语言代码「{}」不对：写 2–3 个字母，例如 chi、eng、jpn",
+                        index + 1,
+                        text.trim()
+                    ));
+                }
+                Ok(TrackTag {
+                    language: TrackTag::normalized(&text),
+                    default: row.default,
+                })
+            })
+            .collect()
     }
 
     /// 交给 ffmpeg 的两路处置：只有当前这一路可能被改，另一路永远原样保留。
@@ -112,7 +194,12 @@ fn hint(target: EditTarget) -> &'static str {
 
 impl PlayerApp {
     /// 打开对话框。没有正在播放的文件、或者时长还没读出来时，只给一条提示。
-    pub(super) fn open_remux_dialog(&mut self, target: EditTarget, cx: &mut Context<Self>) {
+    pub(super) fn open_remux_dialog(
+        &mut self,
+        target: EditTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(path) = self.snapshot.path.clone() else {
             self.flash("没有正在播放的文件");
             cx.notify();
@@ -136,6 +223,8 @@ impl PlayerApp {
             target,
             path,
             &self.snapshot,
+            window,
+            cx,
         ));
         self.menu = None;
         self.menu_bar = None;
@@ -231,21 +320,51 @@ impl PlayerApp {
         let Some(dialog) = self.remux.as_mut() else {
             return;
         };
-        if !dialog.editing() || !dialog.changed() {
+        if !dialog.editing() || !dialog.changed(cx) {
             return;
         }
+        let tags = match dialog.tags(cx) {
+            Ok(tags) => tags,
+            Err(message) => {
+                dialog.state = RemuxState::Failed(message);
+                cx.notify();
+                return;
+            }
+        };
+        // 只提交正在编辑的那一路：另一路的语言原样不动，交给 `-map_metadata` 带过去。
+        let (audio_tags, subtitle_tags) = match dialog.target {
+            EditTarget::Audio => (tags, Vec::new()),
+            EditTarget::Subtitle => (Vec::new(), tags),
+        };
 
         let (audio, subtitle) = dialog.actions();
         let request = RemuxRequest {
             mode: RemuxMode::Edit,
             output: remux_core::output_path(&dialog.path, RemuxMode::Edit),
             input: dialog.path.clone(),
+            audio_tags,
+            subtitle_tags,
             audio,
             subtitle,
             duration: dialog.duration,
             subtitle_codecs: dialog.subtitle_codecs.clone(),
         };
         self.launch_remux(request, cx);
+    }
+
+    /// 把某条轨道设成默认轨（同一类里互斥），再点一次取消。
+    fn toggle_remux_default(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(dialog) = self.remux.as_mut() else {
+            return;
+        };
+        if !dialog.editing() || index >= dialog.rows.len() {
+            return;
+        }
+        let turn_on = !dialog.rows[index].default;
+        for (position, row) in dialog.rows.iter_mut().enumerate() {
+            row.default = turn_on && position == index;
+        }
+        cx.notify();
     }
 
     /// 只导出音轨：不碰画面，第一路音频原样复制。没有内置音轨时按钮是禁用的，
@@ -265,6 +384,8 @@ impl PlayerApp {
             mode: RemuxMode::ExtractAudio,
             output: remux_core::output_path(&dialog.path, RemuxMode::ExtractAudio),
             input: dialog.path.clone(),
+            audio_tags: Vec::new(),
+            subtitle_tags: Vec::new(),
             audio: TrackAction::Keep,
             subtitle: TrackAction::Remove,
             duration: dialog.duration,
@@ -423,7 +544,7 @@ impl PlayerApp {
                     .child(primary_button(
                         "remux-start",
                         "开始编辑",
-                        dialog.changed(),
+                        dialog.changed(cx),
                         cx.listener(|this, _: &ClickEvent, _window, cx| {
                             this.start_remux(cx);
                         }),
@@ -512,6 +633,11 @@ impl PlayerApp {
             )
             // 「只导出音轨」是另一件事：不编辑轨道，而是把第一路音频原样复制成 mka。
             // 摆在同一个对话框里，是因为用户想的都是「这条音轨要怎么办」。
+            // 语言与默认轨只在「保留原轨」时可改：换上新轨之后输出里只剩一条，
+            // 语言已经由 `-metadata:s:a:0` 那一路负责。
+            .when(dialog.action.is_keep() && !dialog.rows.is_empty(), |this| {
+                this.child(render_track_tags(dialog, cx))
+            })
             .when(dialog.target == EditTarget::Audio, |this| {
                 this.child(
                     div()
@@ -638,4 +764,95 @@ impl PlayerApp {
             )
             .into_any_element()
     }
+}
+
+/// 逐条轨道的语言与默认标记。
+///
+/// 排在「保留 / 替换 / 删除」之后：只有决定保留时这一块才出现，
+/// 顺序上也正好是「先决定要哪条，再决定它叫什么」。
+fn render_track_tags(dialog: &RemuxDialog, cx: &mut Context<PlayerApp>) -> AnyElement {
+    let mut list = div()
+        .id("remux-track-tags")
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .max_h(px(200.0))
+        .overflow_y_scroll();
+
+    for (index, row) in dialog.rows.iter().enumerate() {
+        let default = row.default;
+        list = list.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .text_size(px(11.0))
+                        .text_color(text_muted())
+                        .child(ui::ellipsis(row.label.clone())),
+                )
+                .child(
+                    div().w(px(76.0)).flex_none().child(
+                        Input::new(&row.language)
+                            .id(SharedString::from(format!("remux-lang-{index}")))
+                            .w_full(),
+                    ),
+                )
+                .child(
+                    div()
+                        .id(SharedString::from(format!("remux-default-{index}")))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .h(px(24.0))
+                        .px(px(8.0))
+                        .rounded(px(6.0))
+                        .text_size(px(11.0))
+                        .cursor(CursorStyle::PointingHand)
+                        .when(default, |this| {
+                            this.bg(ui::accent()).text_color(gpui_kit::rgb(0x111114))
+                        })
+                        .when(!default, |this| {
+                            this.bg(ui::surface_hover())
+                                .text_color(text_muted())
+                                .hover(|style| style.bg(ui::surface_active()).text_color(text()))
+                        })
+                        .child("默认")
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                            cx.stop_propagation();
+                            this.toggle_remux_default(index, cx);
+                        })),
+                ),
+        );
+    }
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(11.0))
+                        .text_color(text_muted())
+                        .child("语言代码 / 默认轨"),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.0))
+                        .text_color(text_faint())
+                        .child("ISO 639，如 chi、eng"),
+                ),
+        )
+        .child(list)
+        .into_any_element()
 }

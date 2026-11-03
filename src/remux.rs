@@ -74,12 +74,41 @@ impl TrackAction {
     }
 }
 
+/// 一条内置轨道的语言与默认标记。
+///
+/// 只在「保留原轨」时有意义：换上的新轨只有一个，直接写 `:0` 就够了。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TrackTag {
+    /// ISO 639 语言代码（`chi`、`eng`…）。空字符串表示不写，沿用源里的值。
+    pub language: String,
+    /// 输出里把它标成默认轨。同一类轨道里应当只有一条。
+    pub default: bool,
+}
+
+impl TrackTag {
+    /// 语言代码收成小写并去掉空白：mkv 里存的就是 `chi` 这种写法。
+    pub fn normalized(language: &str) -> String {
+        language.trim().to_ascii_lowercase()
+    }
+
+    /// 2–3 个字母的代码才认。`chinese` 这种全称 ffmpeg 会原样写进容器，
+    /// 播放器却按代码解释，结果就是「语言显示不出来」。
+    pub fn valid_language(language: &str) -> bool {
+        let language = Self::normalized(language);
+        (2..=3).contains(&language.len()) && language.chars().all(|ch| ch.is_ascii_alphabetic())
+    }
+}
+
 /// 一次轨道编辑请求。
 #[derive(Clone, Debug)]
 pub struct RemuxRequest {
     pub mode: RemuxMode,
     pub input: PathBuf,
     pub output: PathBuf,
+    /// 保留下来的每条音轨的语言与默认标记，按输出顺序排。空表示什么都不改。
+    pub audio_tags: Vec<TrackTag>,
+    /// 保留下来的每条字幕轨的语言与默认标记。
+    pub subtitle_tags: Vec<TrackTag>,
     /// 音轨：保留 / 换成这个文件 / 删掉。
     pub audio: TrackAction,
     /// 字幕轨：保留 / 换成这个文件 / 删掉。
@@ -389,12 +418,51 @@ fn build_command(executable: &Path, request: &RemuxRequest) -> Command {
         }
     }
 
+    // 语言与默认轨：只对「保留原轨」生效，替换后的输出里只剩一条，改它没有意义。
+    apply_tags(
+        &mut command,
+        "a",
+        &request.audio_tags,
+        request.audio.is_keep(),
+    );
+    apply_tags(
+        &mut command,
+        "s",
+        &request.subtitle_tags,
+        request.subtitle.is_keep(),
+    );
+
     command
         .arg(&request.output)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     command
+}
+
+/// 逐轨写语言与默认标记。
+///
+/// 一旦标记了某条默认轨，其余轨道必须显式清掉 default：容器里允许同时存在多条
+/// 「默认」，播放器按存储顺序挑，用户设的那条未必生效。没标任何默认轨时干脆不碰
+/// 处置标记，原文件的默认轨设置原样保留。
+fn apply_tags(command: &mut Command, specifier: &str, tags: &[TrackTag], kept: bool) {
+    if !kept {
+        return;
+    }
+    let any_default = tags.iter().any(|tag| tag.default);
+    for (index, tag) in tags.iter().enumerate() {
+        let language = TrackTag::normalized(&tag.language);
+        if !language.is_empty() {
+            command
+                .arg(format!("-metadata:s:{specifier}:{index}"))
+                .arg(format!("language={language}"));
+        }
+        if any_default {
+            command
+                .arg(format!("-disposition:{specifier}:{index}"))
+                .arg(if tag.default { "default" } else { "0" });
+        }
+    }
 }
 
 /// 新轨道的标题：文件名去掉扩展名，空名字就不要标题。
@@ -413,6 +481,8 @@ mod tests {
             mode: RemuxMode::Edit,
             input: PathBuf::from("movie.mkv"),
             output: PathBuf::from("movie - 编辑.mkv"),
+            audio_tags: Vec::new(),
+            subtitle_tags: Vec::new(),
             audio,
             subtitle,
             duration: 600.0,
@@ -425,6 +495,8 @@ mod tests {
             mode: RemuxMode::ExtractAudio,
             input: PathBuf::from("movie.mkv"),
             output: PathBuf::from("movie - 音轨.mka"),
+            audio_tags: Vec::new(),
+            subtitle_tags: Vec::new(),
             audio: TrackAction::Keep,
             subtitle: TrackAction::Remove,
             duration: 600.0,
@@ -544,6 +616,64 @@ mod tests {
         assert!(!has(&args, &["-map", "0:s?"]), "字幕不跟着导出");
         assert!(has(&args, &["-map_chapters", "-1"]), "音轨文件不挂章节");
         assert!(args.iter().any(|arg| arg.ends_with(" - 音轨.mka")));
+    }
+
+    #[test]
+    fn 保留轨道时逐条写语言与默认标记() {
+        let mut request = request(TrackAction::Keep, TrackAction::Keep);
+        request.audio_tags = vec![
+            TrackTag {
+                language: " Chi ".into(),
+                default: false,
+            },
+            TrackTag {
+                language: "eng".into(),
+                default: true,
+            },
+        ];
+        let args = args(&request);
+        assert!(has(&args, &["-metadata:s:a:0", "language=chi"]));
+        assert!(has(&args, &["-metadata:s:a:1", "language=eng"]));
+        // 标了默认轨之后，其余轨道要显式清掉 default。
+        assert!(has(&args, &["-disposition:a:0", "0"]));
+        assert!(has(&args, &["-disposition:a:1", "default"]));
+    }
+
+    #[test]
+    fn 没有默认轨时不碰处置标记() {
+        let mut request = request(TrackAction::Keep, TrackAction::Keep);
+        request.audio_tags = vec![TrackTag {
+            language: "jpn".into(),
+            default: false,
+        }];
+        let args = args(&request);
+        assert!(has(&args, &["-metadata:s:a:0", "language=jpn"]));
+        assert!(!args.iter().any(|arg| arg.starts_with("-disposition:")));
+    }
+
+    #[test]
+    fn 替换轨道后不再写保留轨的标签() {
+        let mut request = request(
+            TrackAction::Replace(PathBuf::from("music.flac")),
+            TrackAction::Keep,
+        );
+        request.audio_tags = vec![TrackTag {
+            language: "eng".into(),
+            default: true,
+        }];
+        let args = args(&request);
+        // 替换那一路会写标题，但不能写出语言与默认标记。
+        assert!(!has(&args, &["-metadata:s:a:0", "language=eng"]));
+        assert!(!args.iter().any(|arg| arg.starts_with("-disposition:a:")));
+    }
+
+    #[test]
+    fn 语言代码只认两三个字母() {
+        assert!(TrackTag::valid_language("chi"));
+        assert!(TrackTag::valid_language(" zh "));
+        assert!(!TrackTag::valid_language("chinese"));
+        assert!(!TrackTag::valid_language("1"));
+        assert!(!TrackTag::valid_language(""));
     }
 
     #[test]

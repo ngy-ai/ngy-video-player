@@ -5,7 +5,7 @@
 
 use futures::StreamExt as _;
 use ngy_video_player::remux::{
-    RemuxEvent, RemuxJob, RemuxMode, RemuxOutcome, RemuxRequest, TrackAction,
+    RemuxEvent, RemuxJob, RemuxMode, RemuxOutcome, RemuxRequest, TrackAction, TrackTag,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -49,6 +49,8 @@ fn 换音轨删音轨与内嵌字幕() {
         output: dir.join("both.mkv"),
         audio: TrackAction::Replace(music),
         subtitle: TrackAction::Replace(subtitle.clone()),
+        audio_tags: Vec::new(),
+        subtitle_tags: Vec::new(),
         duration: 4.0,
         subtitle_codecs: Vec::new(),
     });
@@ -64,6 +66,8 @@ fn 换音轨删音轨与内嵌字幕() {
         output: dir.join("muted.mkv"),
         audio: TrackAction::Remove,
         subtitle: TrackAction::Keep,
+        audio_tags: Vec::new(),
+        subtitle_tags: Vec::new(),
         duration: 4.0,
         subtitle_codecs: Vec::new(),
     });
@@ -78,12 +82,45 @@ fn 换音轨删音轨与内嵌字幕() {
         output: dir.join("subbed.mkv"),
         audio: TrackAction::Keep,
         subtitle: TrackAction::Replace(subtitle),
+        audio_tags: Vec::new(),
+        subtitle_tags: Vec::new(),
         duration: 4.0,
         subtitle_codecs: Vec::new(),
     });
     let streams = describe(&ffmpeg, &subtitled);
     assert_eq!(count(&streams, "Audio:"), 1, "{streams}");
     assert_eq!(count(&streams, "Subtitle:"), 1, "{streams}");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+#[ignore = "需要本机安装 ffmpeg"]
+fn 改写语言标签与默认轨() {
+    let ffmpeg = ngy_video_player::platform::ffmpeg::executable().expect("本机没有 ffmpeg");
+    let dir = std::env::temp_dir().join(format!("ngy-remux-tags-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let input = dir.join("in.mp4");
+    generate(&ffmpeg, &input);
+    let tagged = run(&RemuxRequest {
+        mode: RemuxMode::Edit,
+        input,
+        output: dir.join("tagged.mkv"),
+        audio_tags: vec![TrackTag {
+            language: "jpn".into(),
+            default: true,
+        }],
+        subtitle_tags: Vec::new(),
+        audio: TrackAction::Keep,
+        subtitle: TrackAction::Keep,
+        duration: 4.0,
+        subtitle_codecs: Vec::new(),
+    });
+
+    let streams = describe(&ffmpeg, &tagged);
+    assert!(streams.contains("jpn"), "语言没写进去：{streams}");
+    assert!(streams.contains("(default)"), "默认轨没标上：{streams}");
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
