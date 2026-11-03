@@ -17,6 +17,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+mod cutout;
 mod encoder;
 mod export;
 mod keyframe;
@@ -199,13 +200,22 @@ pub fn range_from_inputs(
 /// 不覆盖已有文件：裁切是个耗时操作，一次手滑把同名文件盖掉就找不回来了。
 /// HLS 只检查播放列表，同名分片交给 ffmpeg 覆盖——它们属于这一个播放列表。
 pub fn output_path(input: &Path, format: OutputFormat) -> PathBuf {
+    numbered_output(input, format, "片段")
+}
+
+/// 「删除中间段」的落点：后缀换成「删除片段」，免得和普通裁切混在一起。
+pub fn cut_out_output_path(input: &Path) -> PathBuf {
+    numbered_output(input, OutputFormat::Mkv, "删除片段")
+}
+
+fn numbered_output(input: &Path, format: OutputFormat, suffix: &str) -> PathBuf {
     let dir = input.parent().unwrap_or_else(|| Path::new("."));
     let stem = input
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
         .filter(|stem| !stem.is_empty())
         .unwrap_or_else(|| "片段".to_string());
-    let base = format!("{stem} - 片段");
+    let base = format!("{stem} - {suffix}");
     let extension = format.extension();
 
     let mut candidate = dir.join(format!("{base}.{extension}"));
@@ -245,6 +255,13 @@ pub struct ClipRequest {
     /// 两遍响度的第一遍结果。界面不填，任务在启动时测出来写进去；
     /// `None` 表示走单遍 loudnorm。
     pub loudness: Option<Loudness>,
+    /// 「删除中间段」：把 `range` 去掉，保留前后两段拼成一个文件。
+    ///
+    /// 这条路一定重编码：第二段从区间末尾起头，流复制找不到可用的关键帧，
+    /// 拼出来的接缝会花屏。所以调用方传进来的 `mode` 会被忽略。
+    pub remove_middle: bool,
+    /// 源文件总时长。只有「删除中间段」需要——后半段要一直留到片尾。
+    pub duration: f64,
 }
 
 /// 后台任务回报给界面的事件。
@@ -347,11 +364,23 @@ pub struct ClipJob {
 
 impl ClipJob {
     /// 启动后台裁切。命令拼装或进程启动失败会立即返回错误，界面不必等事件。
-    pub fn start(request: ClipRequest, tx: UnboundedSender<ClipEvent>) -> Result<Self> {
+    pub fn start(mut request: ClipRequest, tx: UnboundedSender<ClipEvent>) -> Result<Self> {
         let executable = crate::platform::ffmpeg::executable()?;
         // 编码器在任务线程里探测：`ffmpeg -encoders` 要起一个进程，不该卡界面。
         let encoder = encoder::pick(request.options.codec, request.options.encoder_mode)
             .map_err(anyhow::Error::msg)?;
+        // 「删除中间段」走另一条路：先分别编码前后两段，再拼起来。它不看流复制
+        // 的关键帧对齐（区间是「要删掉的部分」，对齐会改变用户选的切点）。
+        if request.remove_middle {
+            request.options.mode = ExportMode::Exact;
+            // 两遍响度在这里不划算：每段都要单独量一遍，收益抵不上时间。
+            request.loudness = None;
+            let burn = match &request.burn {
+                Some(subtitle) => Some(extract_subtitle(&executable, &request.input, subtitle)?),
+                None => None,
+            };
+            return cutout::start(&executable, request, encoder, burn, tx);
+        }
         // 流复制只能在关键帧上起步，探测放在拼命令之前。
         let (mut request, aligned) = align_to_keyframe(&executable, request);
         // 两遍响度：先空跑一遍量出整段的响度。测量失败就退回单遍——多花的时间
@@ -546,6 +575,17 @@ fn extract_subtitle(executable: &Path, input: &Path, subtitle: &BurnSubtitle) ->
 
 /// 从 `-progress pipe:1` 的输出里读进度。
 fn read_progress(stdout: impl Read, total: f64, tx: &UnboundedSender<ClipEvent>) {
+    read_progress_mapped(stdout, total, |fraction| fraction, tx)
+}
+
+/// 读进度并换算成整单的比例。多段拼接时每段只占一截，`map` 负责把它挪到
+/// 对应的位置上。
+fn read_progress_mapped(
+    stdout: impl Read,
+    total: f64,
+    map: impl Fn(f32) -> f32,
+    tx: &UnboundedSender<ClipEvent>,
+) {
     let total_us = total * 1_000_000.0;
     if total_us <= 0.0 {
         return;
@@ -558,7 +598,7 @@ fn read_progress(stdout: impl Read, total: f64, tx: &UnboundedSender<ClipEvent>)
             continue;
         };
         let progress = (micros / total_us).clamp(0.0, 1.0) as f32;
-        let _ = tx.unbounded_send(ClipEvent::Progress(progress));
+        let _ = tx.unbounded_send(ClipEvent::Progress(map(progress)));
     }
 }
 

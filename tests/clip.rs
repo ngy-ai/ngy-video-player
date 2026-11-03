@@ -141,6 +141,8 @@ fn 烧录内置字幕() {
             name: "SRT".to_string(),
         }),
         loudness: None,
+        remove_middle: false,
+        duration: 4.0,
     };
     let (outcome, _progress) = run(request);
 
@@ -164,6 +166,61 @@ fn 烧录内置字幕() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// 用 ffmpeg 探测文件时长（秒）。
+fn probe_seconds(ffmpeg: &Path, path: &Path) -> f64 {
+    let output = Command::new(ffmpeg)
+        .args(["-hide_banner", "-i"])
+        .arg(path)
+        .output()
+        .expect("探测输出文件失败");
+    let text = String::from_utf8_lossy(&output.stderr).into_owned();
+    let start = text.find("Duration: ").expect("没有时长信息") + "Duration: ".len();
+    // 形如 `00:00:03.05`，固定 11 个字符。
+    let stamp = &text[start..start + 11];
+    let parts: Vec<f64> = stamp
+        .split(':')
+        .filter_map(|part| part.parse().ok())
+        .collect();
+    assert_eq!(parts.len(), 3, "解析时长失败：{stamp}");
+    parts[0] * 3600.0 + parts[1] * 60.0 + parts[2]
+}
+
+#[test]
+#[ignore = "需要本机安装 ffmpeg"]
+fn 删除中间段之后首尾接上() {
+    let ffmpeg = ngy_video_player::platform::ffmpeg::executable().expect("本机没有 ffmpeg");
+    let dir = std::env::temp_dir().join(format!("ngy-clip-cutout-e2e-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = sample(&ffmpeg, &dir);
+
+    let output = dir.join("cut.mkv");
+    let request = ClipRequest {
+        input,
+        output: output.clone(),
+        range: ClipRange {
+            start: 1.0,
+            end: 2.0,
+        },
+        options: ExportOptions::default(),
+        burn: None,
+        loudness: None,
+        remove_middle: true,
+        duration: 4.0,
+    };
+    let (outcome, _progress) = run(request);
+
+    match outcome {
+        ClipOutcome::Finished(path) => assert_eq!(path, output),
+        other => panic!("删除中间段失败: {other:?}"),
+    }
+    assert_output(&output);
+    // 4 秒去掉 1 秒，剩下约 3 秒。
+    let seconds = probe_seconds(&ffmpeg, &output);
+    assert!((2.5..3.5).contains(&seconds), "剩余时长不对：{seconds}");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 #[ignore = "需要本机安装 ffmpeg"]
 fn 裁切一段真实视频() {
@@ -183,6 +240,8 @@ fn 裁切一段真实视频() {
         options: ExportOptions::default(),
         burn: None,
         loudness: None,
+        remove_middle: false,
+        duration: 4.0,
     };
     let (outcome, progress) = run(request);
 
@@ -231,6 +290,8 @@ fn 滤镜与响度处理能被_ffmpeg_接受() {
         },
         burn: None,
         loudness: None,
+        remove_middle: false,
+        duration: 4.0,
     };
     let (outcome, _progress) = run(request);
 
@@ -265,6 +326,8 @@ fn 导出_hls_切片() {
         },
         burn: None,
         loudness: None,
+        remove_middle: false,
+        duration: 4.0,
     };
     let (outcome, _progress) = run(request);
 
@@ -305,6 +368,8 @@ fn 无损流复制一段真实视频() {
         },
         burn: None,
         loudness: None,
+        remove_middle: false,
+        duration: 4.0,
     };
     let (outcome, _progress) = run(request);
 

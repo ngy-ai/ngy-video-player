@@ -13,6 +13,8 @@ fn request(options: ExportOptions) -> ClipRequest {
         options,
         burn: None,
         loudness: None,
+        remove_middle: false,
+        duration: 600.0,
     }
 }
 

@@ -53,6 +53,8 @@ pub(super) struct ClipDialog {
     subtitle: Option<clip_core::BurnSubtitle>,
     /// 是否把那条字幕烧进画面。
     burn_subtitle: bool,
+    /// 「删除中间段」：把选中的区间抠掉，保留前后两段拼成一个文件。
+    remove_middle: bool,
     /// 正在预览片段时的终点与开始时刻（秒）。
     ///
     /// 记下开始时刻是为了躲开 seek 的延迟：刚跳到起点时位置事件可能还是旧的
@@ -82,6 +84,7 @@ impl ClipDialog {
             // 有字幕不代表用户想烧：默认仍然只是复制软字幕，多一条无意的硬字幕
             // 是不可逆的。
             burn_subtitle: false,
+            remove_middle: false,
             preview: None,
         }
     }
@@ -357,14 +360,22 @@ impl PlayerApp {
         } else {
             None
         };
+        // 删除中间段时区间是「要扔掉的部分」，产物永远是一个 mkv。
+        let output = if dialog.remove_middle {
+            clip_core::cut_out_output_path(&dialog.path)
+        } else {
+            clip_core::output_path(&dialog.path, options.format)
+        };
         let request = ClipRequest {
-            output: clip_core::output_path(&dialog.path, options.format),
+            output,
             input: dialog.path.clone(),
             range,
             options,
             burn,
             // 两遍响度的第一遍由任务自己跑，界面只表达「要不要两遍」。
             loudness: None,
+            remove_middle: dialog.remove_middle,
+            duration: dialog.duration,
         };
         let (tx, mut rx) = futures::channel::mpsc::unbounded();
         match ClipJob::start(request, tx) {
@@ -461,6 +472,18 @@ impl PlayerApp {
     pub(super) fn toggle_clip_burn(&mut self, cx: &mut Context<Self>) {
         if let Some(dialog) = self.clip.as_mut() {
             dialog.burn_subtitle ^= true;
+            cx.notify();
+        }
+    }
+
+    /// 切换「删除中间段」。打开时顺手把剪切方式切回精确重编码：流复制接不上。
+    pub(super) fn toggle_clip_remove_middle(&mut self, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.clip.as_mut() {
+            dialog.remove_middle ^= true;
+            if dialog.remove_middle {
+                dialog.options.mode = clip_core::ExportMode::Exact;
+                dialog.options.format = clip_core::OutputFormat::Mkv;
+            }
             cx.notify();
         }
     }

@@ -248,7 +248,9 @@ impl PlayerApp {
                 ))
                 .child(primary_button(
                     "clip-start",
-                    if dialog.options.format == clip_core::OutputFormat::Hls {
+                    if dialog.remove_middle {
+                        "删除中间段"
+                    } else if dialog.options.format == clip_core::OutputFormat::Hls {
                         "开始导出 HLS"
                     } else if dialog.options.format == clip_core::OutputFormat::Gif {
                         "导出 GIF"
@@ -278,7 +280,9 @@ impl PlayerApp {
                 .text_size(px(10.0))
                 .text_color(text_faint())
                 .whitespace_normal()
-                .child(if dialog.options.format == clip_core::OutputFormat::Hls {
+                .child(if dialog.remove_middle {
+                    "把选中的区间抠掉后重新编码拼接；中途要占一份片长的临时空间。"
+                } else if dialog.options.format == clip_core::OutputFormat::Hls {
                     "输出 m3u8 与同名 .ts 分片；只保留画面与音轨，字幕与章节不写入。"
                 } else if dialog.options.format == clip_core::OutputFormat::Gif {
                     "导出 12fps、480 宽的循环动图；没有声音。片段越长，文件越大。"

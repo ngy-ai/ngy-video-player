@@ -41,8 +41,26 @@ impl PlayerApp {
         // GIF 只能重编码，导出方式没有可选性；露出来只会让人以为能无损导出。
         let gif = options.format == OutputFormat::Gif;
 
-        let mut body = div().flex().flex_col().gap(px(8.0));
-        if !gif {
+        // 「删除中间段」和「取一段」是互斥的两件事：前者留下首尾、扔掉区间，
+        // 后者只留区间。放在最上面，因为它改变的是区间的含义。
+        let cut_out = dialog.remove_middle;
+
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .child(toggle_row(
+                "clip-option-remove-middle",
+                "删除这段（保留前后）",
+                cut_out,
+                |this, cx| this.toggle_clip_remove_middle(cx),
+                cx,
+            ))
+            .child(note(
+                "把选中的区间抠掉，首尾两段拼成一个新文件；必须重编码，产物固定为 mkv",
+            ));
+
+        if !gif && !cut_out {
             body = body
                 .child(section_title("导出方式"))
                 .child(
@@ -64,25 +82,24 @@ impl PlayerApp {
                 .child(note(options.mode.hint()));
         }
 
-        body = body
-            .child(section_title("输出"))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .children(OutputFormat::ALL.map(|format| {
-                        option_chip(
-                            static_id("clip-format", format.label()),
-                            format.label(),
-                            options.format == format,
-                            cx.listener(move |this, _: &ClickEvent, _window, cx| {
-                                this.update_clip_options(|options| options.format = format, cx);
-                            }),
-                        )
-                    })),
-            )
-            .child(note(options.format.hint()));
+        // 删除中间段只能是 mkv：拼接要复制流，HLS 分片与 GIF 都装不下两段拼起来的流。
+        if !cut_out {
+            body =
+                body.child(section_title("输出"))
+                    .child(div().flex().items_center().gap(px(6.0)).children(
+                        OutputFormat::ALL.map(|format| {
+                            option_chip(
+                                static_id("clip-format", format.label()),
+                                format.label(),
+                                options.format == format,
+                                cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                                    this.update_clip_options(|options| options.format = format, cx);
+                                }),
+                            )
+                        }),
+                    ))
+                    .child(note(options.format.hint()));
+        }
 
         // 流复制只能在关键帧上起步，用户给的秒数几乎总落在两个关键帧之间，
         // 于是必然要选一边吃亏。其余模式是帧精确的，不需要这个选择。
