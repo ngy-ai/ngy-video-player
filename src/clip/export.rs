@@ -17,7 +17,8 @@ use super::loudness::Loudness;
 pub use crate::encoder::EncoderMode;
 pub use transform::{Crop, Edge, Pad, Rotate, Scale, VideoTransform};
 pub use types::{
-    ExportMode, KeyframeAlign, OutputFormat, PixelFormat, Quality, RateControl, VideoCodec,
+    ColorMatrix, ColorRange, ExportMode, KeyframeAlign, OutputFormat, PixelFormat, Quality,
+    RateControl, VideoCodec,
 };
 
 use std::path::{Path, PathBuf};
@@ -44,6 +45,15 @@ pub struct ExportOptions {
     pub pixel_format: PixelFormat,
     /// HDR（PQ/HLG）转 SDR：把高光压进 BT.709，否则导出的画面会发灰。
     pub tonemap_hdr: bool,
+    /// 输出色彩空间。见 [`ColorMatrix`]。
+    pub color_matrix: ColorMatrix,
+    /// 输出色彩范围。见 [`ColorRange`]。
+    pub color_range: ColorRange,
+    /// 按 BT.709 重写输出文件的色彩标签。
+    ///
+    /// 只改标签不改像素，专门对付「标签写错导致偏色」的源；和上面两项的
+    /// 「真转换」是两件事，可以一起用。
+    pub tag_rec709: bool,
     /// 去隔行。老电视录制、DVD 转录常见。
     pub deinterlace: bool,
     /// 轻量降噪，代价是细节变软。
@@ -104,6 +114,9 @@ impl Default for ExportOptions {
             bitrate_kbps: DEFAULT_BITRATE_KBPS,
             pixel_format: PixelFormat::Source,
             tonemap_hdr: false,
+            color_matrix: ColorMatrix::Source,
+            color_range: ColorRange::Source,
+            tag_rec709: false,
             deinterlace: false,
             denoise: false,
             sharpen: false,
@@ -174,6 +187,11 @@ impl ExportOptions {
                 .map(String::from),
             );
         }
+        // 色彩转换排在几何变换之前：先统一到目标色彩空间，缩放与裁切才不会在
+        // 半转换的像素上做插值。
+        if let Some(color) = self.color_filters() {
+            filters.push(color);
+        }
         filters.extend(self.transform.filters());
         if self.denoise {
             filters.push("hqdn3d=4:3:6:4.5".to_string());
@@ -182,6 +200,18 @@ impl ExportOptions {
             filters.push("unsharp=5:5:0.8:3:3:0.4".to_string());
         }
         (!filters.is_empty()).then(|| filters.join(","))
+    }
+
+    /// 色彩空间与范围的转换。两项合成一条 zscale：分开写会让 ffmpeg 多解一遍。
+    fn color_filters(&self) -> Option<String> {
+        let mut args: Vec<&str> = Vec::new();
+        if let Some(matrix) = self.color_matrix.zscale() {
+            args.push(matrix);
+        }
+        if let Some(range) = self.color_range.zscale() {
+            args.push(range);
+        }
+        (!args.is_empty()).then(|| format!("zscale={}", args.join(":")))
     }
 
     /// 两遍响度能不能用：得真的重编码音频，并且开着标准化。
@@ -365,6 +395,16 @@ pub(super) fn build_command(
             command
                 .arg("-force_key_frames")
                 .arg("expr:gte(t,n_forced*6)");
+        }
+        if options.tag_rec709 && !gif {
+            // 只改写容器标签、不动像素：专门修「标签写错导致播放器偏色」的源。
+            command
+                .arg("-color_primaries")
+                .arg("bt709")
+                .arg("-color_trc")
+                .arg("bt709")
+                .arg("-colorspace")
+                .arg("bt709");
         }
         if options.keep_audio && !gif {
             if options.copies_audio() {

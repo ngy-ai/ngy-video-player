@@ -10,8 +10,9 @@ use super::widgets::{
 };
 use super::*;
 use crate::clip::{
-    Crop, DEFAULT_BITRATE_KBPS, Edge, EncoderMode, ExportMode, ExportOptions, KeyframeAlign,
-    OutputFormat, Pad, PixelFormat, Quality, RateControl, Rotate, Scale, VideoCodec,
+    ColorMatrix, ColorRange, Crop, DEFAULT_BITRATE_KBPS, Edge, EncoderMode, ExportMode,
+    ExportOptions, KeyframeAlign, OutputFormat, Pad, PixelFormat, Quality, RateControl, Rotate,
+    Scale, VideoCodec,
 };
 
 impl PlayerApp {
@@ -312,6 +313,39 @@ impl PlayerApp {
                         this.update_clip_options(|options| options.force_cfr ^= true, cx);
                     },
                     cx,
+                ))
+                // 色彩放在画面处理之后：色调映射、范围与矩阵都属于「最后一步定调」，
+                // 排在一起用户才看得出它们是同一类操作。
+                .child(section_title("色彩"))
+                .child(chip_row(
+                    "clip-color-matrix",
+                    &ColorMatrix::ALL,
+                    options.color_matrix,
+                    ColorMatrix::label,
+                    |options, matrix| options.color_matrix = matrix,
+                    cx,
+                ))
+                .child(note(options.color_matrix.hint()))
+                .child(chip_row(
+                    "clip-color-range",
+                    &ColorRange::ALL,
+                    options.color_range,
+                    ColorRange::label,
+                    |options, range| options.color_range = range,
+                    cx,
+                ))
+                .child(note(options.color_range.hint()))
+                .child(toggle_row(
+                    "clip-option-tag-color",
+                    "按 BT.709 重写色彩标签",
+                    options.tag_rec709,
+                    |this, cx| {
+                        this.update_clip_options(|options| options.tag_rec709 ^= true, cx);
+                    },
+                    cx,
+                ))
+                .child(note(
+                    "只改标签不动像素，用来修标签写错的源；可以和上面的转换同时用",
                 ))
                 .child(self.render_clip_audio_options(options, cx));
         }

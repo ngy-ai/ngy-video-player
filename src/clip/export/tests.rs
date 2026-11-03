@@ -466,6 +466,42 @@ fn 烧录字幕排在画面处理之后_gif_调色板之前() {
 }
 
 #[test]
+fn 色彩转换合成一条_zscale_并排在几何变换之前() {
+    let options = ExportOptions {
+        color_matrix: ColorMatrix::Bt709,
+        color_range: ColorRange::Tv,
+        transform: VideoTransform {
+            scale: Scale::P720,
+            ..VideoTransform::default()
+        },
+        ..ExportOptions::default()
+    };
+    let filters = options.video_filters().unwrap();
+    assert!(
+        filters.contains("zscale=m=bt709:p=bt709:t=bt709:range=limited"),
+        "{filters}"
+    );
+    let zscale = filters.find("zscale").unwrap();
+    let scale = filters.find("scale=").unwrap();
+    assert!(zscale < scale, "先统一色彩再缩放：{filters}");
+
+    // 跟随源时不该多出任何色彩滤镜。
+    let plain = ExportOptions::default().video_filters();
+    assert!(plain.is_none_or(|filters| !filters.contains("zscale")));
+}
+
+#[test]
+fn 重写色彩标签写进输出参数() {
+    let args = args(ExportOptions {
+        tag_rec709: true,
+        ..ExportOptions::default()
+    });
+    assert!(has(&args, &["-color_primaries", "bt709"]));
+    assert!(has(&args, &["-color_trc", "bt709"]));
+    assert!(has(&args, &["-colorspace", "bt709"]));
+}
+
+#[test]
 fn 自定义_crf_替换画质档() {
     let options = ExportOptions {
         quality: Quality::High,

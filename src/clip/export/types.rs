@@ -81,6 +81,87 @@ impl OutputFormat {
     }
 }
 
+/// 输出色彩空间。
+///
+/// 「跟随源」不动；显式指定时用 zscale 做真正的矩阵/原色/传递函数转换，
+/// 而不是只改标签——只改标签会让播放器按错的色彩解释画面，偏色更严重。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ColorMatrix {
+    #[default]
+    Source,
+    Bt709,
+    Bt2020,
+}
+
+impl ColorMatrix {
+    pub const ALL: [ColorMatrix; 3] =
+        [ColorMatrix::Source, ColorMatrix::Bt709, ColorMatrix::Bt2020];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ColorMatrix::Source => "跟随源",
+            ColorMatrix::Bt709 => "BT.709",
+            ColorMatrix::Bt2020 => "BT.2020",
+        }
+    }
+
+    pub fn hint(self) -> &'static str {
+        match self {
+            ColorMatrix::Source => "不改色彩，最省事也最安全",
+            ColorMatrix::Bt709 => "SDR 与网页/手机的通行标准；把 2020 素材转回来才不偏色",
+            ColorMatrix::Bt2020 => "广色域；目标设备不支持时会显得灰淡",
+        }
+    }
+
+    /// zscale 的参数片段。
+    pub(super) fn zscale(self) -> Option<&'static str> {
+        match self {
+            ColorMatrix::Source => None,
+            ColorMatrix::Bt709 => Some("m=bt709:p=bt709:t=bt709"),
+            ColorMatrix::Bt2020 => Some("m=bt2020:p=bt2020:t=bt2020"),
+        }
+    }
+}
+
+/// 输出色彩范围。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ColorRange {
+    #[default]
+    Source,
+    /// 电视范围 16–235：广播与大多数视频文件的标准。
+    Tv,
+    /// 全范围 0–255：部分录屏、手机与游戏素材。
+    Full,
+}
+
+impl ColorRange {
+    pub const ALL: [ColorRange; 3] = [ColorRange::Source, ColorRange::Tv, ColorRange::Full];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ColorRange::Source => "跟随源",
+            ColorRange::Tv => "电视 16–235",
+            ColorRange::Full => "全范围 0–255",
+        }
+    }
+
+    pub fn hint(self) -> &'static str {
+        match self {
+            ColorRange::Source => "不动范围",
+            ColorRange::Tv => "黑场发灰/高光死白时换一档试试，多半是源被标错了",
+            ColorRange::Full => "录屏与游戏素材多用这个范围",
+        }
+    }
+
+    pub(super) fn zscale(self) -> Option<&'static str> {
+        match self {
+            ColorRange::Source => None,
+            ColorRange::Tv => Some("range=limited"),
+            ColorRange::Full => Some("range=full"),
+        }
+    }
+}
+
 /// 码率控制方式。
 ///
 /// 「质量档」是默认：软件编码走 CRF，硬件编码按档位给目标码率，体积与画质都随
