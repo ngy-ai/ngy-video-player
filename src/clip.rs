@@ -22,8 +22,8 @@ mod export;
 mod keyframe;
 
 pub use export::{
-    EncoderMode, ExportMode, ExportOptions, KeyframeAlign, OutputFormat, PixelFormat, Quality,
-    VideoCodec,
+    Crop, Edge, EncoderMode, ExportMode, ExportOptions, KeyframeAlign, OutputFormat, Pad,
+    PixelFormat, Quality, Rotate, Scale, VideoCodec, VideoTransform,
 };
 
 /// 两端时间输入框允许的最短区间。低于这个值的请求基本是误操作，也让进度条失去意义。

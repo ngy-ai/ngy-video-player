@@ -7,12 +7,14 @@
 //!
 //! 滤镜与响度处理只在重编码时可用：流复制根本没有解码后的样本可以加工。
 
+mod transform;
 mod types;
 
 use super::ClipRequest;
 // 编码器偏好是裁切与格式转换共用的，定义在 `crate::encoder`，这里只重新导出，
 // 保持 `clip::EncoderMode` 这个既有入口不变。
 pub use crate::encoder::EncoderMode;
+pub use transform::{Crop, Edge, Pad, Rotate, Scale, VideoTransform};
 pub use types::{ExportMode, KeyframeAlign, OutputFormat, PixelFormat, Quality, VideoCodec};
 
 use std::path::{Path, PathBuf};
@@ -39,6 +41,8 @@ pub struct ExportOptions {
     pub denoise: bool,
     /// 锐化。适合重编码后偏软的片源。
     pub sharpen: bool,
+    /// 画面变换：裁切、缩放、补边、旋转、翻转。只在重编码时生效。
+    pub transform: VideoTransform,
     /// 音频不重编码，直接搬原码流。
     ///
     /// 用于保住 DTS-HD / TrueHD 这类高码率音轨：转成 AAC 192k 是听得出的降级。
@@ -46,6 +50,15 @@ pub struct ExportOptions {
     pub audio_copy: bool,
     /// EBU R128 响度标准化，导出后音量与常见平台一致。
     pub normalize_audio: bool,
+    /// 音量增益（dB）。用来把整体抬高/压低几 dB，和响度标准化是两件事：
+    /// 前者不改变动态，后者会把响度拉到目标值，两个都开时增益作用在标准化之后。
+    pub volume_db: f32,
+    /// 输出采样率（Hz）。`None` 跟随源；挂了滤镜时 ffmpeg 默认会给 48kHz，
+    /// 这里允许显式指定，老播放器（16kHz 语音、车载）才吃得下。
+    pub sample_rate: Option<u32>,
+    /// 输出声道数。`None` 跟随源，1 单声道，2 立体声。
+    /// 单声道能把对白类内容的体积压掉近一半，也不影响收听。
+    pub channels: Option<u8>,
     /// 音频偏移（秒）。正数表示声音延后、负数表示提前，用来修音画不同步。
     pub audio_offset: f64,
     /// 按音频时间戳重新采样，修长时间录制积累的漂移（音画越播越不齐）。
@@ -77,8 +90,12 @@ impl Default for ExportOptions {
             deinterlace: false,
             denoise: false,
             sharpen: false,
+            transform: VideoTransform::default(),
             audio_copy: false,
             normalize_audio: false,
+            volume_db: 0.0,
+            sample_rate: None,
+            channels: None,
             audio_offset: 0.0,
             sync_audio: false,
             force_cfr: false,
@@ -92,8 +109,10 @@ impl Default for ExportOptions {
 
 impl ExportOptions {
     /// 流复制时滤镜与响度没有意义，界面据此把那些开关置灰。
+    ///
+    /// GIF 是例外：它只能重编码，用户选了什么方式都得按重编码走。
     pub fn filters_available(&self) -> bool {
-        self.mode == ExportMode::Exact
+        self.mode == ExportMode::Exact || self.format.forces_reencode()
     }
 
     /// 这次导出是否真的把音频原样搬过去。
@@ -110,32 +129,48 @@ impl ExportOptions {
         self.filters_available() && !self.copies_audio()
     }
 
-    /// 视频滤镜链。顺序按「先修时间/色彩、再修噪点、最后锐化」排。
+    /// 视频滤镜链。顺序按「先修时间/色彩、再动画面几何、再修噪点、最后锐化」排。
+    ///
+    /// 几何变换放在去噪之前：先裁掉黑边，降噪就不用在内含黑边的整帧上白跑一遍，
+    /// 缩到小尺寸后再降噪也快得多。
     pub fn video_filters(&self) -> Option<String> {
         if !self.filters_available() {
             return None;
         }
-        let mut filters: Vec<&str> = Vec::new();
+        let mut filters: Vec<String> = Vec::new();
         if self.deinterlace {
-            filters.push("yadif=mode=send_frame:parity=auto:deint=all");
+            filters.push("yadif=mode=send_frame:parity=auto:deint=all".to_string());
         }
         if self.tonemap_hdr {
             // zscale 在线性光下做色调映射，最后回到 BT.709 的 limited range。
             // npl=100 是常见 SDR 参考白；hable 曲线在保留高光细节上比 clip 稳。
-            filters.extend([
-                "zscale=t=linear:npl=100",
-                "format=gbrpf32le",
-                "zscale=p=bt709",
-                "tonemap=tonemap=hable:desat=0",
-                "zscale=t=bt709:m=bt709:r=tv",
-                "format=yuv420p",
-            ]);
+            filters.extend(
+                [
+                    "zscale=t=linear:npl=100",
+                    "format=gbrpf32le",
+                    "zscale=p=bt709",
+                    "tonemap=tonemap=hable:desat=0",
+                    "zscale=t=bt709:m=bt709:r=tv",
+                    "format=yuv420p",
+                ]
+                .map(String::from),
+            );
         }
+        filters.extend(self.transform.filters());
         if self.denoise {
-            filters.push("hqdn3d=4:3:6:4.5");
+            filters.push("hqdn3d=4:3:6:4.5".to_string());
         }
         if self.sharpen {
-            filters.push("unsharp=5:5:0.8:3:3:0.4");
+            filters.push("unsharp=5:5:0.8:3:3:0.4".to_string());
+        }
+        if self.format == OutputFormat::Gif {
+            // GIF 只有 256 色：先限帧率、缩到 480 宽，再用两遍法生成调色板。
+            // `split` 把同一帧同时喂给「统计调色板」与「套用调色板」两条链，
+            // 这样出来的颜色比默认的固定调色板干净得多，代价是多解一遍。
+            filters.push("fps=12".to_string());
+            // 只缩不放：小尺寸素材再放大只会把文件撑大，还更糊。
+            filters.push("scale=min(480\\,iw):-2:flags=lanczos".to_string());
+            filters.push("split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse".to_string());
         }
         (!filters.is_empty()).then(|| filters.join(","))
     }
@@ -165,6 +200,11 @@ impl ExportOptions {
         }
         if self.normalize_audio {
             filters.push("loudnorm=I=-16:TP=-1.5:LRA=11".to_string());
+        }
+        // 增益排在 loudnorm 后面：反过来的话标准化会把刚加上去的几 dB 又拉回目标值，
+        // 用户看到的是「调了没反应」。
+        if self.volume_db.abs() > 0.05 {
+            filters.push(format!("volume={:.1}dB", self.volume_db));
         }
         (!filters.is_empty()).then(|| filters.join(","))
     }
@@ -202,46 +242,53 @@ pub(super) fn build_command(executable: &Path, request: &ClipRequest, encoder: &
         // 大写 V 排除封面图（attached_pic），否则第一路「视频」可能是一张 jpeg。
         .arg("-map")
         .arg("0:V:0?");
-    if options.keep_audio {
+    // HLS 的 TS 分片装不下字幕；GIF 干脆没有音轨与字幕，就算调用方没清掉开关，
+    // 这里也不再映射。
+    let hls = options.format == OutputFormat::Hls;
+    let gif = options.format == OutputFormat::Gif;
+    if options.keep_audio && !gif {
         command.arg("-map").arg("0:a?");
     }
-    // HLS 的 TS 分片装不下字幕；就算调用方没清掉开关，这里也不再映射。
-    let hls = options.format == OutputFormat::Hls;
-    if options.keep_subtitles && !hls {
+    if options.keep_subtitles && !hls && !gif {
         command.arg("-map").arg("0:s?");
     }
     command
         .arg("-map_metadata")
-        .arg(if hls { "-1" } else { "0" })
+        .arg(if hls || gif { "-1" } else { "0" })
         .arg("-map_chapters")
-        .arg(if !hls && options.keep_chapters {
+        .arg(if !hls && !gif && options.keep_chapters {
             "0"
         } else {
             "-1"
         });
 
-    if options.mode == ExportMode::Copy {
+    if options.mode == ExportMode::Copy && !gif {
         // 画、音、字幕一起复制：这时候任何 `-c:v` 之类都会把「无损」两个字作废。
         command.arg("-c").arg("copy");
     } else {
-        command.arg("-c:v").arg(encoder);
-        for arg in super::encoder::video_args(encoder, options.quality) {
-            command.arg(arg);
-        }
-        // 默认不写 `-pix_fmt`：省略它，ffmpeg 会在「源格式 ∩ 编码器支持列表」里
-        // 挑最接近的一个，10bit 源因此能保住 10bit。三种情况必须写死 yuv420p：
-        // 用户主动要求兼容性、硬件编码器（多数型号只吃 8bit 4:2:0，不指定会初始化
-        // 失败）、HLS（TS 分片里的 10bit H.264 在老设备和浏览器上支持面太窄）。
-        let force_8bit = options.pixel_format == PixelFormat::Yuv420p
-            || hls
-            || crate::encoder::is_hardware(encoder);
-        if force_8bit {
-            command.arg("-pix_fmt").arg("yuv420p");
+        if gif {
+            // GIF 有自己的编码器，没有 CRF / 预设可调；调色板与帧率都在 `-vf` 里。
+            command.arg("-c:v").arg("gif");
+        } else {
+            command.arg("-c:v").arg(encoder);
+            for arg in super::encoder::video_args(encoder, options.quality) {
+                command.arg(arg);
+            }
+            // 默认不写 `-pix_fmt`：省略它，ffmpeg 会在「源格式 ∩ 编码器支持列表」里
+            // 挑最接近的一个，10bit 源因此能保住 10bit。三种情况必须写死 yuv420p：
+            // 用户主动要求兼容性、硬件编码器（多数型号只吃 8bit 4:2:0，不指定会初始化
+            // 失败）、HLS（TS 分片里的 10bit H.264 在老设备和浏览器上支持面太窄）。
+            let force_8bit = options.pixel_format == PixelFormat::Yuv420p
+                || hls
+                || crate::encoder::is_hardware(encoder);
+            if force_8bit {
+                command.arg("-pix_fmt").arg("yuv420p");
+            }
         }
         if let Some(filters) = options.video_filters() {
             command.arg("-vf").arg(filters);
         }
-        if options.force_cfr {
+        if options.force_cfr && !gif {
             // `-fps_mode` 是 ffmpeg 5.1+ 的写法，`-vsync cfr` 在新版本会告警。
             // 不指定目标帧率时按源的名义帧率补齐/丢帧，足以治好手机 VFR 的抖动。
             command.arg("-fps_mode").arg("cfr");
@@ -253,23 +300,41 @@ pub(super) fn build_command(executable: &Path, request: &ClipRequest, encoder: &
                 .arg("-force_key_frames")
                 .arg("expr:gte(t,n_forced*6)");
         }
-        if options.keep_audio {
+        if options.keep_audio && !gif {
             if options.copies_audio() {
                 command.arg("-c:a").arg("copy");
             } else {
                 command.arg("-c:a").arg("aac").arg("-b:a").arg("192k");
-                if let Some(filters) = options.audio_filters() {
-                    // loudnorm 内部工作在 192kHz，不指定采样率时输出会被它顶上去。
-                    command.arg("-af").arg(filters).arg("-ar").arg("48000");
+                let filters = options.audio_filters();
+                if let Some(filters) = &filters {
+                    command.arg("-af").arg(filters);
+                }
+                // loudnorm 内部工作在 192kHz，挂了滤镜却不指定采样率时输出会被它
+                // 顶上去；用户显式选的采样率优先。
+                match (options.sample_rate, filters.is_some()) {
+                    (Some(rate), _) => {
+                        command.arg("-ar").arg(rate.to_string());
+                    }
+                    (None, true) => {
+                        command.arg("-ar").arg("48000");
+                    }
+                    (None, false) => {}
+                }
+                if let Some(channels) = options.channels {
+                    command.arg("-ac").arg(channels.to_string());
                 }
             }
         }
-        if options.keep_subtitles {
+        if options.keep_subtitles && !hls && !gif {
             command.arg("-c:s").arg("copy");
         }
     }
 
     command.arg("-avoid_negative_ts").arg("make_zero");
+    if gif {
+        // 无限循环。不写这一句，多数播放器只放一遍就停。
+        command.arg("-loop").arg("0");
+    }
     if hls {
         command
             .arg("-f")

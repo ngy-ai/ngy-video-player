@@ -318,11 +318,20 @@ impl PlayerApp {
         };
 
         let mut options = dialog.options.clone();
-        if options.format == clip_core::OutputFormat::Hls {
-            // HLS 的 TS 分片只装画面与音轨；界面上这两个开关会被隐藏，
-            // 这里再兜一次底，防止旧状态带进来。
-            options.keep_subtitles = false;
-            options.keep_chapters = false;
+        match options.format {
+            clip_core::OutputFormat::Hls => {
+                // HLS 的 TS 分片只装画面与音轨；界面上这两个开关会被隐藏，
+                // 这里再兜一次底，防止旧状态带进来。
+                options.keep_subtitles = false;
+                options.keep_chapters = false;
+            }
+            clip_core::OutputFormat::Gif => {
+                // GIF 没有音轨，也没有章节可挂；界面上这些开关同样被隐藏。
+                options.keep_audio = false;
+                options.keep_subtitles = false;
+                options.keep_chapters = false;
+            }
+            clip_core::OutputFormat::Mkv => {}
         }
         let request = ClipRequest {
             output: clip_core::output_path(&dialog.path, options.format),
@@ -422,5 +431,7 @@ impl PlayerApp {
     }
 }
 
+mod audio_options;
 mod options;
 mod panel;
+mod widgets;

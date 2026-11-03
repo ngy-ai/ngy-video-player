@@ -33,7 +33,7 @@ impl ExportMode {
     }
 }
 
-/// 导出成单文件还是 HLS 切片。
+/// 导出成单文件、HLS 切片还是 GIF 动图。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OutputFormat {
     /// 一个 mkv 装下全部轨道。
@@ -41,15 +41,18 @@ pub enum OutputFormat {
     Mkv,
     /// m3u8 + 一串 .ts 分片，供网页 / 流媒体服务器直接使用。
     Hls,
+    /// 12fps 的 GIF 动图：没有声音，颜色只有 256 色，适合做表情包与网页预览。
+    Gif,
 }
 
 impl OutputFormat {
-    pub const ALL: [OutputFormat; 2] = [OutputFormat::Mkv, OutputFormat::Hls];
+    pub const ALL: [OutputFormat; 3] = [OutputFormat::Mkv, OutputFormat::Hls, OutputFormat::Gif];
 
     pub fn label(self) -> &'static str {
         match self {
             OutputFormat::Mkv => "单文件 mkv",
             OutputFormat::Hls => "HLS 切片",
+            OutputFormat::Gif => "GIF 动图",
         }
     }
 
@@ -57,6 +60,9 @@ impl OutputFormat {
         match self {
             OutputFormat::Mkv => "一个文件装下画面、音轨、字幕与章节",
             OutputFormat::Hls => "输出 m3u8 与 .ts 分片；只保留画面与音轨，字幕/章节不写入",
+            OutputFormat::Gif => {
+                "12fps、480 宽的动图，无限循环；没有声音，颜色只有 256 色，适合短片段"
+            }
         }
     }
 
@@ -64,7 +70,14 @@ impl OutputFormat {
         match self {
             OutputFormat::Mkv => "mkv",
             OutputFormat::Hls => "m3u8",
+            OutputFormat::Gif => "gif",
         }
+    }
+
+    /// 这种格式只能重编码：GIF 没有「把原码流直接塞进去」这回事，
+    /// 所以要压过用户选的「无损流复制」。
+    pub fn forces_reencode(self) -> bool {
+        matches!(self, OutputFormat::Gif)
     }
 }
 

@@ -250,6 +250,8 @@ impl PlayerApp {
                     "clip-start",
                     if dialog.options.format == clip_core::OutputFormat::Hls {
                         "开始导出 HLS"
+                    } else if dialog.options.format == clip_core::OutputFormat::Gif {
+                        "导出 GIF"
                     } else if dialog.options.mode == clip_core::ExportMode::Copy {
                         "开始无损剪切"
                     } else {
@@ -278,6 +280,8 @@ impl PlayerApp {
                 .whitespace_normal()
                 .child(if dialog.options.format == clip_core::OutputFormat::Hls {
                     "输出 m3u8 与同名 .ts 分片；只保留画面与音轨，字幕与章节不写入。"
+                } else if dialog.options.format == clip_core::OutputFormat::Gif {
+                    "导出 12fps、480 宽的循环动图；没有声音。片段越长，文件越大。"
                 } else if dialog.options.mode == clip_core::ExportMode::Copy {
                     "流复制为 mkv：不重新编码，几秒完成；切点会吸附到关键帧上，\
                      实际起点与设定值可能差一小段，导出完成后会告诉你差多少。"

@@ -344,3 +344,96 @@ fn 剪切区间落在输入之后与输出之前() {
     assert_eq!(args[start + 1], "10.000");
     assert_eq!(args[end + 1], "15.000");
 }
+
+#[test]
+fn gif_导出忽略流复制并走调色板() {
+    let options = ExportOptions {
+        format: OutputFormat::Gif,
+        // 界面在 GIF 下不提供「导出方式」，但旧状态里可能还留着 Copy。
+        mode: ExportMode::Copy,
+        ..ExportOptions::default()
+    };
+    let args = args(options.clone());
+    assert!(has(&args, &["-c:v", "gif"]));
+    assert!(!has(&args, &["-c", "copy"]), "GIF 没有流复制这条路");
+    let filters = args
+        .iter()
+        .position(|arg| arg == "-vf")
+        .map(|index| args[index + 1].clone())
+        .expect("GIF 必须有滤镜链");
+    assert!(
+        filters.ends_with("split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse"),
+        "调色板要在最后一段：{filters}"
+    );
+    assert!(has(&args, &["-loop", "0"]), "无限循环");
+    // 动图没有音轨与字幕。
+    assert!(!has(&args, &["-map", "0:a?"]));
+    assert!(!args.iter().any(|arg| arg == "-c:a"));
+    assert!(!args.iter().any(|arg| arg == "-c:s"));
+    assert!(args.last().unwrap().ends_with(".gif"));
+    assert!(options.filters_available(), "GIF 强制重编码，滤镜要可用");
+}
+
+#[test]
+fn 画面变换排进滤镜链且在降噪之前() {
+    let options = ExportOptions {
+        denoise: true,
+        transform: VideoTransform {
+            crop: Crop {
+                left: 10.0,
+                right: 10.0,
+                ..Crop::default()
+            },
+            scale: Scale::P720,
+            rotate: Rotate::Cw90,
+            flip_h: true,
+            ..VideoTransform::default()
+        },
+        ..ExportOptions::default()
+    };
+    let filters = options.video_filters().unwrap();
+    let crop = filters.find("crop=").unwrap();
+    let scale = filters.find("scale=-2:720").unwrap();
+    let rotate = filters.find("transpose=1").unwrap();
+    let flip = filters.find("hflip").unwrap();
+    let denoise = filters.find("hqdn3d").unwrap();
+    assert!(crop < scale && scale < rotate && rotate < flip);
+    assert!(flip < denoise, "几何变换要排在降噪之前");
+}
+
+#[test]
+fn 采样率与声道只在重编码音频时写入() {
+    let options = ExportOptions {
+        sample_rate: Some(44_100),
+        channels: Some(1),
+        ..ExportOptions::default()
+    };
+    let encoded = args(options);
+    assert!(has(&encoded, &["-ar", "44100"]));
+    assert!(has(&encoded, &["-ac", "1"]));
+
+    // 复制音频时样本根本不解出来，这两个参数也就没有意义。
+    let copy = ExportOptions {
+        audio_copy: true,
+        sample_rate: Some(44_100),
+        channels: Some(1),
+        ..ExportOptions::default()
+    };
+    let copied = args(copy);
+    assert!(!copied.iter().any(|arg| arg == "-ar"));
+    assert!(!copied.iter().any(|arg| arg == "-ac"));
+}
+
+#[test]
+fn 音量增益排在响度标准化之后() {
+    let options = ExportOptions {
+        normalize_audio: true,
+        volume_db: 3.0,
+        ..ExportOptions::default()
+    };
+    let filters = options.audio_filters().unwrap();
+    assert!(
+        filters.find("loudnorm").unwrap() < filters.find("volume=3.0dB").unwrap(),
+        "增益要作用在标准化之后，否则会被拉回去：{filters}"
+    );
+}
