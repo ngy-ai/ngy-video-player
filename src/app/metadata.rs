@@ -38,6 +38,8 @@ struct ChapterRow {
 struct MetadataSource<'a> {
     path: PathBuf,
     duration: f64,
+    /// 片源帧率，用来换算 SMPTE 时间码里的帧号。0 表示还没读出来。
+    fps: f64,
     tags: &'a Tags,
     chapters: Vec<(String, f64)>,
     /// 原文件内置字幕的编码名，保存时决定字幕是复制还是转码。
@@ -49,6 +51,8 @@ pub(super) struct MetadataDialog {
     generation: u64,
     path: PathBuf,
     duration: f64,
+    /// 片源帧率，用来换算 SMPTE 时间码里的帧号。
+    fps: f64,
     title: Entity<InputState>,
     artist: Entity<InputState>,
     comment: Entity<InputState>,
@@ -107,6 +111,7 @@ impl MetadataDialog {
             generation,
             path: source.path,
             duration: source.duration,
+            fps: source.fps,
             title,
             artist,
             comment,
@@ -141,7 +146,7 @@ impl MetadataDialog {
             .enumerate()
             .map(|(index, row)| {
                 let text = row.start.read(cx).value();
-                let start = match clip_core::parse_time(&text) {
+                let start = match clip_core::parse_time_with_fps(&text, self.fps) {
                     ParsedTime::Value(start) if start < duration => start,
                     ParsedTime::Value(_) => {
                         return Err(format!(
@@ -155,7 +160,7 @@ impl MetadataDialog {
                     }
                     ParsedTime::Invalid => {
                         return Err(format!(
-                            "第 {} 条章节的时间格式不对：{}（可写 90、1:30、01:02:03.500）",
+                            "第 {} 条章节的时间格式不对：{}（可写 90、1:30、01:02:03.500、01:02:03;15）",
                             index + 1,
                             text
                         ));
@@ -221,6 +226,7 @@ impl PlayerApp {
             MetadataSource {
                 path,
                 duration: self.snapshot.duration,
+                fps: self.snapshot.fps,
                 tags: &tags,
                 chapters,
                 subtitle_codecs,
@@ -282,7 +288,7 @@ impl PlayerApp {
         }
         let duplicate = dialog.chapters.iter().any(|row| {
             matches!(
-                clip_core::parse_time(&row.start.read(cx).value()),
+                clip_core::parse_time_with_fps(&row.start.read(cx).value(), dialog.fps),
                 ParsedTime::Value(start) if (start - position).abs() < 0.1
             )
         });
@@ -308,8 +314,9 @@ impl PlayerApp {
         dialog.chapters.push(ChapterRow { start, title });
         // 按当前时间码排一下：用户可能先改过某一条的时间，再添加新的一条。
         // 解析失败的条目排到最后，保存时的校验会把它挑出来。
+        let fps = dialog.fps;
         dialog.chapters.sort_by_key(|row| {
-            match clip_core::parse_time(&row.start.read(cx).value()) {
+            match clip_core::parse_time_with_fps(&row.start.read(cx).value(), fps) {
                 ParsedTime::Value(value) => (0, (value * 1000.0).round() as i64),
                 _ => (1, 0),
             }

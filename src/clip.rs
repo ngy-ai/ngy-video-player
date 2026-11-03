@@ -46,14 +46,101 @@ pub enum ParsedTime {
 
 /// 解析 `90`、`1:30`、`01:02:03.500` 三种写法。
 ///
-/// 冒号分段只有最后一段可以带小数；前面的段必须小于 60，避免 `1:75` 这种打错的
-/// 写法被悄悄理解成 135 秒。
+/// 不知道帧率时用这个：分号写法的 SMPTE 时间码一律判为非法，而不是猜一个帧率。
 pub fn parse_time(text: &str) -> ParsedTime {
+    parse_time_with_fps(text, 0.0)
+}
+
+/// 带帧率的时间解析。
+///
+/// 帧率只影响分号写法：`01:02:03;15` 里的 15 是帧号，换算成秒要除以帧率。
+/// 分号也是 SMPTE 的「丢帧（drop-frame）」标记，29.97 / 59.94 下按丢帧规则换算，
+/// 这样从剪辑软件里抄来的时间码才对得上。
+pub fn parse_time_with_fps(text: &str, fps: f64) -> ParsedTime {
     let text = text.trim();
     if text.is_empty() {
         return ParsedTime::Empty;
     }
+    if let Some((clock, frames)) = text.split_once(';') {
+        return parse_timecode(clock.trim(), frames.trim(), fps);
+    }
+    parse_clock(text)
+}
 
+/// SMPTE 时间码：`HH:MM:SS;FF`。
+///
+/// 必须写满时分秒三段：两段的写法（`1:30;5`）分不清是「1 分 30 秒」还是
+/// 「1 小时 30 分」，与其猜，不如直接判错让用户改。
+fn parse_timecode(clock: &str, frames: &str, fps: f64) -> ParsedTime {
+    let Some((nominal, actual)) = nominal_fps(fps) else {
+        return ParsedTime::Invalid;
+    };
+    let parts: Vec<&str> = clock.split(':').collect();
+    if parts.len() != 3 {
+        return ParsedTime::Invalid;
+    }
+    if parts
+        .iter()
+        .any(|part| part.is_empty() || !part.chars().all(|ch| ch.is_ascii_digit()))
+    {
+        return ParsedTime::Invalid;
+    }
+    let numbers: Vec<u32> = parts.iter().filter_map(|part| part.parse().ok()).collect();
+    if numbers.len() != 3 {
+        return ParsedTime::Invalid;
+    }
+    let (hours, minutes, seconds) = (numbers[0], numbers[1], numbers[2]);
+    if minutes >= 60 || seconds >= 60 {
+        return ParsedTime::Invalid;
+    }
+    if frames.is_empty() || !frames.chars().all(|ch| ch.is_ascii_digit()) {
+        return ParsedTime::Invalid;
+    }
+    let Ok(frame) = frames.parse::<u32>() else {
+        return ParsedTime::Invalid;
+    };
+    // 一个整秒里最多 nominal 帧，帧号等于帧率说明这一秒根本不存在。
+    if frame >= nominal {
+        return ParsedTime::Invalid;
+    }
+
+    let clock_seconds = (hours as f64 * 3600.0) + (minutes as f64 * 60.0) + seconds as f64;
+    let total = if drop_frame(actual) {
+        // 丢帧并不是真的丢画面：每分钟少数两个帧号（整十分钟除外），
+        // 让时间码与 29.97 的实际时长对上。换算成「第几帧」再除以真实帧率。
+        let total_minutes = hours as f64 * 60.0 + minutes as f64;
+        let drop = if nominal >= 60 { 4.0 } else { 2.0 };
+        let frame_number = clock_seconds * nominal as f64 + frame as f64
+            - drop * (total_minutes - (total_minutes / 10.0).floor());
+        frame_number / actual
+    } else {
+        clock_seconds + frame as f64 / actual
+    };
+    if total.is_finite() && total >= 0.0 {
+        ParsedTime::Value(total)
+    } else {
+        ParsedTime::Invalid
+    }
+}
+
+/// 时间码用的名义帧率（29.97 → 30）与真实帧率。帧率还没读出来时返回 `None`。
+fn nominal_fps(fps: f64) -> Option<(u32, f64)> {
+    if !fps.is_finite() || !(1.0..=240.0).contains(&fps) {
+        return None;
+    }
+    Some((fps.round() as u32, fps))
+}
+
+/// 29.97 / 59.94 这两档在 SMPTE 里用丢帧时间码。
+fn drop_frame(fps: f64) -> bool {
+    (fps - 30_000.0 / 1001.0).abs() < 0.01 || (fps - 60_000.0 / 1001.0).abs() < 0.01
+}
+
+/// 不带帧号的时钟写法。
+///
+/// 冒号分段只有最后一段可以带小数；前面的段必须小于 60，避免 `1:75` 这种打错的
+/// 写法被悄悄理解成 135 秒。
+fn parse_clock(text: &str) -> ParsedTime {
     let parts: Vec<&str> = text.split(':').collect();
     if parts.len() > 3 {
         return ParsedTime::Invalid;
@@ -145,8 +232,12 @@ impl RangeError {
     pub fn message(self) -> &'static str {
         match self {
             RangeError::NothingToTrim => "开始和结束都留空，没有可裁切的区间",
-            RangeError::InvalidStart => "开始时间格式不对，可用 90、1:30、01:02:03.5",
-            RangeError::InvalidEnd => "结束时间格式不对，可用 90、1:30、01:02:03.5",
+            RangeError::InvalidStart => {
+                "开始时间格式不对，可用 90、1:30、01:02:03.5、01:02:03;15（帧号）"
+            }
+            RangeError::InvalidEnd => {
+                "结束时间格式不对，可用 90、1:30、01:02:03.5、01:02:03;15（帧号）"
+            }
             RangeError::StartNotBeforeEnd => "结束时间必须晚于开始时间",
             RangeError::OutOfRange => "时间超出视频时长",
         }
@@ -161,8 +252,20 @@ pub fn range_from_inputs(
     end_text: &str,
     duration: f64,
 ) -> Result<Option<ClipRange>, RangeError> {
-    let start = parse_time(start_text);
-    let end = parse_time(end_text);
+    range_from_inputs_with_fps(start_text, end_text, duration, 0.0)
+}
+
+/// 同上，但知道片源帧率：分号写法的 SMPTE 时间码（`01:02:03;15`）会按帧号换算。
+///
+/// `fps <= 0` 表示帧率还没读出来，此时分号写法判为非法，而不是猜一个帧率。
+pub fn range_from_inputs_with_fps(
+    start_text: &str,
+    end_text: &str,
+    duration: f64,
+    fps: f64,
+) -> Result<Option<ClipRange>, RangeError> {
+    let start = parse_time_with_fps(start_text, fps);
+    let end = parse_time_with_fps(end_text, fps);
 
     if start == ParsedTime::Empty && end == ParsedTime::Empty {
         return Ok(None);
@@ -658,6 +761,40 @@ mod tests {
         assert_eq!(parse_time("01:02:03.500"), ParsedTime::Value(3723.5));
         assert_eq!(parse_time(" 1:30 "), ParsedTime::Value(90.0));
         assert_eq!(parse_time("0.5"), ParsedTime::Value(0.5));
+    }
+
+    #[test]
+    fn smpte_时间码按帧率换算() {
+        // 25fps 的 `01:02:03;15`：第 15 帧，正好是 0.6 秒。
+        assert_eq!(
+            parse_time_with_fps("01:02:03;15", 25.0),
+            ParsedTime::Value(3723.6)
+        );
+        // 24fps 的第 12 帧是 0.5 秒。
+        assert_eq!(
+            parse_time_with_fps("00:00:01;12", 24.0),
+            ParsedTime::Value(1.5)
+        );
+        // 帧号必须小于帧率：25fps 里没有第 25 帧。
+        assert_eq!(
+            parse_time_with_fps("00:00:01;25", 25.0),
+            ParsedTime::Invalid
+        );
+        // 不知道帧率时不猜。
+        assert_eq!(parse_time("00:00:01;12"), ParsedTime::Invalid);
+        // 时分秒必须写满三段。
+        assert_eq!(parse_time_with_fps("1:02;5", 25.0), ParsedTime::Invalid);
+        // 门限值：`00:01:00;02` 在 29.97 下是第 1800 帧，正好一分钟。
+        let drop = parse_time_with_fps("00:01:00;02", 30_000.0 / 1001.0);
+        match drop {
+            ParsedTime::Value(seconds) => {
+                assert!(
+                    (seconds - 1800.0 * 1001.0 / 30_000.0).abs() < 0.001,
+                    "{seconds}"
+                );
+            }
+            other => panic!("应当解析成秒：{other:?}"),
+        }
     }
 
     #[test]

@@ -154,14 +154,14 @@ impl PlayerApp {
                     ClipField::Start,
                     "开始",
                     &dialog.start,
-                    "留空 = 从头",
+                    "留空 = 从头；也收 01:02:03;15",
                     cx,
                 ))
                 .child(self.render_clip_field(
                     ClipField::End,
                     "结束",
                     &dialog.end,
-                    "留空 = 到最后",
+                    "留空 = 到最后；也收 01:02:03;15",
                     cx,
                 )),
         );

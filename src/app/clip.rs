@@ -37,6 +37,8 @@ pub(super) struct ClipDialog {
     generation: u64,
     path: PathBuf,
     duration: f64,
+    /// 片源帧率，用来换算 SMPTE 时间码里的帧号。0 表示还没读出来。
+    fps: f64,
     start: String,
     end: String,
     /// 当前有输入焦点的字段；`None` 表示键盘归播放器。
@@ -76,6 +78,7 @@ impl ClipDialog {
         generation: u64,
         path: PathBuf,
         duration: f64,
+        fps: f64,
         subtitle: Option<clip_core::BurnSubtitle>,
         window: &mut Window,
         cx: &mut Context<PlayerApp>,
@@ -89,6 +92,7 @@ impl ClipDialog {
             generation,
             path,
             duration,
+            fps,
             start: String::new(),
             end: String::new(),
             field: None,
@@ -112,7 +116,7 @@ impl ClipDialog {
 
     /// 当前输入能构成什么区间。`Ok(None)` 表示两端都留空。
     fn range(&self) -> Result<Option<ClipRange>, RangeError> {
-        clip_core::range_from_inputs(&self.start, &self.end, self.duration)
+        clip_core::range_from_inputs_with_fps(&self.start, &self.end, self.duration, self.fps)
     }
 
     /// 有焦点的输入框；`None` 时不该有键盘输入进来。
@@ -158,6 +162,7 @@ impl PlayerApp {
             self.clip_generation,
             path,
             duration,
+            self.snapshot.fps,
             subtitle,
             window,
             cx,
@@ -238,11 +243,12 @@ impl PlayerApp {
                 true
             }
             _ => {
+                // 分号也是合法输入：SMPTE 时间码用它分隔帧号（`01:02:03;15`）。
                 let typed = event.keystroke.key_char.as_deref().filter(|text| {
                     !text.is_empty()
                         && text
                             .chars()
-                            .all(|ch| ch.is_ascii_digit() || ch == ':' || ch == '.')
+                            .all(|ch| ch.is_ascii_digit() || ch == ':' || ch == '.' || ch == ';')
                 });
                 let Some(text) = typed else {
                     // 空格、方向键之类不参与时间输入，交还给播放器。
