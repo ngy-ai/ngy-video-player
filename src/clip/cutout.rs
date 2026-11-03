@@ -6,10 +6,22 @@
 //!
 //! 这两条路一定重编码：被切出来的段大多不从关键帧起头，流复制接不上，接缝会花屏。
 
-use super::*;
+use super::export;
+use super::job::{read_progress_mapped, remove_output};
+use super::{
+    ClipEvent, ClipJob, ClipOutcome, ClipRange, ClipRequest, CutKind, MIN_DURATION,
+    split_output_paths,
+};
+use anyhow::{Context as _, Result};
+use futures::channel::mpsc::UnboundedSender;
+use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::fs;
-use std::process::ExitStatus;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// 去掉 `range` 之后还剩下的段落。区间顶到两端时只剩一段。
 pub(super) fn segments(range: ClipRange, duration: f64) -> Vec<ClipRange> {
@@ -109,11 +121,7 @@ pub(super) fn start(
         let _ = tx.unbounded_send(ClipEvent::Done(outcome));
     });
 
-    Ok(ClipJob {
-        child,
-        cancelled,
-        aligned: None,
-    })
+    Ok(ClipJob::new(child, cancelled, None))
 }
 
 /// 多段任务运行时共用的东西。凑成一个结构，免得每处都要传七八个参数。

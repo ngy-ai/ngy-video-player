@@ -5,8 +5,15 @@
 //! ffmpeg 直接拒绝。参数不一致的文件先拿「格式转换」统一一遍再来拼。
 
 use super::cutout::{drain_stderr, failure_message};
-use super::*;
+use super::job::remove_output;
+use anyhow::{Context as _, Result};
+use futures::channel::mpsc::UnboundedSender;
 use std::fmt::Write as _;
+use std::io::{BufRead, BufReader, Read};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// 一次拼接请求。
 #[derive(Clone, Debug)]
