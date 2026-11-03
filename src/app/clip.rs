@@ -626,6 +626,12 @@ fn resolve_clip_options(
         }
         options.watermark.text = text;
     }
+    // 「删除中间段 / 分割」只能写 mkv 且必须重编码：预设可能带着别的格式，
+    // 这里统一收口，免得出现「格式是 HLS、产物却叫删除片段」这种组合。
+    if dialog.kind != clip_core::CutKind::Keep {
+        options.format = clip_core::OutputFormat::Mkv;
+        options.mode = clip_core::ExportMode::Exact;
+    }
     // 切片输出（HLS 两种分片与 DASH）只装画面与音轨；界面上这几个开关会被
     // 隐藏，这里再兜一次底，防止旧状态带进来。
     if options.format.is_segmented() {
