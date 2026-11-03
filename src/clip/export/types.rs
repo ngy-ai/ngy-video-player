@@ -3,9 +3,15 @@
 //! 全是「几选一」的小类型，一律配 `ALL` + `label` + `hint` 三件套，面板照着铺
 //! 按钮就行。集中在一个文件是因为它们只被 `ExportOptions` 与界面引用，
 //! 和「怎么拼 ffmpeg 参数」没有关系。
+//!
+//! 枚举都派生 serde：导出预设（`presets.json`）按这些名字存盘，改枚举名等于改
+//! 存档格式。读不出来的预设只丢那一条，不会让整份预设作废。
+
+use serde::{Deserialize, Serialize};
 
 /// 剪切方式。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ExportMode {
     /// 逐帧重编码：切点精确到帧，兼容性最好。
     #[default]
@@ -34,7 +40,8 @@ impl ExportMode {
 }
 
 /// 导出成单文件、切片流还是 GIF 动图。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum OutputFormat {
     /// 一个 mkv 装下全部轨道。
     #[default]
@@ -134,7 +141,8 @@ impl OutputFormat {
 ///
 /// 「跟随源」不动；显式指定时用 zscale 做真正的矩阵/原色/传递函数转换，
 /// 而不是只改标签——只改标签会让播放器按错的色彩解释画面，偏色更严重。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ColorMatrix {
     #[default]
     Source,
@@ -173,7 +181,8 @@ impl ColorMatrix {
 }
 
 /// 输出色彩范围。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ColorRange {
     #[default]
     Source,
@@ -216,7 +225,8 @@ impl ColorRange {
 /// 「质量档」是默认：软件编码走 CRF，硬件编码按档位给目标码率，体积与画质都随
 /// 内容变化。需要**体积可预测**时才切到「固定码率」——比如上传平台有码率上限，
 /// 或者要往一张盘里塞满若干小时。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RateControl {
     #[default]
     Quality,
@@ -242,7 +252,8 @@ impl RateControl {
 }
 
 /// 重编码时的视频编码。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum VideoCodec {
     #[default]
     H264,
@@ -269,7 +280,8 @@ impl VideoCodec {
 }
 
 /// 画质档位。CRF 越小越清晰、文件越大。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Quality {
     High,
     #[default]
@@ -302,7 +314,8 @@ impl Quality {
 ///
 /// 流复制只能从关键帧起步，而用户输入的时间几乎总落在两个关键帧之间，
 /// 于是必然要选一边吃亏：往前多含一段，还是往后少含一段。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum KeyframeAlign {
     /// 吸附到前一个关键帧：画面比设定时间开始得早，但绝不丢用户要的内容。
     #[default]
@@ -333,7 +346,8 @@ impl KeyframeAlign {
 ///
 /// 只留电影与直播常见的几档：`minterpolate` 是整条链里最慢的一步，
 /// 60 → 120 的耗时还会再翻倍，档位越多越容易让人误选。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FrameRate {
     F24,
     F30,
@@ -373,7 +387,8 @@ impl FrameRate {
 ///
 /// 位深是重编码里唯一补不回来的损失：10bit 源写成 8bit，色阶就永久断成 256 级，
 /// 和 CRF、码率完全无关。所以默认跟随源，只留一个「强制 8bit」的退路。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PixelFormat {
     /// 跟随源：不写 `-pix_fmt`，由 ffmpeg 在「源格式 ∩ 编码器支持」里挑最接近的。
     /// 10bit 源得 10bit，8bit 源得 8bit。

@@ -465,6 +465,14 @@ pub fn playlists_path() -> Option<PathBuf> {
     config_path().map(|path| path.with_file_name("playlists.json"))
 }
 
+/// 导出预设的位置：和设置、播放列表放在同一个目录。
+///
+/// 预设是用户手攒出来的一份「配方」，和每次都变的裁切选项分开存；
+/// 单独一份文件也方便备份或搬到另一台机器上。
+pub fn presets_path() -> Option<PathBuf> {
+    config_path().map(|path| path.with_file_name("presets.json"))
+}
+
 impl Serialize for LoopMode {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(match self {

@@ -11,7 +11,10 @@ use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 
 /// 编码器偏好：有显卡就用、强制软件、或强制硬件。裁切与格式转换共用。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+///
+/// 派生 serde 是为了存进导出预设：存档里写的是 `auto` / `software` / `hardware`。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EncoderMode {
     /// 探测到硬件编码器就用，否则回退 libx264/libx265。
     #[default]

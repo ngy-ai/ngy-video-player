@@ -11,6 +11,7 @@ mod controls;
 mod encoding;
 mod kind;
 mod picture;
+mod presets;
 mod tracks;
 
 use super::*;
@@ -38,6 +39,8 @@ impl PlayerApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let blocks: Vec<AnyElement> = [
+            // 预设摆最上面：先挑一个现成的再微调，是这套面板最常见的顺序。
+            Some(self.render_clip_presets(dialog, cx)),
             self.render_clip_kind(dialog, cx),
             self.render_clip_format(dialog, cx),
             self.render_clip_encoding(dialog, cx),

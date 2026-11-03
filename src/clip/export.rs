@@ -6,6 +6,9 @@
 //! 裁切面板只负责选。
 //!
 //! 滤镜与响度处理只在重编码时可用：流复制根本没有解码后的样本可以加工。
+//!
+//! 整套参数可以存成导出预设（见 `clip::preset`），所以结构体派生 serde，
+//! 并且 `#[serde(default)]`：老版本存的预设里缺了新字段时按默认值补齐。
 
 mod effects;
 mod transform;
@@ -27,7 +30,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// 一次裁切要带上的全部导出选项。
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct ExportOptions {
     pub mode: ExportMode,
     /// 流复制时起点吸附到哪一侧的关键帧。`Exact` 模式下不生效。

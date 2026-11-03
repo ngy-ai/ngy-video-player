@@ -66,6 +66,13 @@ pub(super) struct ClipDialog {
     /// 导出参数里存的是最终字面量，输入框留在这里：水印多是中文，
     /// 自绘的数字输入框没有输入法，打不进去。
     watermark_text: Entity<InputState>,
+    /// 已保存的导出预设。面板打开时读一次：预设改动不频繁，
+    /// 每帧或每次导出都重新读文件没有意义。
+    presets: clip_core::PresetStore,
+    /// 预设名输入框。
+    ///
+    /// 名字同样是中文居多，和上面的水印输入框一样用组件库的输入框。
+    preset_name: Entity<InputState>,
     /// 正在预览片段时的终点与开始时刻（秒）。
     ///
     /// 记下开始时刻是为了躲开 seek 的延迟：刚跳到起点时位置事件可能还是旧的
@@ -88,6 +95,11 @@ impl ClipDialog {
                 .default_value(String::new())
                 .placeholder("例如：@频道名 / 会议录像")
         });
+        let preset_name = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(String::new())
+                .placeholder("给这套设置起个名字")
+        });
         Self {
             generation,
             path,
@@ -106,6 +118,8 @@ impl ClipDialog {
             burn_subtitle: false,
             kind: clip_core::CutKind::Keep,
             watermark_text,
+            presets: clip_core::PresetStore::load(),
+            preset_name,
             preview: None,
         }
     }

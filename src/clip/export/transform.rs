@@ -7,9 +7,14 @@
 //!
 //! 竖屏视频、手机拍摄的素材经常带着大段黑边或旋转标记，这一组开关就是给它们用的；
 //! 播放端的旋转/镜像（`settings::Rotation`）只是显示层，不会写进导出文件。
+//!
+//! 所有类型都派生 serde：它们随 `ExportOptions` 一起存进导出预设。
+
+use serde::{Deserialize, Serialize};
 
 /// 顺时针旋转。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Rotate {
     #[default]
     None,
@@ -32,7 +37,8 @@ impl Rotate {
 }
 
 /// 目标分辨率。按高度定，宽度跟着宽高比走，避免把 21:9 的片子拉变形。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Scale {
     #[default]
     Source,
@@ -85,7 +91,8 @@ impl Scale {
 ///
 /// 与「缩放」相反：这里不改画面内容，只在四周加边，把任意比例的片子放进统一的
 /// 画框里（投屏、混剪、上传平台时最常要 16:9）。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Pad {
     #[default]
     None,
@@ -162,7 +169,8 @@ impl Edge {
 ///
 /// 用百分比而不是像素：同一个面板要服务 480p 与 4K 两种片子，写死像素在有缩放时
 /// 反而算不准；黑边在所有分辨率下都占同样的比例。
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Crop {
     pub left: f32,
     pub top: f32,
@@ -210,7 +218,8 @@ impl Crop {
 }
 
 /// 一次导出的画面变换。
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct VideoTransform {
     pub crop: Crop,
     pub scale: Scale,

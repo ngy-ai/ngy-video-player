@@ -14,6 +14,7 @@ mod job;
 mod keyframe;
 mod loudness;
 mod naming;
+mod preset;
 mod range;
 mod types;
 
@@ -27,6 +28,7 @@ pub use export::{
 pub use job::ClipJob;
 pub use loudness::Loudness;
 pub use naming::{concat_output_path, cut_out_output_path, output_path, split_output_paths};
+pub use preset::{ExportPreset, PresetStore, normalize_name};
 pub use range::{
     ClipRange, ParsedTime, RangeError, format_time, parse_time, parse_time_with_fps,
     range_from_inputs, range_from_inputs_with_fps,

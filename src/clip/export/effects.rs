@@ -5,14 +5,18 @@
 //! 它们拼进滤镜链。
 //!
 //! 倒放会把整段解码后的帧堆在内存里，只适合短片；这一点在面板上也要说清楚。
+//!
+//! 水印随 `ExportOptions` 一起存进导出预设，所以两个类型都派生 serde。
 
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// 水印的落点。
 ///
 /// 九宫格里只留四个角加居中：面板宽度有限，再多的档位排不下，
 /// 而「压在右下角」已经是九成场景。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum WatermarkPosition {
     TopLeft,
     TopRight,
@@ -56,7 +60,8 @@ impl WatermarkPosition {
 }
 
 /// 文字水印。
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Watermark {
     /// 勾选状态。文字单独存，取消勾选再勾回来不用重打一遍。
     pub enabled: bool,
