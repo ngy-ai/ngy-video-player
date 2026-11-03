@@ -27,8 +27,8 @@ mod loudness;
 pub use concat::{ConcatEvent, ConcatJob, ConcatOutcome, ConcatRequest};
 pub use export::{
     ColorMatrix, ColorRange, Crop, DEFAULT_BITRATE_KBPS, Edge, EncoderMode, ExportMode,
-    ExportOptions, KeyframeAlign, MAX_FREEZE_SECONDS, OutputFormat, Pad, PixelFormat, Quality,
-    RateControl, Rotate, Scale, VideoCodec, VideoTransform, Watermark, WatermarkPosition,
+    ExportOptions, FrameRate, KeyframeAlign, MAX_FREEZE_SECONDS, OutputFormat, Pad, PixelFormat,
+    Quality, RateControl, Rotate, Scale, VideoCodec, VideoTransform, Watermark, WatermarkPosition,
 };
 pub use loudness::Loudness;
 

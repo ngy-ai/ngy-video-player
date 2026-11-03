@@ -11,8 +11,8 @@ use super::widgets::{
 use super::*;
 use crate::clip::{
     ColorMatrix, ColorRange, Crop, CutKind, DEFAULT_BITRATE_KBPS, Edge, EncoderMode, ExportMode,
-    ExportOptions, KeyframeAlign, MAX_FREEZE_SECONDS, OutputFormat, Pad, PixelFormat, Quality,
-    RateControl, Rotate, Scale, VideoCodec, Watermark, WatermarkPosition,
+    ExportOptions, FrameRate, KeyframeAlign, MAX_FREEZE_SECONDS, OutputFormat, Pad, PixelFormat,
+    Quality, RateControl, Rotate, Scale, VideoCodec, Watermark, WatermarkPosition,
 };
 use gpui_kit::component::input::Input;
 
@@ -318,6 +318,18 @@ impl PlayerApp {
                     cx,
                 ))
                 .child(toggle_row(
+                    "clip-option-stabilize",
+                    "防抖（手持素材）",
+                    options.stabilize,
+                    |this, cx| {
+                        this.update_clip_options(|options| options.stabilize ^= true, cx);
+                    },
+                    cx,
+                ))
+                .child(note(
+                    "单遍版本，能把小幅抖动压平；大幅晃动只能减轻，画面边缘会略微软化。",
+                ))
+                .child(toggle_row(
                     "clip-option-denoise",
                     "降噪",
                     options.denoise,
@@ -343,6 +355,28 @@ impl PlayerApp {
                         this.update_clip_options(|options| options.force_cfr ^= true, cx);
                     },
                     cx,
+                ))
+                .child(toggle_row(
+                    "clip-option-interpolate",
+                    "光流插帧",
+                    options.interpolate,
+                    |this, cx| {
+                        this.update_clip_options(|options| options.interpolate ^= true, cx);
+                    },
+                    cx,
+                ))
+                .when(options.interpolate, |this| {
+                    this.child(chip_row(
+                        "clip-interpolate-fps",
+                        &FrameRate::ALL,
+                        options.interpolate_fps,
+                        FrameRate::label,
+                        |options, rate| options.interpolate_fps = rate,
+                        cx,
+                    ))
+                })
+                .child(note(
+                    "靠运动估计补出中间帧：慢镜头和动画更顺，快速剪辑会出现涂抹；这一步很慢。",
                 ))
                 // 倒放与定格改的是帧的先后顺序，和上面的画质处理不是一类事，
                 // 单独开一段；两项都只在重编码时可用，正好都在这个分支里。

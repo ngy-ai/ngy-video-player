@@ -19,8 +19,8 @@ pub use crate::encoder::EncoderMode;
 pub use effects::{Watermark, WatermarkPosition};
 pub use transform::{Crop, Edge, Pad, Rotate, Scale, VideoTransform};
 pub use types::{
-    ColorMatrix, ColorRange, ExportMode, KeyframeAlign, OutputFormat, PixelFormat, Quality,
-    RateControl, VideoCodec,
+    ColorMatrix, ColorRange, ExportMode, FrameRate, KeyframeAlign, OutputFormat, PixelFormat,
+    Quality, RateControl, VideoCodec,
 };
 
 use std::path::{Path, PathBuf};
@@ -62,6 +62,16 @@ pub struct ExportOptions {
     pub denoise: bool,
     /// 锐化。适合重编码后偏软的片源。
     pub sharpen: bool,
+    /// 手持防抖。用 `deshake` 的单遍版本：不需要像 `vidstab` 那样先跑一遍
+    /// 分析再出结果，代价是对大幅抖动只能压住一部分。
+    pub stabilize: bool,
+    /// 光流插帧：靠运动估计补出中间帧，把源帧率抬到 [`FrameRate`]。
+    ///
+    /// 只适合画面平滑的素材（动画、慢镜头）；快速剪辑会出现明显的涂抹，
+    /// 而且这一步是整条滤镜链里最慢的。
+    pub interpolate: bool,
+    /// 插帧的目标帧率。
+    pub interpolate_fps: FrameRate,
     /// 画面变换：裁切、缩放、补边、旋转、翻转。只在重编码时生效。
     pub transform: VideoTransform,
     /// 音频不重编码，直接搬原码流。
@@ -132,6 +142,9 @@ impl Default for ExportOptions {
             deinterlace: false,
             denoise: false,
             sharpen: false,
+            stabilize: false,
+            interpolate: false,
+            interpolate_fps: FrameRate::default(),
             transform: VideoTransform::default(),
             audio_copy: false,
             normalize_audio: false,
@@ -220,13 +233,29 @@ impl ExportOptions {
                 self.freeze_seconds()
             ));
         }
+        // 防抖排在降噪之前：先把抖动的位移抹平，再在稳定的画面上降噪，
+        // 否则每一帧的噪点位置都在动，降噪会把它们当成细节保留下来。
+        if self.stabilize {
+            // `edge=mirror` 让移出画面的边缘用镜像补齐，默认的黑色边框
+            // 在抖动幅度大时会露出黑边。
+            filters.push("deshake=edge=mirror".to_string());
+        }
         if self.denoise {
             filters.push("hqdn3d=4:3:6:4.5".to_string());
         }
         if self.sharpen {
             filters.push("unsharp=5:5:0.8:3:3:0.4".to_string());
         }
-        // 水印压在最后：几何变换之后再画，坐标才是最终画面里的坐标。
+        // 插帧要在所有逐帧处理之后：先修好每一帧，再去生成中间帧；
+        // 反过来的话插出来的帧又会成为下一步的输入，代价翻倍。
+        if self.interpolate {
+            filters.push(format!(
+                "minterpolate=fps={}:mi_mode=mci:mc_mode=aobmc:vsbmc=1",
+                self.interpolate_fps.fps()
+            ));
+        }
+        // 水印压在最后：几何变换之后再画，坐标才是最终画面里的坐标；
+        // 排在插帧后面，文字也不会被运动估计抹出残影。
         if let Some(watermark) = self.watermark.filter() {
             filters.push(watermark);
         }

@@ -280,6 +280,46 @@ impl KeyframeAlign {
     }
 }
 
+/// 光流插帧的目标帧率。
+///
+/// 只留电影与直播常见的几档：`minterpolate` 是整条链里最慢的一步，
+/// 60 → 120 的耗时还会再翻倍，档位越多越容易让人误选。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FrameRate {
+    F24,
+    F30,
+    #[default]
+    F60,
+    F120,
+}
+
+impl FrameRate {
+    pub const ALL: [FrameRate; 4] = [
+        FrameRate::F24,
+        FrameRate::F30,
+        FrameRate::F60,
+        FrameRate::F120,
+    ];
+
+    pub fn fps(self) -> u32 {
+        match self {
+            FrameRate::F24 => 24,
+            FrameRate::F30 => 30,
+            FrameRate::F60 => 60,
+            FrameRate::F120 => 120,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            FrameRate::F24 => "24",
+            FrameRate::F30 => "30",
+            FrameRate::F60 => "60",
+            FrameRate::F120 => "120",
+        }
+    }
+}
+
 /// 输出像素格式。
 ///
 /// 位深是重编码里唯一补不回来的损失：10bit 源写成 8bit，色阶就永久断成 256 级，

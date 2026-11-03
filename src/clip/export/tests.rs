@@ -622,6 +622,43 @@ fn 水印画在几何变换之后() {
 }
 
 #[test]
+fn 防抖排在降噪之前_插帧排在逐帧处理之后() {
+    let options = ExportOptions {
+        stabilize: true,
+        denoise: true,
+        sharpen: true,
+        interpolate: true,
+        watermark: Watermark {
+            enabled: true,
+            text: "台标".into(),
+            ..Watermark::default()
+        },
+        ..ExportOptions::default()
+    };
+    let filters = options.video_filters().unwrap();
+    let deshake = filters.find("deshake=").unwrap();
+    let denoise = filters.find("hqdn3d=").unwrap();
+    let sharpen = filters.find("unsharp=").unwrap();
+    let interpolate = filters.find("minterpolate=").unwrap();
+    let watermark = filters.find("drawtext=").unwrap();
+    assert!(deshake < denoise, "{filters}");
+    assert!(denoise < sharpen, "{filters}");
+    assert!(sharpen < interpolate, "{filters}");
+    assert!(interpolate < watermark, "水印不该被插帧抹出残影：{filters}");
+}
+
+#[test]
+fn 插帧按选定的目标帧率写() {
+    let options = ExportOptions {
+        interpolate: true,
+        interpolate_fps: FrameRate::F120,
+        ..ExportOptions::default()
+    };
+    let filters = options.video_filters().unwrap();
+    assert!(filters.contains("minterpolate=fps=120"), "{filters}");
+}
+
+#[test]
 fn 流复制时倒放与定格都不落地() {
     let options = ExportOptions {
         mode: ExportMode::Copy,
