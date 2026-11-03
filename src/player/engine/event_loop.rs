@@ -33,6 +33,12 @@ pub(super) fn event_loop(
             // 外挂字幕（sub-auto / sub-add）是在文件加载完之后才挂进轨道表的，
             // 只在 FILE_LOADED 读一次会永远漏掉它，字幕菜单就是空的。
             ("track-list", format::NONE, 15),
+            // 播放统计：帧率与三种丢帧计数。数值很小但更新频繁，只在统计浮层
+            // 打开时才真正被读，平时只是多一条属性通知。
+            ("container-fps", format::DOUBLE, 16),
+            ("frame-drop-count", format::INT64, 17),
+            ("mistimed-frame-count", format::INT64, 18),
+            ("decoder-frame-drop-count", format::INT64, 19),
         ];
         for (name, fmt, id) in watched {
             if let Err(error) = api.observe(handle, *id, name, *fmt) {
@@ -191,6 +197,10 @@ fn apply_property(state: &mut Snapshot, change: &PropertyChange, dirty: &mut boo
         12 => state.video_width = int(change).unwrap_or(0).max(0) as u32,
         13 => state.video_height = int(change).unwrap_or(0).max(0) as u32,
         14 => {}
+        16 => state.fps = double(change).unwrap_or(state.fps),
+        17 => state.frame_drops = int(change).unwrap_or(0).max(0) as u64,
+        18 => state.mistimed_frames = int(change).unwrap_or(0).max(0) as u64,
+        19 => state.decoder_drops = int(change).unwrap_or(0).max(0) as u64,
         _ => {
             *dirty = false;
         }

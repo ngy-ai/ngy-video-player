@@ -76,6 +76,7 @@ impl PlayerApp {
             preview_request: None,
             preview_retired: VecDeque::new(),
             dialog_open: false,
+            show_stats: false,
             osd: None,
             screenshot_card: None,
             error: None,

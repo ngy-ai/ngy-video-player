@@ -69,6 +69,7 @@ actions!(
         DeleteSelected,
         SubtitleEarlier,
         SubtitleLater,
+        ToggleStats,
     ]
 );
 
@@ -329,6 +330,9 @@ pub struct PlayerApp {
     /// rfd 的对话框阻塞在后台线程里，主窗口在拿到结果前不会知道自己「正在等对话框」。
     /// 不挡一下的话，连按 O 会叠出多个对话框，所以这里自己记一笔。
     dialog_open: bool,
+
+    /// 播放统计浮层（帧率、丢帧计数）是否打开。按 I 切换。
+    show_stats: bool,
 
     osd: Option<(Vec<String>, Instant)>,
     /// 最近一张截图的操作卡片；`None` 表示没显示。
@@ -642,6 +646,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         // 与 mpv 一致：Z 提前、X 延后，一次 0.1 秒。
         KeyBinding::new("z", SubtitleEarlier, None),
         KeyBinding::new("x", SubtitleLater, None),
+        KeyBinding::new("i", ToggleStats, None),
         KeyBinding::new("s", TakeScreenshot, None),
         KeyBinding::new("escape", ExitOverlay, None),
         KeyBinding::new("delete", DeleteSelected, None),

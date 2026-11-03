@@ -113,6 +113,10 @@ impl Render for PlayerApp {
             .on_action(
                 cx.listener(|this, _: &TakeScreenshot, _window, cx| this.take_screenshot(cx)),
             )
+            .on_action(cx.listener(|this, _: &ToggleStats, _window, cx| {
+                this.show_stats ^= true;
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &DeleteSelected, window, cx| {
                 // 面板关着的时候选择是看不见的，这时候删等于盲删，直接忽略。
                 // 全屏里面板同样不画（见本函数的渲染部分），一个道理。
@@ -262,6 +266,7 @@ impl Render for PlayerApp {
             .children(self.render_menu(panel_width, cx))
             .children(self.render_osd(osd_top, panel_width))
             .children(self.render_screenshot_card(osd_top, cx))
+            .children(self.render_stats_card(osd_top, cx))
             .when(bar_visible, |this| {
                 this.child(self.render_menu_bar(window, cx))
             })

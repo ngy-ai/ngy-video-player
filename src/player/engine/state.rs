@@ -127,6 +127,14 @@ pub struct Snapshot {
     pub buffering: bool,
     pub video_width: u32,
     pub video_height: u32,
+    /// 容器标称帧率；0 表示还没读到（或音频文件）。
+    pub fps: f64,
+    /// 显示阶段被丢掉的帧（解码来不及时）。多数解码器正常时应当一直是 0。
+    pub frame_drops: u64,
+    /// 因迟到而没能按时间显示的帧，表现为「卡一下」。
+    pub mistimed_frames: u64,
+    /// 解码线程自己丢的帧：解码跟不上编码规格时会涨，比上面的更能说明问题。
+    pub decoder_drops: u64,
     pub media_title: String,
     pub path: Option<PathBuf>,
     pub tracks: Vec<Track>,
@@ -150,6 +158,10 @@ impl Default for Snapshot {
             buffering: false,
             video_width: 0,
             video_height: 0,
+            fps: 0.0,
+            frame_drops: 0,
+            mistimed_frames: 0,
+            decoder_drops: 0,
             media_title: String::new(),
             path: None,
             tracks: Vec::new(),
