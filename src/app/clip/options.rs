@@ -10,9 +10,10 @@ use super::widgets::{
 };
 use super::*;
 use crate::clip::{
-    ColorMatrix, ColorRange, Crop, CutKind, DEFAULT_BITRATE_KBPS, Edge, EncoderMode, ExportMode,
-    ExportOptions, FrameRate, KeyframeAlign, MAX_FREEZE_SECONDS, OutputFormat, Pad, PixelFormat,
-    Quality, RateControl, Rotate, Scale, VideoCodec, Watermark, WatermarkPosition,
+    ColorMatrix, ColorRange, Crop, CutKind, DEFAULT_BITRATE_KBPS, DEFAULT_SPLIT_MB, Edge,
+    EncoderMode, ExportMode, ExportOptions, FrameRate, KeyframeAlign, MAX_FREEZE_SECONDS,
+    OutputFormat, Pad, PixelFormat, Quality, RateControl, Rotate, Scale, VideoCodec, Watermark,
+    WatermarkPosition,
 };
 use gpui_kit::component::input::Input;
 
@@ -116,7 +117,17 @@ impl PlayerApp {
                             )
                         })),
                 )
-                .child(note(options.format.hint()));
+                .child(note(options.format.hint()))
+                .when(options.format.is_split(), |this| {
+                    this.child(step_row(
+                        "clip-split-size",
+                        "每段大小",
+                        format!("{} MB", options.split_mb),
+                        "切点只能落在关键帧上，每段实际会略小；700MB 是一张 DVD 的容量。",
+                        StepperTarget::SplitSize,
+                        cx,
+                    ))
+                });
         }
 
         // 流复制只能在关键帧上起步，用户给的秒数几乎总落在两个关键帧之间，
@@ -510,6 +521,8 @@ impl PlayerApp {
             ));
         } else if gif {
             body = body.child(note("GIF 只包含画面：没有声音，也没有字幕与章节。"));
+        } else if options.format.is_split() {
+            body = body.child(note("每段都是独立 mkv，字幕与章节照常保留。"));
         } else {
             body = body.child(note("切片输出只保留画面与音轨，字幕与章节不写入。"));
         }
@@ -541,6 +554,8 @@ enum StepperTarget {
     FontSize,
     /// 水印不透明度，10% 一格。
     Opacity,
+    /// 按大小切分的段大小，100MB 一格。
+    SplitSize,
 }
 
 fn apply_step(options: &mut ExportOptions, target: StepperTarget, delta: i32) {
@@ -561,6 +576,10 @@ fn apply_step(options: &mut ExportOptions, target: StepperTarget, delta: i32) {
                 + delta * Watermark::OPACITY_STEP;
             options.watermark.opacity = next.clamp(5, 100) as f32 / 100.0;
         }
+        StepperTarget::SplitSize => {
+            let next = options.split_mb as i32 + delta * 100;
+            options.split_mb = next.clamp(100, 8_000) as u32;
+        }
     }
 }
 
@@ -569,6 +588,7 @@ fn reset_value(options: &mut ExportOptions, target: StepperTarget) {
         StepperTarget::Freeze => options.freeze_lead = 0.0,
         StepperTarget::FontSize => options.watermark.size = Watermark::default().size,
         StepperTarget::Opacity => options.watermark.opacity = Watermark::default().opacity,
+        StepperTarget::SplitSize => options.split_mb = DEFAULT_SPLIT_MB,
     }
 }
 

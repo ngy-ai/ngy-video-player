@@ -120,6 +120,8 @@ pub struct ExportOptions {
     pub freeze_lead: f32,
     /// 文字水印。
     pub watermark: Watermark,
+    /// 「按大小切分」每段的目标大小（MB）。切点只能在关键帧上，实际会略小。
+    pub split_mb: u32,
 }
 
 impl Default for ExportOptions {
@@ -162,6 +164,7 @@ impl Default for ExportOptions {
             reverse: false,
             freeze_lead: 0.0,
             watermark: Watermark::default(),
+            split_mb: DEFAULT_SPLIT_MB,
         }
     }
 }
@@ -360,6 +363,9 @@ pub const DEFAULT_BITRATE_KBPS: u32 = 6_000;
 /// 开头定格的上限。再长就不该用「裁切」来做，而是去剪辑软件里排时间轴了。
 pub const MAX_FREEZE_SECONDS: f32 = 10.0;
 
+/// 按大小切分的默认段大小：单层 DVD 的容量上限，是最常见的「一段装得下」的档位。
+pub const DEFAULT_SPLIT_MB: u32 = 700;
+
 /// GIF 的输出链：限帧率、缩到 480 宽（只缩不放）、再用两遍法生成调色板。
 ///
 /// `split` 把同一帧同时喂给「统计调色板」与「套用调色板」两条链，颜色比默认的
@@ -425,6 +431,7 @@ pub(super) fn build_command(
     let hls = format.is_hls();
     let dash = format == OutputFormat::Dash;
     let segmented = format.is_segmented();
+    let split = format.is_split();
     let gif = format == OutputFormat::Gif;
     if options.keep_audio && !gif {
         command.arg("-map").arg("0:a?");
@@ -487,9 +494,9 @@ pub(super) fn build_command(
             // 不指定目标帧率时按源的名义帧率补齐/丢帧，足以治好手机 VFR 的抖动。
             command.arg("-fps_mode").arg("cfr");
         }
-        if segmented {
+        if segmented || split {
             // 关键帧落在 6 秒边界上，分片长度才和 -hls_time / -seg_duration 一致；
-            // 否则默认 GOP 是 250 帧，10 秒才切一片。
+            // 按大小切分同样只能切在关键帧上，密一点才不会每段都小一大截。
             command
                 .arg("-force_key_frames")
                 .arg("expr:gte(t,n_forced*6)");
@@ -581,12 +588,25 @@ pub(super) fn build_command(
             .arg("-media_seg_name")
             .arg(format!("{stem}_$RepresentationID$_$Number%05d$.m4s"));
     }
+    // 按大小切分时这里写的是临时文件：切分要等整段编码完、量出真实码率才能定段长，
+    // 由 `ClipJob` 再跑一遍流复制把临时文件切开。
     command
         .arg(&request.output)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     command
+}
+
+/// 切分前的临时文件：`片段.part.mkv`。带 `.part` 是给用户看的——
+/// 万一进程被杀，目录里剩下的半成品一眼就知道不是成片。
+pub(super) fn split_temp_path(output: &Path) -> PathBuf {
+    output.with_file_name(format!("{}.part.mkv", output_stem(output)))
+}
+
+/// 按大小切分的文件名模板：`片段_%03d.mkv`。
+pub(super) fn split_pattern(output: &Path) -> PathBuf {
+    output.with_file_name(format!("{}_%03d.mkv", output_stem(output)))
 }
 
 /// 分片文件名模板。放在播放列表同目录，名字取播放列表的 stem。

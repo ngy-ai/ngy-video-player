@@ -46,16 +46,21 @@ pub enum OutputFormat {
     HlsFmp4,
     /// MPD + m4s 分片：网页播放器用 dash.js，与 HLS 并行的事实标准。
     Dash,
+    /// 按大小切成若干个 mkv：方便拷进有单文件大小限制的介质。
+    ///
+    /// 切点只能落在关键帧上，所以每段的实际大小会比设定的略小一点。
+    Split,
     /// 12fps 的 GIF 动图：没有声音，颜色只有 256 色，适合做表情包与网页预览。
     Gif,
 }
 
 impl OutputFormat {
-    pub const ALL: [OutputFormat; 5] = [
+    pub const ALL: [OutputFormat; 6] = [
         OutputFormat::Mkv,
         OutputFormat::Hls,
         OutputFormat::HlsFmp4,
         OutputFormat::Dash,
+        OutputFormat::Split,
         OutputFormat::Gif,
     ];
 
@@ -65,6 +70,7 @@ impl OutputFormat {
             OutputFormat::Hls => "HLS · TS 分片",
             OutputFormat::HlsFmp4 => "HLS · fMP4",
             OutputFormat::Dash => "DASH",
+            OutputFormat::Split => "按大小切分",
             OutputFormat::Gif => "GIF 动图",
         }
     }
@@ -77,6 +83,9 @@ impl OutputFormat {
                 "输出 m3u8 与 fMP4 分片，切点对齐在样本上；老设备的兼容性比 TS 略差"
             }
             OutputFormat::Dash => "输出 .mpd 与 .m4s 分片，给 dash.js 之类的网页播放器用",
+            OutputFormat::Split => {
+                "切成若干个带编号的 mkv，每段不超过指定大小；切点落在关键帧上，实际会略小"
+            }
             OutputFormat::Gif => {
                 "12fps、480 宽的动图，无限循环；没有声音，颜色只有 256 色，适合短片段"
             }
@@ -88,6 +97,8 @@ impl OutputFormat {
             OutputFormat::Mkv => "mkv",
             OutputFormat::Hls | OutputFormat::HlsFmp4 => "m3u8",
             OutputFormat::Dash => "mpd",
+            // 切分出来的每一段都是完整 mkv；返回的是第一段的路径，模板在 build_command 里拼。
+            OutputFormat::Split => "mkv",
             OutputFormat::Gif => "gif",
         }
     }
@@ -111,6 +122,11 @@ impl OutputFormat {
 
     pub fn is_hls(self) -> bool {
         matches!(self, OutputFormat::Hls | OutputFormat::HlsFmp4)
+    }
+
+    /// 按大小切分：产物是一串 mkv，没有播放列表，写完之后要把每一段都报回去。
+    pub fn is_split(self) -> bool {
+        matches!(self, OutputFormat::Split)
     }
 }
 

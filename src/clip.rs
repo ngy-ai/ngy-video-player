@@ -8,7 +8,7 @@
 //! 两条路都在后台线程跑，用 ffmpeg 的 `-progress` 回报进度；取消时直接杀掉子进程
 //! 并清掉半成品。
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use futures::channel::mpsc::UnboundedSender;
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read};
@@ -26,9 +26,10 @@ mod loudness;
 
 pub use concat::{ConcatEvent, ConcatJob, ConcatOutcome, ConcatRequest};
 pub use export::{
-    ColorMatrix, ColorRange, Crop, DEFAULT_BITRATE_KBPS, Edge, EncoderMode, ExportMode,
-    ExportOptions, FrameRate, KeyframeAlign, MAX_FREEZE_SECONDS, OutputFormat, Pad, PixelFormat,
-    Quality, RateControl, Rotate, Scale, VideoCodec, VideoTransform, Watermark, WatermarkPosition,
+    ColorMatrix, ColorRange, Crop, DEFAULT_BITRATE_KBPS, DEFAULT_SPLIT_MB, Edge, EncoderMode,
+    ExportMode, ExportOptions, FrameRate, KeyframeAlign, MAX_FREEZE_SECONDS, OutputFormat, Pad,
+    PixelFormat, Quality, RateControl, Rotate, Scale, VideoCodec, VideoTransform, Watermark,
+    WatermarkPosition,
 };
 pub use loudness::Loudness;
 
@@ -420,6 +421,104 @@ pub enum ClipOutcome {
     Failed(String),
 }
 
+/// 把临时文件按目标大小切成若干段。
+///
+/// 段时长 = 目标字节数 ÷ 实际码率，实际码率由「文件大小 ÷ 时长」量出来：CRF、
+/// 滤镜、响度都会影响码率，只有量最终文件才准。切开是流复制，切点落在关键帧上，
+/// 所以每段会比目标略小一点。
+fn split_file(
+    executable: &Path,
+    source: &Path,
+    output: &Path,
+    split_mb: u32,
+    duration: f64,
+) -> Result<Vec<PathBuf>> {
+    let bytes = std::fs::metadata(source)
+        .with_context(|| format!("读取临时文件失败：{}", source.display()))?
+        .len() as f64;
+    if bytes <= 0.0 || duration <= 0.0 {
+        return Err(anyhow!("临时文件是空的，没法切分"));
+    }
+    let target = split_mb.max(1) as f64 * 1024.0 * 1024.0;
+    let bytes_per_second = (bytes / duration).max(1.0);
+    let segment_seconds = (target / bytes_per_second).max(1.0);
+    let pattern = export::split_pattern(output);
+
+    let completed = Command::new(executable)
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-y")
+        .arg("-i")
+        .arg(source)
+        .arg("-map")
+        .arg("0")
+        .arg("-c")
+        .arg("copy")
+        .arg("-map_chapters")
+        .arg("0")
+        .arg("-f")
+        .arg("segment")
+        .arg("-segment_time")
+        .arg(format!("{segment_seconds:.3}"))
+        // 每段都从 0 开始计时，单独拿一段出来也能正常播。
+        .arg("-reset_timestamps")
+        .arg("1")
+        .arg(&pattern)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| format!("启动切分失败：{}", executable.display()))?;
+    if !completed.status.success() {
+        let detail = String::from_utf8_lossy(&completed.stderr);
+        return Err(anyhow!("切分失败：{}", detail.trim()));
+    }
+
+    let files = collect_split_outputs(output);
+    if files.is_empty() {
+        return Err(anyhow!("切分没有产出任何文件：{}", pattern.display()));
+    }
+    let _ = std::fs::remove_file(source);
+    Ok(files)
+}
+
+/// 按大小切分写出来的那些段：`{stem}_001.mkv`…，按名字排序就是播放顺序。
+fn collect_split_outputs(output: &Path) -> Vec<PathBuf> {
+    let Some(dir) = output.parent() else {
+        return Vec::new();
+    };
+    let Some(stem) = output
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+    else {
+        return Vec::new();
+    };
+    let prefix = format!("{stem}_");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut segments: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension().and_then(|ext| ext.to_str()) == Some("mkv")
+                && path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().starts_with(&prefix))
+                    .unwrap_or(false)
+        })
+        .collect();
+    segments.sort();
+    segments
+}
+
+fn remove_split_outputs(output: &Path) {
+    for segment in collect_split_outputs(output) {
+        let _ = std::fs::remove_file(segment);
+    }
+}
+
 /// 删掉半成品。切片输出的产物是「播放列表 + 初始化段 + 一堆分片」，
 /// 只删 m3u8/mpd 会留下一地垃圾。
 ///
@@ -544,6 +643,13 @@ impl ClipJob {
             Some(subtitle) => Some(extract_subtitle(&executable, &request.input, subtitle)?),
             None => None,
         };
+        // 按大小切分要分两步走：ffmpeg 的 segment muxer 只按时间切，没有按大小的选项。
+        // 先整段编码成临时文件，量出真实码率算出每段该多长，再流复制切开。
+        let split = request.options.format.is_split();
+        let final_output = request.output.clone();
+        if split {
+            request.output = export::split_temp_path(&final_output);
+        }
         let mut child = export::build_command(&executable, &request, encoder, burn.as_deref())
             .spawn()
             .with_context(|| format!("启动 ffmpeg 失败：{}", executable.display()))?;
@@ -571,9 +677,12 @@ impl ClipJob {
 
         let task_child = child.clone();
         let task_cancelled = cancelled.clone();
+        // 切分时 `output` 是临时文件，成片由第二遍切出来。
         let output = request.output.clone();
+        let split_mb = request.options.split_mb;
         // 开头定格会多出几秒，进度分母不跟着加长，进度条会提前走到满。
         let total = request.options.output_duration(request.range.duration());
+        let split_executable = executable.clone();
         let task_burn = burn;
         std::thread::spawn(move || {
             if let Some(stdout) = stdout {
@@ -583,12 +692,35 @@ impl ClipJob {
             let cancelled = task_cancelled.load(Ordering::SeqCst);
 
             let outcome = if cancelled {
-                // 半成品留着只会让用户以为裁切成功了。HLS 还要清掉分片。
+                // 半成品留着只会让用户以为裁切成功了。切片输出还要清掉分片。
                 remove_output(&output);
+                if split {
+                    remove_split_outputs(&final_output);
+                }
                 ClipOutcome::Cancelled
             } else {
                 match status {
-                    Some(Ok(status)) if status.success() => ClipOutcome::Finished(vec![output]),
+                    Some(Ok(status)) if status.success() => {
+                        if split {
+                            // 产物是一串带编号的 mkv，全部报回去，界面上「定位」
+                            // 才有东西可指。
+                            match split_file(
+                                &split_executable,
+                                &output,
+                                &final_output,
+                                split_mb,
+                                total,
+                            ) {
+                                Ok(files) => ClipOutcome::Finished(files),
+                                Err(message) => {
+                                    let _ = std::fs::remove_file(&output);
+                                    ClipOutcome::Failed(format!("{message:#}"))
+                                }
+                            }
+                        } else {
+                            ClipOutcome::Finished(vec![output])
+                        }
+                    }
                     Some(Ok(status)) => {
                         let detail = tail
                             .lock()

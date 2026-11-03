@@ -339,6 +339,34 @@ fn dash_输出_mpd_与_m4s_分片() {
 }
 
 #[test]
+fn 按大小切分时第一遍只出单文件() {
+    let options = ExportOptions {
+        format: OutputFormat::Split,
+        split_mb: 300,
+        ..ExportOptions::default()
+    };
+    let args = args(options);
+    // 切分交给第二遍流复制：这里必须是普通 mkv，不能写成 segment muxer。
+    assert_eq!(args.last().unwrap(), "movie - 片段.mkv");
+    assert!(!has(&args, &["-f", "segment"]));
+    // 关键帧密一点，第二遍切出来的段才接近目标大小。
+    assert!(has(&args, &["-force_key_frames", "expr:gte(t,n_forced*6)"]));
+}
+
+#[test]
+fn 切分用的临时文件与分片模板() {
+    let output = Path::new("movie - 片段.mkv");
+    assert_eq!(
+        super::split_temp_path(output),
+        Path::new("movie - 片段.part.mkv")
+    );
+    assert_eq!(
+        super::split_pattern(output),
+        Path::new("movie - 片段_%03d.mkv")
+    );
+}
+
+#[test]
 fn 恒定帧率只在重编码时出现() {
     let mut options = ExportOptions {
         force_cfr: true,

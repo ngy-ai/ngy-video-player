@@ -463,3 +463,71 @@ fn 无损流复制一段真实视频() {
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+#[ignore = "需要本机安装 ffmpeg"]
+fn 按大小切分成多段() {
+    let ffmpeg = ngy_video_player::platform::ffmpeg::executable().expect("本机没有 ffmpeg");
+    let dir = std::env::temp_dir().join(format!("ngy-clip-split-e2e-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // 切分只在关键帧上发生（这里每 6 秒一个），源要够长才有几段：
+    // 30 秒测试图案编出来约 4.5MB，按 1MB 一段应当在 6 秒处下刀。
+    let input = dir.join("big.mp4");
+    let generated = Command::new(&ffmpeg)
+        .args([
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x240:rate=25:duration=30",
+            "-c:v",
+            "libx264",
+            "-b:v",
+            "4000k",
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        .arg(&input)
+        .status()
+        .expect("生成测试视频失败");
+    assert!(generated.success());
+
+    let output = dir.join("split.mkv");
+    let request = ClipRequest {
+        input,
+        output: output.clone(),
+        range: ClipRange {
+            start: 0.0,
+            end: 30.0,
+        },
+        options: ExportOptions {
+            format: OutputFormat::Split,
+            split_mb: 1,
+            // 固定码率：测试图案用 CRF 压得只剩几十 KB，按 1MB 切根本切不开。
+            rate_control: ngy_video_player::clip::RateControl::Bitrate,
+            bitrate_kbps: 4_000,
+            ..ExportOptions::default()
+        },
+        burn: None,
+        loudness: None,
+        kind: CutKind::Keep,
+        duration: 30.0,
+    };
+    let (outcome, _progress) = run(request);
+
+    let files = match outcome {
+        ClipOutcome::Finished(files) => files,
+        other => panic!("按大小切分失败: {other:?}"),
+    };
+    assert!(files.len() >= 2, "只切出了 {} 段", files.len());
+    for file in &files {
+        assert_output(file);
+    }
+    // 临时文件不能留下，否则导出成功却在目录里留一堆垃圾。
+    assert!(!dir.join("split.part.mkv").exists(), "临时文件没删掉");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
