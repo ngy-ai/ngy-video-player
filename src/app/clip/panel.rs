@@ -252,8 +252,8 @@ impl PlayerApp {
                         "删除中间段"
                     } else if dialog.kind == clip_core::CutKind::Split {
                         "分割为两个文件"
-                    } else if dialog.options.format == clip_core::OutputFormat::Hls {
-                        "开始导出 HLS"
+                    } else if dialog.options.format.is_segmented() {
+                        "开始导出切片"
                     } else if dialog.options.format == clip_core::OutputFormat::Gif {
                         "导出 GIF"
                     } else if dialog.options.mode == clip_core::ExportMode::Copy {
@@ -286,8 +286,8 @@ impl PlayerApp {
                     "把选中的区间抠掉后重新编码拼接；中途要占一份片长的临时空间。"
                 } else if dialog.kind == clip_core::CutKind::Split {
                     "在「开始」处切成前后两个文件，都落在原片同目录；结束时间在这里不参与。"
-                } else if dialog.options.format == clip_core::OutputFormat::Hls {
-                    "输出 m3u8 与同名 .ts 分片；只保留画面与音轨，字幕与章节不写入。"
+                } else if dialog.options.format.is_segmented() {
+                    "输出播放列表与同名分片；只保留画面与音轨，字幕与章节不写入。"
                 } else if dialog.options.format == clip_core::OutputFormat::Gif {
                     "导出 12fps、480 宽的循环动图；没有声音。片段越长，文件越大。"
                 } else if dialog.options.mode == clip_core::ExportMode::Copy {

@@ -419,23 +419,26 @@ pub(super) fn build_command(
         // 大写 V 排除封面图（attached_pic），否则第一路「视频」可能是一张 jpeg。
         .arg("-map")
         .arg("0:V:0?");
-    // HLS 的 TS 分片装不下字幕；GIF 干脆没有音轨与字幕，就算调用方没清掉开关，
-    // 这里也不再映射。
-    let hls = options.format == OutputFormat::Hls;
-    let gif = options.format == OutputFormat::Gif;
+    // 切片类输出装不下字幕（TS 分片的字幕是另一套封装，DASH 要单独成轨）；
+    // GIF 干脆没有音轨与字幕，就算调用方没清掉开关，这里也不再映射。
+    let format = options.format;
+    let hls = format.is_hls();
+    let dash = format == OutputFormat::Dash;
+    let segmented = format.is_segmented();
+    let gif = format == OutputFormat::Gif;
     if options.keep_audio && !gif {
         command.arg("-map").arg("0:a?");
     }
     // 烧录之后画面里已经有字幕了，再复制一份软字幕只会让播放器叠两遍。
     let burning = burn.is_some();
-    if options.keep_subtitles && !hls && !gif && !burning {
+    if options.keep_subtitles && !segmented && !gif && !burning {
         command.arg("-map").arg("0:s?");
     }
     command
         .arg("-map_metadata")
-        .arg(if hls || gif { "-1" } else { "0" })
+        .arg(if segmented || gif { "-1" } else { "0" })
         .arg("-map_chapters")
-        .arg(if !hls && !gif && options.keep_chapters {
+        .arg(if !segmented && !gif && options.keep_chapters {
             "0"
         } else {
             "-1"
@@ -456,9 +459,9 @@ pub(super) fn build_command(
             // 默认不写 `-pix_fmt`：省略它，ffmpeg 会在「源格式 ∩ 编码器支持列表」里
             // 挑最接近的一个，10bit 源因此能保住 10bit。三种情况必须写死 yuv420p：
             // 用户主动要求兼容性、硬件编码器（多数型号只吃 8bit 4:2:0，不指定会初始化
-            // 失败）、HLS（TS 分片里的 10bit H.264 在老设备和浏览器上支持面太窄）。
+            // 失败）、切片输出（fMP4 与 TS 里的 10bit H.264 在浏览器上支持面太窄）。
             let force_8bit = options.pixel_format == PixelFormat::Yuv420p
-                || hls
+                || segmented
                 || crate::encoder::is_hardware(encoder);
             if force_8bit {
                 command.arg("-pix_fmt").arg("yuv420p");
@@ -484,9 +487,9 @@ pub(super) fn build_command(
             // 不指定目标帧率时按源的名义帧率补齐/丢帧，足以治好手机 VFR 的抖动。
             command.arg("-fps_mode").arg("cfr");
         }
-        if hls {
-            // 关键帧落在 6 秒边界上，分片长度才和 -hls_time 一致；否则默认
-            // GOP 是 250 帧，10 秒才切一片。
+        if segmented {
+            // 关键帧落在 6 秒边界上，分片长度才和 -hls_time / -seg_duration 一致；
+            // 否则默认 GOP 是 250 帧，10 秒才切一片。
             command
                 .arg("-force_key_frames")
                 .arg("expr:gte(t,n_forced*6)");
@@ -526,7 +529,7 @@ pub(super) fn build_command(
                 }
             }
         }
-        if options.keep_subtitles && !hls && !gif && !burning {
+        if options.keep_subtitles && !segmented && !gif && !burning {
             command.arg("-c:s").arg("copy");
         }
     }
@@ -545,9 +548,38 @@ pub(super) fn build_command(
             .arg("-hls_playlist_type")
             .arg("vod")
             .arg("-hls_flags")
-            .arg("independent_segments")
+            .arg("independent_segments");
+        if format == OutputFormat::HlsFmp4 {
+            // fMP4 分片要先写一个初始化段（extradata），播放器拿到它才能解码。
+            // 默认名字是 init.mp4，同一个目录导两次就会互相覆盖，所以带上 stem。
+            let stem = output_stem(&request.output);
+            command
+                .arg("-hls_segment_type")
+                .arg("fmp4")
+                .arg("-hls_fmp4_init_filename")
+                .arg(format!("{stem}_init.mp4"));
+        }
+        command
             .arg("-hls_segment_filename")
-            .arg(hls_segment_path(&request.output));
+            .arg(segment_path(&request.output, format));
+    }
+    if dash {
+        // `use_template` 生成编号式的分片名，避免同一目录下再来一次就撞名；
+        // 分片与初始化段都带 stem 前缀，取消时才好清理。
+        let stem = output_stem(&request.output);
+        command
+            .arg("-f")
+            .arg("dash")
+            .arg("-seg_duration")
+            .arg("6")
+            .arg("-use_template")
+            .arg("1")
+            .arg("-use_timeline")
+            .arg("1")
+            .arg("-init_seg_name")
+            .arg(format!("{stem}_init$RepresentationID$.m4s"))
+            .arg("-media_seg_name")
+            .arg(format!("{stem}_$RepresentationID$_$Number%05d$.m4s"));
     }
     command
         .arg(&request.output)
@@ -557,14 +589,26 @@ pub(super) fn build_command(
     command
 }
 
-/// HLS 分片的文件名模板。放在播放列表同目录，名字取播放列表的 stem。
-fn hls_segment_path(output: &Path) -> PathBuf {
-    let stem = output
+/// 分片文件名模板。放在播放列表同目录，名字取播放列表的 stem。
+///
+/// fMP4 用 `.m4s`，TS 用 `.ts`：两种分片可能落在同一个目录里，
+/// 扩展名分开之后清理逻辑不会误删另一种。
+fn segment_path(output: &Path, format: OutputFormat) -> PathBuf {
+    let stem = output_stem(output);
+    let extension = match format {
+        OutputFormat::HlsFmp4 | OutputFormat::Dash => "m4s",
+        _ => "ts",
+    };
+    output.with_file_name(format!("{stem}_%04d.{extension}"))
+}
+
+/// 输出文件的名字（不含扩展名），取不到时用一个兜底名。
+fn output_stem(output: &Path) -> String {
+    output
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
         .filter(|stem| !stem.is_empty())
-        .unwrap_or_else(|| "片段".to_string());
-    output.with_file_name(format!("{stem}_%04d.ts"))
+        .unwrap_or_else(|| "片段".to_string())
 }
 
 #[cfg(test)]

@@ -292,6 +292,53 @@ fn hls_输出播放列表与分片() {
 }
 
 #[test]
+fn hls_fmp4_写分片类型与初始化段名() {
+    let options = ExportOptions {
+        format: OutputFormat::HlsFmp4,
+        ..ExportOptions::default()
+    };
+    let args = args(options);
+    assert!(has(&args, &["-f", "hls"]));
+    assert!(has(&args, &["-hls_segment_type", "fmp4"]));
+    assert!(has(
+        &args,
+        &["-hls_fmp4_init_filename", "movie - 片段_init.mp4"]
+    ));
+    assert!(has(
+        &args,
+        &["-hls_segment_filename", "movie - 片段_%04d.m4s"]
+    ));
+    assert!(args.last().unwrap().ends_with(".m3u8"));
+}
+
+#[test]
+fn dash_输出_mpd_与_m4s_分片() {
+    let options = ExportOptions {
+        format: OutputFormat::Dash,
+        ..ExportOptions::default()
+    };
+    let args = args(options);
+    assert!(has(&args, &["-f", "dash"]));
+    assert!(has(&args, &["-seg_duration", "6"]));
+    assert!(has(
+        &args,
+        &["-init_seg_name", "movie - 片段_init$RepresentationID$.m4s"]
+    ));
+    assert!(has(
+        &args,
+        &[
+            "-media_seg_name",
+            "movie - 片段_$RepresentationID$_$Number%05d$.m4s"
+        ]
+    ));
+    // DASH 与 HLS 一样不带字幕/章节，也固定 8bit。
+    assert!(has(&args, &["-map_chapters", "-1"]));
+    assert!(!has(&args, &["-map", "0:s?"]));
+    assert!(has(&args, &["-pix_fmt", "yuv420p"]));
+    assert!(args.last().unwrap().ends_with(".mpd"));
+}
+
+#[test]
 fn 恒定帧率只在重编码时出现() {
     let mut options = ExportOptions {
         force_cfr: true,

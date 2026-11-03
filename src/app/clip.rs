@@ -371,20 +371,17 @@ impl PlayerApp {
             }
             options.watermark.text = text;
         }
-        match options.format {
-            clip_core::OutputFormat::Hls => {
-                // HLS 的 TS 分片只装画面与音轨；界面上这两个开关会被隐藏，
-                // 这里再兜一次底，防止旧状态带进来。
-                options.keep_subtitles = false;
-                options.keep_chapters = false;
-            }
-            clip_core::OutputFormat::Gif => {
-                // GIF 没有音轨，也没有章节可挂；界面上这些开关同样被隐藏。
-                options.keep_audio = false;
-                options.keep_subtitles = false;
-                options.keep_chapters = false;
-            }
-            clip_core::OutputFormat::Mkv => {}
+        // 切片输出（HLS 两种分片与 DASH）只装画面与音轨；界面上这几个开关会被
+        // 隐藏，这里再兜一次底，防止旧状态带进来。
+        if options.format.is_segmented() {
+            options.keep_subtitles = false;
+            options.keep_chapters = false;
+        }
+        if options.format == clip_core::OutputFormat::Gif {
+            // GIF 没有音轨，也没有章节可挂；界面上这些开关同样被隐藏。
+            options.keep_audio = false;
+            options.keep_subtitles = false;
+            options.keep_chapters = false;
         }
         let burn = if dialog.burn_subtitle {
             dialog.subtitle.clone()

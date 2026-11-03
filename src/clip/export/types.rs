@@ -33,7 +33,7 @@ impl ExportMode {
     }
 }
 
-/// 导出成单文件、HLS 切片还是 GIF 动图。
+/// 导出成单文件、切片流还是 GIF 动图。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OutputFormat {
     /// 一个 mkv 装下全部轨道。
@@ -41,17 +41,30 @@ pub enum OutputFormat {
     Mkv,
     /// m3u8 + 一串 .ts 分片，供网页 / 流媒体服务器直接使用。
     Hls,
+    /// m3u8 + fMP4（CMAF）分片：分片本身是 mp4 盒子，切点对齐在样本上，
+    /// 同一份分片能被 HLS 与 DASH 复用，是现在 CDN 上的主流写法。
+    HlsFmp4,
+    /// MPD + m4s 分片：网页播放器用 dash.js，与 HLS 并行的事实标准。
+    Dash,
     /// 12fps 的 GIF 动图：没有声音，颜色只有 256 色，适合做表情包与网页预览。
     Gif,
 }
 
 impl OutputFormat {
-    pub const ALL: [OutputFormat; 3] = [OutputFormat::Mkv, OutputFormat::Hls, OutputFormat::Gif];
+    pub const ALL: [OutputFormat; 5] = [
+        OutputFormat::Mkv,
+        OutputFormat::Hls,
+        OutputFormat::HlsFmp4,
+        OutputFormat::Dash,
+        OutputFormat::Gif,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             OutputFormat::Mkv => "单文件 mkv",
-            OutputFormat::Hls => "HLS 切片",
+            OutputFormat::Hls => "HLS · TS 分片",
+            OutputFormat::HlsFmp4 => "HLS · fMP4",
+            OutputFormat::Dash => "DASH",
             OutputFormat::Gif => "GIF 动图",
         }
     }
@@ -60,6 +73,10 @@ impl OutputFormat {
         match self {
             OutputFormat::Mkv => "一个文件装下画面、音轨、字幕与章节",
             OutputFormat::Hls => "输出 m3u8 与 .ts 分片；只保留画面与音轨，字幕/章节不写入",
+            OutputFormat::HlsFmp4 => {
+                "输出 m3u8 与 fMP4 分片，切点对齐在样本上；老设备的兼容性比 TS 略差"
+            }
+            OutputFormat::Dash => "输出 .mpd 与 .m4s 分片，给 dash.js 之类的网页播放器用",
             OutputFormat::Gif => {
                 "12fps、480 宽的动图，无限循环；没有声音，颜色只有 256 色，适合短片段"
             }
@@ -69,7 +86,8 @@ impl OutputFormat {
     pub fn extension(self) -> &'static str {
         match self {
             OutputFormat::Mkv => "mkv",
-            OutputFormat::Hls => "m3u8",
+            OutputFormat::Hls | OutputFormat::HlsFmp4 => "m3u8",
+            OutputFormat::Dash => "mpd",
             OutputFormat::Gif => "gif",
         }
     }
@@ -78,6 +96,21 @@ impl OutputFormat {
     /// 所以要压过用户选的「无损流复制」。
     pub fn forces_reencode(self) -> bool {
         matches!(self, OutputFormat::Gif)
+    }
+
+    /// 切片类输出：产物是一份播放列表加一堆分片。
+    ///
+    /// 它们都不写字幕与章节——TS 分片装不下字幕，DASH 的字幕要单独成轨；
+    /// 与其写出一半，不如说清楚「只出画面与音轨」。
+    pub fn is_segmented(self) -> bool {
+        matches!(
+            self,
+            OutputFormat::Hls | OutputFormat::HlsFmp4 | OutputFormat::Dash
+        )
+    }
+
+    pub fn is_hls(self) -> bool {
+        matches!(self, OutputFormat::Hls | OutputFormat::HlsFmp4)
     }
 }
 

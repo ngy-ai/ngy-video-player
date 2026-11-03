@@ -97,10 +97,15 @@ impl PlayerApp {
 
         // 删除中间段只能是 mkv：拼接要复制流，HLS 分片与 GIF 都装不下两段拼起来的流。
         if !cut_out {
-            body =
-                body.child(section_title("输出"))
-                    .child(div().flex().items_center().gap(px(6.0)).children(
-                        OutputFormat::ALL.map(|format| {
+            body = body
+                .child(section_title("输出"))
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap(px(6.0))
+                        .children(OutputFormat::ALL.map(|format| {
                             option_chip(
                                 static_id("clip-format", format.label()),
                                 format.label(),
@@ -109,9 +114,9 @@ impl PlayerApp {
                                     this.update_clip_options(|options| options.format = format, cx);
                                 }),
                             )
-                        }),
-                    ))
-                    .child(note(options.format.hint()));
+                        })),
+                )
+                .child(note(options.format.hint()));
         }
 
         // 流复制只能在关键帧上起步，用户给的秒数几乎总落在两个关键帧之间，
@@ -506,7 +511,7 @@ impl PlayerApp {
         } else if gif {
             body = body.child(note("GIF 只包含画面：没有声音，也没有字幕与章节。"));
         } else {
-            body = body.child(note("HLS 只保留画面与音轨，字幕与章节不写入。"));
+            body = body.child(note("切片输出只保留画面与音轨，字幕与章节不写入。"));
         }
 
         body.into_any_element()

@@ -317,10 +317,15 @@ pub enum ClipOutcome {
     Failed(String),
 }
 
-/// 删掉半成品。HLS 的输出是「播放列表 + 一堆分片」，只删 m3u8 会留下垃圾。
+/// 删掉半成品。切片输出的产物是「播放列表 + 初始化段 + 一堆分片」，
+/// 只删 m3u8/mpd 会留下一地垃圾。
+///
+/// 分片名统一带播放列表的 stem 前缀（见 `clip::export`），所以按前缀就能认全：
+/// `.ts` 是 HLS 的 TS 分片，`.m4s` 是 fMP4 与 DASH 分片，`.mp4` 是 fMP4 的初始化段。
 fn remove_output(output: &Path) {
     let _ = std::fs::remove_file(output);
-    if output.extension().and_then(|ext| ext.to_str()) != Some("m3u8") {
+    let extension = output.extension().and_then(|ext| ext.to_str());
+    if !matches!(extension, Some("m3u8" | "mpd")) {
         return;
     }
     let Some(dir) = output.parent() else {
@@ -338,7 +343,8 @@ fn remove_output(output: &Path) {
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with(&prefix) && name.ends_with(".ts") {
+        let segment = name.ends_with(".ts") || name.ends_with(".m4s") || name.ends_with(".mp4");
+        if name.starts_with(&prefix) && segment {
             let _ = std::fs::remove_file(entry.path());
         }
     }
