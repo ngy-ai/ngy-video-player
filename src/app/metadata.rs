@@ -59,6 +59,8 @@ pub(super) struct MetadataDialog {
     chapters: Vec<ChapterRow>,
     /// 原文件内置字幕的编码名，保存时决定字幕是复制还是转码。
     subtitle_codecs: Vec<String>,
+    /// 封面图。`None` 表示不写封面。
+    cover: Option<PathBuf>,
     state: MetadataState,
     job: Option<Arc<MetadataJob>>,
 }
@@ -117,6 +119,7 @@ impl MetadataDialog {
             comment,
             chapters,
             subtitle_codecs: source.subtitle_codecs,
+            cover: None,
             state: MetadataState::Editing,
             job: None,
         }
@@ -334,6 +337,52 @@ impl PlayerApp {
         }
     }
 
+    /// 选一张图片当封面。文件对话框是阻塞的，扔到独立线程，结果走 oneshot 回来。
+    fn pick_metadata_cover(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(dialog) = self.metadata.as_ref().filter(|dialog| dialog.editing()) else {
+            return;
+        };
+        if self.dialog_open {
+            return;
+        }
+        self.dialog_open = true;
+
+        let mut picker = rfd::FileDialog::new()
+            .add_filter("图片", formats::IMAGE)
+            .add_filter("所有文件", &["*"])
+            .set_parent(window);
+        // 从片子所在目录开始翻：封面通常就放在它旁边。
+        if let Some(dir) = dialog.path.parent() {
+            picker = picker.set_directory(dir);
+        }
+
+        let (tx, rx) = futures::channel::oneshot::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(picker.pick_file());
+        });
+
+        cx.spawn(async move |this, cx| {
+            let picked = rx.await.ok().flatten();
+            let _ = this.update(cx, |this, cx| {
+                this.dialog_open = false;
+                if let Some(path) = picked
+                    && let Some(dialog) = this.metadata.as_mut()
+                {
+                    dialog.cover = Some(path);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn clear_metadata_cover(&mut self, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.metadata.as_mut() {
+            dialog.cover = None;
+            cx.notify();
+        }
+    }
+
     /// 起一个后台任务。命令拼装或进程启动失败时留在编辑态，把原因显示在对话框里。
     pub(super) fn start_metadata(&mut self, cx: &mut Context<Self>) {
         let Some(dialog) = self.metadata.as_mut() else {
@@ -358,6 +407,7 @@ impl PlayerApp {
             tags: dialog.tags(cx),
             chapters,
             subtitle_codecs: dialog.subtitle_codecs.clone(),
+            cover: dialog.cover.clone(),
         };
         let (tx, mut rx) = futures::channel::mpsc::unbounded();
         match MetadataJob::start(request, tx) {
@@ -491,6 +541,7 @@ impl PlayerApp {
             .child(tag_field("metadata-title", "标题", &dialog.title))
             .child(tag_field("metadata-artist", "作者", &dialog.artist))
             .child(tag_field("metadata-comment", "备注", &dialog.comment))
+            .child(self.render_metadata_cover(dialog, cx))
             .child(div().h(px(1.0)).w_full().bg(gpui_kit::rgb(0x2c2c34)))
             .child(
                 div()
@@ -593,9 +644,59 @@ impl PlayerApp {
                 .text_size(px(10.0))
                 .text_color(text_faint())
                 .whitespace_normal()
-                .child("画面与音轨流复制到同目录的新 mkv，原文件不会被改动。标签留空即删除。"),
+                .child(
+                    "画面与音轨流复制到同目录的新 mkv，原文件不会被改动。\
+                     标签留空即删除；封面以附件写入，播放器会当成专辑封面显示。",
+                ),
         )
         .into_any_element()
+    }
+
+    /// 封面那一行：当前选的图片 + 选择 / 移除。
+    fn render_metadata_cover(&self, dialog: &MetadataDialog, cx: &mut Context<Self>) -> AnyElement {
+        let (text, color) = match &dialog.cover {
+            Some(path) => (file_name(path), text()),
+            None => ("不写封面".to_string(), text_faint()),
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap(px(10.0))
+            .child(
+                div()
+                    .w(px(52.0))
+                    .flex_none()
+                    .text_size(px(12.0))
+                    .text_color(text_muted())
+                    .child("封面"),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .text_size(px(11.0))
+                    .text_color(color)
+                    .child(ui::ellipsis(text)),
+            )
+            .child(settings_button(
+                "metadata-cover-pick",
+                "选择图片…",
+                true,
+                cx.listener(|this, _: &ClickEvent, window, cx| {
+                    this.pick_metadata_cover(window, cx);
+                }),
+            ))
+            .when(dialog.cover.is_some(), |this| {
+                this.child(settings_button(
+                    "metadata-cover-clear",
+                    "移除",
+                    true,
+                    cx.listener(|this, _: &ClickEvent, _window, cx| {
+                        this.clear_metadata_cover(cx);
+                    }),
+                ))
+            })
+            .into_any_element()
     }
 
     fn render_metadata_progress(&self, progress: f32, cx: &mut Context<Self>) -> AnyElement {

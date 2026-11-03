@@ -51,6 +51,11 @@ pub struct MetadataRequest {
     pub chapters: Vec<ChapterEdit>,
     /// 原文件内置字幕的编码名，用来决定是复制还是转成 mkv 支持的编码。
     pub subtitle_codecs: Vec<String>,
+    /// 封面图：以附件形式写进输出，播放器会把它当成专辑封面显示。
+    ///
+    /// 用 `-attach` 而不是另开一路视频：mkv 里的封面就是附件，播放器按
+    /// attached_pic 识别，不会把它混进可切换的轨道里。
+    pub cover: Option<PathBuf>,
 }
 
 /// 后台任务回报给界面的事件。
@@ -83,18 +88,25 @@ impl MetadataJob {
         } else {
             Some(write_chapters_file(&request)?)
         };
-        let mut child = match build_command(&executable, &request, chapters_file.as_deref()).spawn()
-        {
-            Ok(child) => child,
-            Err(error) => {
-                // 进程都没起来，章节文件别留在临时目录里。
-                if let Some(path) = &chapters_file {
-                    let _ = std::fs::remove_file(path);
-                }
-                return Err(anyhow::Error::from(error))
-                    .with_context(|| format!("启动 ffmpeg 失败：{}", executable.display()));
-            }
+        // 只写了封面才需要数一遍原文件的附件：新封面的序号排在它们后面。
+        let attachments = match &request.cover {
+            Some(_) => attachment_count(&executable, &request.input),
+            None => 0,
         };
+        let mut child =
+            match build_command(&executable, &request, chapters_file.as_deref(), attachments)
+                .spawn()
+            {
+                Ok(child) => child,
+                Err(error) => {
+                    // 进程都没起来，章节文件别留在临时目录里。
+                    if let Some(path) = &chapters_file {
+                        let _ = std::fs::remove_file(path);
+                    }
+                    return Err(anyhow::Error::from(error))
+                        .with_context(|| format!("启动 ffmpeg 失败：{}", executable.display()));
+                }
+            };
 
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
@@ -288,6 +300,7 @@ fn build_command(
     executable: &Path,
     request: &MetadataRequest,
     chapters_file: Option<&Path>,
+    attachments: usize,
 ) -> Command {
     let mut command = Command::new(executable);
     command
@@ -339,6 +352,24 @@ fn build_command(
             .arg(format!("{key}={}", value.trim()));
     }
 
+    // 封面：ffmpeg 会把 `-attach` 的图片写成 attached_pic 轨，播放器按专辑封面处理。
+    // 现有的附件（ASS 字体之类）仍然由 `0:t?` 原样带过去。
+    //
+    // mkv 的附件必须带 mimetype，否则 muxer 直接报「has no mimetype tag」拒绝写头；
+    // 而 `-metadata:s:t:N` 里的 N 是输出里的附件序号，原文件已经有附件时新封面排在
+    // 它们后面，所以序号要由调用方先数出来。
+    if let Some(cover) = &request.cover {
+        command.arg("-attach").arg(cover);
+        command
+            .arg(format!("-metadata:s:t:{attachments}"))
+            .arg(format!("mimetype={}", cover_mime(cover)));
+        if let Some(name) = cover.file_name() {
+            command
+                .arg(format!("-metadata:s:t:{attachments}"))
+                .arg(format!("filename={}", name.to_string_lossy()));
+        }
+    }
+
     command
         .arg("-avoid_negative_ts")
         .arg("make_zero")
@@ -347,6 +378,46 @@ fn build_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     command
+}
+
+/// 原文件里有几条附件。
+///
+/// 用 `ffmpeg -i` 的 stderr 数，而不是 ffprobe：发布版只内嵌了 ffmpeg.exe，
+/// 多依赖一个可执行文件会让「解压后就能用」这条链断掉。`-i` 没有输出文件，
+/// 退出码是 1，这里只看输出、不看状态。
+fn attachment_count(executable: &Path, input: &Path) -> usize {
+    let Ok(output) = Command::new(executable)
+        .arg("-hide_banner")
+        .arg("-i")
+        .arg(input)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+    else {
+        return 0;
+    };
+    String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .filter(|line| line.contains(": Attachment:"))
+        .count()
+}
+
+/// 封面的 MIME 类型。mkv 的附件必须带 mimetype，推断不出来的扩展名按 jpeg 写。
+fn cover_mime(path: &Path) -> &'static str {
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "png" => "image/png",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "tif" | "tiff" => "image/tiff",
+        _ => "image/jpeg",
+    }
 }
 
 #[cfg(test)]
@@ -365,11 +436,13 @@ mod tests {
             },
             chapters,
             subtitle_codecs: vec!["mov_text".into()],
+            cover: None,
         }
     }
 
     fn args(request: &MetadataRequest, chapters: Option<&Path>) -> Vec<String> {
-        build_command(Path::new("ffmpeg"), request, chapters)
+        // 测试里的输入没有附件，新封面的序号就是 0。
+        build_command(Path::new("ffmpeg"), request, chapters, 0)
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect()
@@ -444,6 +517,27 @@ mod tests {
         assert!(has(&args, &["-metadata", "comment="]));
         assert!(has(&args, &["-c:s", "srt"]), "mov_text 要转成 srt");
         assert!(!has(&args, &["-i", "chapters.txt"]));
+    }
+
+    #[test]
+    fn 封面图作为附件写进输出() {
+        let mut with_cover = request(Vec::new());
+        with_cover.cover = Some(PathBuf::from("cover.jpg"));
+        let with_cover = args(&with_cover, None);
+        assert!(has(&with_cover, &["-attach", "cover.jpg"]));
+        // mkv 的附件必须带 mimetype，否则 muxer 拒绝写头。
+        assert!(has(
+            &with_cover,
+            &["-metadata:s:t:0", "mimetype=image/jpeg"]
+        ));
+        assert!(has(&with_cover, &["-metadata:s:t:0", "filename=cover.jpg"]));
+        // 现有的附件仍然原样带过去，封面只是多一条。
+        assert!(has(&with_cover, &["-map", "0:t?"]));
+        assert!(has(&with_cover, &["-c", "copy"]));
+
+        // 没设封面时不该凭空多一个附件。
+        let plain = args(&request(Vec::new()), None);
+        assert!(!plain.iter().any(|arg| arg == "-attach"));
     }
 
     #[test]

@@ -72,6 +72,7 @@ fn 重写章节与元数据() {
             },
         ],
         subtitle_codecs: Vec::new(),
+        cover: None,
     };
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
@@ -91,6 +92,61 @@ fn 重写章节与元数据() {
     }
     assert!(output.is_file(), "输出文件不存在");
     assert!(std::fs::metadata(&output).unwrap().len() > 0);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+#[ignore = "需要本机安装 ffmpeg"]
+fn 封面图写成附件() {
+    let ffmpeg = ngy_video_player::platform::ffmpeg::executable().expect("本机没有 ffmpeg");
+    let dir = std::env::temp_dir().join(format!("ngy-metadata-cover-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = sample(&ffmpeg, &dir);
+    let cover = dir.join("cover.jpg");
+    let generated = Command::new(&ffmpeg)
+        .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i"])
+        .arg("color=c=red:s=120x120:d=1")
+        .args(["-frames:v", "1"])
+        .arg(&cover)
+        .status()
+        .expect("生成封面失败");
+    assert!(generated.success());
+
+    let output = dir.join("cover-out.mkv");
+    let request = MetadataRequest {
+        input,
+        output: output.clone(),
+        duration: 6.0,
+        tags: Tags::default(),
+        chapters: Vec::new(),
+        subtitle_codecs: Vec::new(),
+        cover: Some(cover),
+    };
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let _job = MetadataJob::start(request, tx).expect("启动编辑失败");
+    let outcome = futures::executor::block_on(async {
+        while let Some(event) = rx.next().await {
+            if let MetadataEvent::Done(outcome) = event {
+                return outcome;
+            }
+        }
+        panic!("任务没有回报结果");
+    });
+    assert!(
+        matches!(outcome, MetadataOutcome::Finished(_)),
+        "编辑失败: {outcome:?}"
+    );
+
+    // ffmpeg 把 `-attach` 的图片写成 attached_pic 轨，播放器按专辑封面显示。
+    let info = Command::new(&ffmpeg)
+        .arg("-hide_banner")
+        .arg("-i")
+        .arg(&output)
+        .output()
+        .expect("读取流信息失败");
+    let text = String::from_utf8_lossy(&info.stderr);
+    assert!(text.contains("attached pic"), "封面没写进去：{text}");
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
