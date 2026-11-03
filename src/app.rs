@@ -287,9 +287,9 @@ pub struct PlayerApp {
     proxy: Option<ProxyDialog>,
     /// 代理任务代次，作用同 `clip_generation`。
     proxy_generation: u64,
-    /// 亮度直方图对话框；`None` 表示没打开。
+    /// 示波器对话框；`None` 表示没打开。
     scope: Option<ScopeDialog>,
-    /// 直方图采样代次，作用同 `clip_generation`。
+    /// 示波器采样代次，作用同 `clip_generation`。
     scope_generation: u64,
     /// 双机位导出对话框；`None` 表示没打开。
     multicam: Option<MulticamDialog>,
@@ -563,7 +563,7 @@ enum BarAction {
     EditMetadata,
     /// 生成代理文件。
     MakeProxy,
-    /// 查看当前帧的亮度直方图。
+    /// 查看当前帧的示波器（亮度直方图 / 波形 / 矢量）。
     ShowScope,
     /// 双机位并排导出。
     MulticamExport,

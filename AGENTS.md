@@ -61,6 +61,7 @@ src/playlist/scan.rs  目录扫描、自然序、m3u/pls 解析
 src/playlist/tree.rs  文件夹递归展开、折叠、拖放移动（DropSpot）
 src/playlist/sort.rs  逐层排序（名称/修改时间/添加时间）、最近 3 版顺序历史
 src/screenshot.rs 截图落点与文件名
+src/scope.rs     示波器：亮度直方图、波形图、矢量图的统计与位图
 src/settings.rs  偏好持久化
 src/logging.rs   终端 + 滚动日志文件
 src/platform/    ffmpeg.rs（裁切用的 ffmpeg：内嵌→exe 同目录→libs→PATH）、

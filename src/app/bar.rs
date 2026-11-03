@@ -134,7 +134,7 @@ impl PlayerApp {
                         .enabled(self.snapshot.has_video()),
                 ));
                 items.push(BarItem::Entry(
-                    BarEntry::new("亮度直方图…", ShowScope).enabled(self.snapshot.has_video()),
+                    BarEntry::new("示波器…", ShowScope).enabled(self.snapshot.has_video()),
                 ));
             }
             BarMenu::Subtitle => {
