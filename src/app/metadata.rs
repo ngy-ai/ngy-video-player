@@ -59,7 +59,7 @@ pub(super) struct MetadataDialog {
     chapters: Vec<ChapterRow>,
     /// 原文件内置字幕的编码名，保存时决定字幕是复制还是转码。
     subtitle_codecs: Vec<String>,
-    /// 封面图。`None` 表示不写封面。
+    /// 新选的封面图。`None` 表示沿用原文件的封面（原文件没有就不写）。
     cover: Option<PathBuf>,
     state: MetadataState,
     job: Option<Arc<MetadataJob>>,
@@ -646,7 +646,7 @@ impl PlayerApp {
                 .whitespace_normal()
                 .child(
                     "画面与音轨流复制到同目录的新 mkv，原文件不会被改动。\
-                     标签留空即删除；封面以附件写入，播放器会当成专辑封面显示。",
+                     标签留空即删除；不选封面就保留原封面，选了则把新图以附件写入。",
                 ),
         )
         .into_any_element()
@@ -656,7 +656,7 @@ impl PlayerApp {
     fn render_metadata_cover(&self, dialog: &MetadataDialog, cx: &mut Context<Self>) -> AnyElement {
         let (text, color) = match &dialog.cover {
             Some(path) => (file_name(path), text()),
-            None => ("不写封面".to_string(), text_faint()),
+            None => ("保持原样".to_string(), text_faint()),
         };
         div()
             .flex()
@@ -689,7 +689,7 @@ impl PlayerApp {
             .when(dialog.cover.is_some(), |this| {
                 this.child(settings_button(
                     "metadata-cover-clear",
-                    "移除",
+                    "撤销",
                     true,
                     cx.listener(|this, _: &ClickEvent, _window, cx| {
                         this.clear_metadata_cover(cx);

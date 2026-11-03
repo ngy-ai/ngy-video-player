@@ -54,7 +54,8 @@ pub struct MetadataRequest {
     /// 封面图：以附件形式写进输出，播放器会把它当成专辑封面显示。
     ///
     /// 用 `-attach` 而不是另开一路视频：mkv 里的封面就是附件，播放器按
-    /// attached_pic 识别，不会把它混进可切换的轨道里。
+    /// attached_pic 识别，不会把它混进可切换的轨道里。`None` 表示沿用原文件的
+    /// 封面（原文件没有就不写），避免「只改标题」把封面弄丢。
     pub cover: Option<PathBuf>,
 }
 
@@ -88,25 +89,45 @@ impl MetadataJob {
         } else {
             Some(write_chapters_file(&request)?)
         };
-        // 只写了封面才需要数一遍原文件的附件：新封面的序号排在它们后面。
-        let attachments = match &request.cover {
-            Some(_) => attachment_count(&executable, &request.input),
-            None => 0,
+        // 一次 `ffmpeg -i` 同时得到附件数与原封面：新封面的序号要排在原附件后面；
+        // 没有换封面时还得把原封面按附件写回去，否则「只改标题」也会把封面弄丢
+        // （`-map 0:V` 只带主视频，封面是独立的 attached_pic 流）。
+        let probe = probe_file(&executable, &request.input);
+        let extracted = if request.cover.is_none() {
+            probe
+                .cover
+                .as_ref()
+                .and_then(|cover| extract_cover(&executable, &request.input, cover))
+        } else {
+            None
         };
-        let mut child =
-            match build_command(&executable, &request, chapters_file.as_deref(), attachments)
-                .spawn()
-            {
-                Ok(child) => child,
-                Err(error) => {
-                    // 进程都没起来，章节文件别留在临时目录里。
-                    if let Some(path) = &chapters_file {
-                        let _ = std::fs::remove_file(path);
-                    }
-                    return Err(anyhow::Error::from(error))
-                        .with_context(|| format!("启动 ffmpeg 失败：{}", executable.display()));
+        let cover = request
+            .cover
+            .clone()
+            .or_else(|| extracted.as_ref().map(|cover| cover.file.clone()));
+
+        let mut child = match build_command(
+            &executable,
+            &request,
+            chapters_file.as_deref(),
+            probe.attachments,
+            cover.as_deref(),
+        )
+        .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => {
+                // 进程都没起来，临时文件别留在磁盘上。
+                if let Some(path) = &chapters_file {
+                    let _ = std::fs::remove_file(path);
                 }
-            };
+                if let Some(cover) = &extracted {
+                    cover.cleanup();
+                }
+                return Err(anyhow::Error::from(error))
+                    .with_context(|| format!("启动 ffmpeg 失败：{}", executable.display()));
+            }
+        };
 
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
@@ -138,9 +159,12 @@ impl MetadataJob {
             }
             let status = crate::platform::ffmpeg::wait_polling(&task_child);
             let cancelled = task_cancelled.load(Ordering::SeqCst);
-            // 章节文件只是这次任务的中间产物，成功失败都要清掉。
+            // 章节文件与提取出来的封面只是这次任务的中间产物，成功失败都要清掉。
             if let Some(path) = &chapters_file {
                 let _ = std::fs::remove_file(path);
+            }
+            if let Some(cover) = &extracted {
+                cover.cleanup();
             }
 
             let outcome = if cancelled {
@@ -296,11 +320,15 @@ fn read_progress(stdout: impl Read, total: f64, tx: &UnboundedSender<MetadataEve
 }
 
 /// 拼 ffmpeg 参数。
+///
+/// `cover` 与 `request.cover` 分开传：没换封面时它是从原文件里提取出来的那张图，
+/// 也要按附件写回去。
 fn build_command(
     executable: &Path,
     request: &MetadataRequest,
     chapters_file: Option<&Path>,
     attachments: usize,
+    cover: Option<&Path>,
 ) -> Command {
     let mut command = Command::new(executable);
     command
@@ -358,7 +386,7 @@ fn build_command(
     // mkv 的附件必须带 mimetype，否则 muxer 直接报「has no mimetype tag」拒绝写头；
     // 而 `-metadata:s:t:N` 里的 N 是输出里的附件序号，原文件已经有附件时新封面排在
     // 它们后面，所以序号要由调用方先数出来。
-    if let Some(cover) = &request.cover {
+    if let Some(cover) = cover {
         command.arg("-attach").arg(cover);
         command
             .arg(format!("-metadata:s:t:{attachments}"))
@@ -380,12 +408,27 @@ fn build_command(
     command
 }
 
-/// 原文件里有几条附件。
+/// 原文件的附件与封面。
 ///
 /// 用 `ffmpeg -i` 的 stderr 数，而不是 ffprobe：发布版只内嵌了 ffmpeg.exe，
 /// 多依赖一个可执行文件会让「解压后就能用」这条链断掉。`-i` 没有输出文件，
 /// 退出码是 1，这里只看输出、不看状态。
-fn attachment_count(executable: &Path, input: &Path) -> usize {
+#[derive(Default)]
+struct Probe {
+    /// 附件条数。新封面作为额外附件排在它们后面，`-metadata:s:t:N` 的 N 用它。
+    attachments: usize,
+    /// 原文件的封面。mkv 里的封面图附件会被 demux 成 attached_pic 视频流。
+    cover: Option<CoverSource>,
+}
+
+struct CoverSource {
+    /// 封面在该输入视频流里的序号，`-map 0:v:N` 用它单独取这一帧。
+    video_index: usize,
+    /// 提取时用的扩展名，写回附件时也按它推 mimetype。
+    extension: &'static str,
+}
+
+fn probe_file(executable: &Path, input: &Path) -> Probe {
     let Ok(output) = Command::new(executable)
         .arg("-hide_banner")
         .arg("-i")
@@ -395,12 +438,112 @@ fn attachment_count(executable: &Path, input: &Path) -> usize {
         .stderr(Stdio::piped())
         .output()
     else {
-        return 0;
+        return Probe::default();
     };
-    String::from_utf8_lossy(&output.stderr)
-        .lines()
-        .filter(|line| line.contains(": Attachment:"))
-        .count()
+    parse_probe(&String::from_utf8_lossy(&output.stderr))
+}
+
+/// 从 `ffmpeg -i` 的文本里读出附件条数与封面位置。
+fn parse_probe(text: &str) -> Probe {
+    let mut probe = Probe::default();
+    let mut video_index = 0;
+    for line in text.lines() {
+        if line.contains(": Attachment:") {
+            probe.attachments += 1;
+            continue;
+        }
+        if !line.contains(": Video:") {
+            continue;
+        }
+        // 封面自己也是一条视频流，序号要先记下来再往后数。
+        if probe.cover.is_none() && line.contains("(attached pic)") {
+            probe.cover = Some(CoverSource {
+                video_index,
+                extension: cover_extension(line),
+            });
+        }
+        video_index += 1;
+    }
+    probe
+}
+
+/// 从 `Stream #0:2: Video: mjpeg ...` 这样的行里取编码名，换成提取时用的扩展名。
+fn cover_extension(line: &str) -> &'static str {
+    let codec = line
+        .split_once(": Video:")
+        .map(|(_, rest)| rest.trim_start())
+        .unwrap_or_default();
+    let codec = codec
+        .split(|ch: char| ch == ',' || ch.is_whitespace())
+        .next()
+        .unwrap_or_default();
+    match codec {
+        "png" => "png",
+        "webp" => "webp",
+        "bmp" => "bmp",
+        "gif" => "gif",
+        _ => "jpg",
+    }
+}
+
+/// 从原文件里抠出来的封面，放在自己的临时目录里。
+struct ExtractedCover {
+    dir: PathBuf,
+    file: PathBuf,
+}
+
+impl ExtractedCover {
+    fn cleanup(&self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// 把封面那一帧原样提取成图片文件。
+///
+/// 不能直接把 attached_pic 流复制进输出：mkv muxer 写附件看的是流的 disposition
+/// 与 mimetype，流复制过去这两项对不上，封面会降级成一条普通视频轨。抠成文件再
+/// `-attach` 才是 ffmpeg 唯一稳妥的写法。提取失败就当作没有封面，不打断保存。
+fn extract_cover(executable: &Path, input: &Path, cover: &CoverSource) -> Option<ExtractedCover> {
+    let dir = temp_dir("ngy-cover")?;
+    let file = dir.join(format!("cover.{}", cover.extension));
+    let status = Command::new(executable)
+        .arg("-y")
+        .arg("-nostdin")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-i")
+        .arg(input)
+        .arg("-map")
+        .arg(format!("0:v:{}", cover.video_index))
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-c")
+        .arg("copy")
+        .arg("-f")
+        .arg("image2")
+        .arg("-update")
+        .arg("1")
+        .arg(&file)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    if matches!(status, Ok(status) if status.success()) && file.is_file() {
+        return Some(ExtractedCover { dir, file });
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    None
+}
+
+/// 临时目录：输出目录可能是只读的网络盘/相册目录，中间文件一律放系统临时目录。
+fn temp_dir(prefix: &str) -> Option<PathBuf> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
 }
 
 /// 封面的 MIME 类型。mkv 的附件必须带 mimetype，推断不出来的扩展名按 jpeg 写。
@@ -421,161 +564,4 @@ fn cover_mime(path: &Path) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn request(chapters: Vec<ChapterEdit>) -> MetadataRequest {
-        MetadataRequest {
-            input: PathBuf::from("movie.mp4"),
-            output: PathBuf::from("movie - 元数据.mkv"),
-            duration: 600.0,
-            tags: Tags {
-                title: "新标题".into(),
-                artist: "作者".into(),
-                comment: String::new(),
-            },
-            chapters,
-            subtitle_codecs: vec!["mov_text".into()],
-            cover: None,
-        }
-    }
-
-    fn args(request: &MetadataRequest, chapters: Option<&Path>) -> Vec<String> {
-        // 测试里的输入没有附件，新封面的序号就是 0。
-        build_command(Path::new("ffmpeg"), request, chapters, 0)
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect()
-    }
-
-    fn has(args: &[String], needle: &[&str]) -> bool {
-        args.windows(needle.len()).any(|slice| {
-            slice
-                .iter()
-                .zip(needle)
-                .all(|(arg, want)| arg.as_str() == *want)
-        })
-    }
-
-    #[test]
-    fn 章节按时间排序去重并补默认标题() {
-        let chapters = normalize_chapters(
-            vec![
-                ChapterEdit {
-                    title: "  ".into(),
-                    start: 30.0,
-                },
-                ChapterEdit {
-                    title: "开场".into(),
-                    start: 0.0,
-                },
-                ChapterEdit {
-                    title: "重复".into(),
-                    start: 30.05,
-                },
-                ChapterEdit {
-                    title: "越界".into(),
-                    start: 600.0,
-                },
-            ],
-            600.0,
-        );
-        assert_eq!(chapters.len(), 2);
-        assert_eq!(chapters[0].title, "开场");
-        assert_eq!(chapters[1].title, "章节 2");
-        assert_eq!(chapters[1].start, 30.0);
-    }
-
-    #[test]
-    fn 章节文本用毫秒并转义语法字符() {
-        let text = chapters_text(
-            &[
-                ChapterEdit {
-                    title: "a=b;c#d\\e".into(),
-                    start: 1.5,
-                },
-                ChapterEdit {
-                    title: "结尾".into(),
-                    start: 10.0,
-                },
-            ],
-            12.0,
-        );
-        assert!(text.starts_with(";FFMETADATA1\n"));
-        assert!(text.contains("START=1500\nEND=10000\n"));
-        assert!(text.contains("title=a\\=b\\;c\\#d\\\\e\n"));
-        // 最后一条的 END 取总时长，不能是 0。
-        assert!(text.contains("START=10000\nEND=12000\n"));
-    }
-
-    #[test]
-    fn 命令流复制并写入三项标签() {
-        let args = args(&request(Vec::new()), None);
-        assert!(has(&args, &["-c", "copy"]));
-        assert!(has(&args, &["-metadata", "title=新标题"]));
-        assert!(has(&args, &["-metadata", "artist=作者"]));
-        assert!(has(&args, &["-metadata", "comment="]));
-        assert!(has(&args, &["-c:s", "srt"]), "mov_text 要转成 srt");
-        assert!(!has(&args, &["-i", "chapters.txt"]));
-    }
-
-    #[test]
-    fn 封面图作为附件写进输出() {
-        let mut with_cover = request(Vec::new());
-        with_cover.cover = Some(PathBuf::from("cover.jpg"));
-        let with_cover = args(&with_cover, None);
-        assert!(has(&with_cover, &["-attach", "cover.jpg"]));
-        // mkv 的附件必须带 mimetype，否则 muxer 拒绝写头。
-        assert!(has(
-            &with_cover,
-            &["-metadata:s:t:0", "mimetype=image/jpeg"]
-        ));
-        assert!(has(&with_cover, &["-metadata:s:t:0", "filename=cover.jpg"]));
-        // 现有的附件仍然原样带过去，封面只是多一条。
-        assert!(has(&with_cover, &["-map", "0:t?"]));
-        assert!(has(&with_cover, &["-c", "copy"]));
-
-        // 没设封面时不该凭空多一个附件。
-        let plain = args(&request(Vec::new()), None);
-        assert!(!plain.iter().any(|arg| arg == "-attach"));
-    }
-
-    #[test]
-    fn 没有章节时移除原章节() {
-        let args = args(&request(Vec::new()), None);
-        assert!(has(&args, &["-map_chapters", "-1"]));
-    }
-
-    #[test]
-    fn 有章节时从第二个输入取章节() {
-        let chapters = PathBuf::from("chapters.txt");
-        let args = args(
-            &request(vec![ChapterEdit {
-                title: "一".into(),
-                start: 1.0,
-            }]),
-            Some(&chapters),
-        );
-        assert!(has(&args, &["-i", "chapters.txt"]));
-        assert!(has(&args, &["-map_chapters", "1"]));
-        // 章节输入不能被当成媒体流映射进输出。
-        assert!(!has(&args, &["-map", "1"]));
-    }
-
-    #[test]
-    fn 输出文件不覆盖已有文件() {
-        let dir = std::env::temp_dir().join(format!("ngy-metadata-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let input = dir.join("课程 01.mp4");
-        std::fs::write(&input, b"x").unwrap();
-
-        let first = output_path(&input);
-        assert_eq!(first, dir.join("课程 01 - 元数据.mkv"));
-        std::fs::write(&first, b"x").unwrap();
-
-        let second = output_path(&input);
-        assert_eq!(second, dir.join("课程 01 - 元数据 (2).mkv"));
-
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-}
+mod tests;
