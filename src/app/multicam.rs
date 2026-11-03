@@ -24,6 +24,8 @@ pub(super) struct MulticamDialog {
     right: Option<(PathBuf, f64)>,
     /// 右机位跳过开头的秒数。
     right_skip: f64,
+    /// 正在自动对齐（听两路音频算偏移）。
+    aligning: bool,
     state: MulticamState,
     /// 选文件 / 导出失败的原因，显示在按钮上方。
     message: Option<String>,
@@ -67,6 +69,7 @@ impl PlayerApp {
             left_duration: self.snapshot.duration,
             right: None,
             right_skip: 0.0,
+            aligning: false,
             state: MulticamState::Idle,
             message: None,
             job: None,
@@ -155,6 +158,63 @@ impl PlayerApp {
         let next = ((dialog.right_skip + delta) * 10.0).round() / 10.0;
         dialog.right_skip = next.clamp(0.0, 600.0);
         cx.notify();
+    }
+
+    /// 自动对齐：后台听两路开头的音频，把算出的偏移填进「跳过开头」。
+    ///
+    /// 两路各要解出 45 秒音频再做一次 FFT，放后台线程，界面只显示「正在对齐」。
+    fn start_multicam_align(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.multicam.as_mut() else {
+            return;
+        };
+        let Some((right, _)) = dialog.right.clone() else {
+            dialog.message = Some("先选第二个机位".to_string());
+            cx.notify();
+            return;
+        };
+        if dialog.aligning {
+            return;
+        }
+        dialog.aligning = true;
+        dialog.message = None;
+        let left = dialog.left.clone();
+        let generation = dialog.generation;
+        cx.notify();
+
+        let (tx, rx) = futures::channel::oneshot::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(multicam_core::sync::align(&left, &right));
+        });
+        cx.spawn(async move |this, cx| {
+            let result = rx.await.ok();
+            let _ = this.update(cx, |this, cx| {
+                let Some(dialog) = this.multicam.as_mut() else {
+                    return;
+                };
+                if dialog.generation != generation {
+                    return;
+                }
+                dialog.aligning = false;
+                match result {
+                    Some(Ok(alignment)) if alignment.skip >= 0.0 => {
+                        dialog.right_skip =
+                            ((alignment.skip * 10.0).round() / 10.0).clamp(0.0, 600.0);
+                        dialog.message = None;
+                    }
+                    // 负偏移意味着 B 机晚开：跳过开头这个参数表达不了，只能换顺序。
+                    Some(Ok(alignment)) => {
+                        dialog.message = Some(format!(
+                            "右机位比左机位晚开约 {:.1} 秒，把两个文件交换一下再对齐",
+                            alignment.skip.abs()
+                        ));
+                    }
+                    Some(Err(error)) => dialog.message = Some(format!("{error:#}")),
+                    None => dialog.message = Some("对齐线程提前退出".to_string()),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub(super) fn start_multicam(&mut self, cx: &mut Context<Self>) {
@@ -385,6 +445,30 @@ impl PlayerApp {
                                     this.nudge_multicam_skip(0.5, cx);
                                 }),
                             )),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(settings_button(
+                        "multicam-align",
+                        if dialog.aligning {
+                            "正在对齐…"
+                        } else {
+                            "自动对齐"
+                        },
+                        dialog.right.is_some() && !dialog.aligning,
+                        cx.listener(|this, _: &ClickEvent, _window, cx| {
+                            this.start_multicam_align(cx);
+                        }),
+                    ))
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(text_faint())
+                            .child("听两路开头的声音，自动算出要跳过的秒数"),
                     ),
             )
             .child(

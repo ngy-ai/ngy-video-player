@@ -49,6 +49,7 @@ src/clip.rs      裁切片段：时间解析、区间校验、ffmpeg 任务与�
 src/clip/export.rs  导出参数：无损剪切、编码、滤镜、响度、音频偏移、轨道保留
 src/clip/keyframe.rs  关键帧探测：流复制前把切点吸附到随机访问点
 src/metadata.rs  章节与元数据编辑：ffmetadata、流复制任务
+src/multicam.rs  双机位并排导出（sync 子模块：音频互相关自动对齐，依赖 rustfft）
 src/subtitle_codec.rs 字幕编码选择（轨道编辑与元数据编辑共用）
 src/convert.rs   格式转换：把当前文件或整个文件夹转成指定格式
 src/convert/format.rs  目标格式表：覆盖 formats 里所有能写出的容器（封装器 + 编码参数）

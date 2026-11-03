@@ -79,3 +79,45 @@ fn 两个不同尺寸与帧率的机位可以拼屏() {
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+#[ignore = "需要本机安装 ffmpeg"]
+fn 右机位早开一秒能被自动对齐算出来() {
+    let ffmpeg = ngy_video_player::platform::ffmpeg::executable().expect("本机没有 ffmpeg");
+    let dir = std::env::temp_dir().join(format!("ngy-multicam-sync-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // 用白噪声而不是正弦：正弦有周期性，相关峰会一排，噪声的峰才是唯一的那一个。
+    // 同一个 seed 保证两路拿到的是同一段声音。
+    let left = dir.join("left.wav");
+    let generated = Command::new(&ffmpeg)
+        .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i"])
+        .arg("anoisesrc=color=white:duration=6:amplitude=0.5:seed=7")
+        .arg(&left)
+        .status()
+        .expect("生成左机位音频失败");
+    assert!(generated.success());
+
+    // 右机位前面多一秒静音，相当于早开了一秒。
+    let right = dir.join("right.wav");
+    let generated = Command::new(&ffmpeg)
+        .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i"])
+        .arg("anullsrc=r=48000:cl=mono:d=1")
+        .args(["-f", "lavfi", "-i"])
+        .arg("anoisesrc=color=white:duration=6:amplitude=0.5:seed=7")
+        .args(["-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1"])
+        .arg(&right)
+        .status()
+        .expect("生成右机位音频失败");
+    assert!(generated.success());
+
+    let alignment = ngy_video_player::multicam::sync::align(&left, &right).expect("对齐失败");
+    assert!(
+        (alignment.skip - 1.0).abs() < 0.05,
+        "偏移不对：{}",
+        alignment.skip
+    );
+    assert!(alignment.confidence > 6.0);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}

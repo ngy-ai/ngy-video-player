@@ -53,6 +53,7 @@ futures = "0.3"
 # assets/icon.ico 转成桌面环境认识的 PNG，所以额外打开 ico/png 两个编解码器；
 # 其余解码器仍然不要。
 image = { version = "0.25", default-features = false, features = ["ico", "png"] }
+rustfft = "6.4.1"
 
 [target.'cfg(windows)'.build-dependencies]
 # 把 assets/icon.ico 嵌进 exe 资源段。
