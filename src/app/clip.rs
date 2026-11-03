@@ -236,6 +236,7 @@ impl PlayerApp {
         self.close_metadata_dialog(cx);
         self.close_proxy_dialog(cx);
         self.close_scope_dialog(cx);
+        self.close_scenes_dialog(cx);
         self.close_multicam_dialog(cx);
         // 转换面板与裁切抢同一条右侧通道，先让位（正在跑的任务一并取消）。
         self.dismiss_convert_panel();

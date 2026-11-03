@@ -169,6 +169,34 @@ pub(super) fn primary_button(
         .into_any_element()
 }
 
+/// 一组互斥选项里的一颗小按钮：选中项用强调色填充。
+///
+/// 示波器的视图切换、镜头分割的灵敏度档位共用：都是「点一下就换，同一时刻只有一颗亮」。
+pub(super) fn chip(
+    id: &'static str,
+    label: &'static str,
+    active: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    div()
+        .id(id)
+        .px(px(10.0))
+        .py(px(4.0))
+        .rounded(px(6.0))
+        .cursor(CursorStyle::PointingHand)
+        .text_size(px(11.0))
+        .bg(if active { ui::accent() } else { ui::track() })
+        .text_color(if active { bg() } else { text_muted() })
+        .child(label)
+        .on_click(
+            move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
+                cx.stop_propagation();
+                on_click(event, window, cx);
+            },
+        )
+        .into_any_element()
+}
+
 /// 模态对话框的统一外壳：全屏遮罩 + 固定宽度卡片 + 标题行。
 ///
 /// 遮罩必须吃掉点击与按下：这是模态面板叠在画面上，漏出去的话点空白处会顺手

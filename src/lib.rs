@@ -19,6 +19,7 @@ pub mod player;
 pub mod playlist;
 pub mod proxy;
 pub mod remux;
+pub mod scenes;
 pub mod scope;
 pub mod screenshot;
 pub mod settings;

@@ -74,6 +74,7 @@ impl PlayerApp {
         self.close_proxy_dialog(cx);
         self.close_clip_dialog(cx);
         self.close_multicam_dialog(cx);
+        self.close_scenes_dialog(cx);
         self.scope_generation += 1;
         self.scope = Some(ScopeDialog {
             generation: self.scope_generation,
@@ -279,21 +280,14 @@ fn view_chip(view: ScopeView, active: bool, cx: &mut Context<PlayerApp>) -> AnyE
         ScopeView::Waveform => "scope-view-waveform",
         ScopeView::Vectorscope => "scope-view-vectorscope",
     };
-    div()
-        .id(id)
-        .px(px(10.0))
-        .py(px(4.0))
-        .rounded(px(6.0))
-        .cursor(CursorStyle::PointingHand)
-        .text_size(px(11.0))
-        .bg(if active { ui::accent() } else { ui::track() })
-        .text_color(if active { bg() } else { text_muted() })
-        .child(view.label())
-        .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
-            cx.stop_propagation();
+    chip(
+        id,
+        view.label(),
+        active,
+        cx.listener(move |this, _: &ClickEvent, _window, cx| {
             this.set_scope_view(view, cx);
-        }))
-        .into_any_element()
+        }),
+    )
 }
 
 fn histogram(scope: &crate::scope::LumaScope) -> AnyElement {

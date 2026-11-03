@@ -98,6 +98,7 @@ mod playlist_ui;
 mod proxy;
 mod remux;
 mod render;
+mod scenes;
 mod scope;
 mod session;
 mod settings_panel;
@@ -116,6 +117,7 @@ use self::multicam::MulticamDialog;
 use self::playlist_menu::PanelMenu;
 use self::proxy::ProxyDialog;
 use self::remux::RemuxDialog;
+use self::scenes::ScenesDialog;
 use self::scope::ScopeDialog;
 use self::settings_panel::SettingsTab;
 use self::widgets::*;
@@ -291,6 +293,10 @@ pub struct PlayerApp {
     scope: Option<ScopeDialog>,
     /// 示波器采样代次，作用同 `clip_generation`。
     scope_generation: u64,
+    /// 镜头分割对话框；`None` 表示没打开。
+    scenes: Option<ScenesDialog>,
+    /// 镜头分割任务代次，作用同 `clip_generation`。
+    scenes_generation: u64,
     /// 双机位导出对话框；`None` 表示没打开。
     multicam: Option<MulticamDialog>,
     /// 双机位任务代次，作用同 `clip_generation`。
@@ -565,6 +571,8 @@ enum BarAction {
     MakeProxy,
     /// 查看当前帧的示波器（亮度直方图 / 波形 / 矢量）。
     ShowScope,
+    /// 检测整片的镜头切换点。
+    ShowScenes,
     /// 双机位并排导出。
     MulticamExport,
     /// 把当前播放列表拼成一个文件。

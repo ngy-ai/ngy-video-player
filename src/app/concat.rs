@@ -44,6 +44,7 @@ impl PlayerApp {
         self.close_metadata_dialog(cx);
         self.close_proxy_dialog(cx);
         self.close_scope_dialog(cx);
+        self.close_scenes_dialog(cx);
         self.close_multicam_dialog(cx);
         self.close_clip_dialog(cx);
 

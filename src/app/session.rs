@@ -58,6 +58,8 @@ impl PlayerApp {
             proxy_generation: 0,
             scope: None,
             scope_generation: 0,
+            scenes: None,
+            scenes_generation: 0,
             multicam: None,
             multicam_generation: 0,
             concat: None,

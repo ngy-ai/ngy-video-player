@@ -136,6 +136,10 @@ impl PlayerApp {
                 items.push(BarItem::Entry(
                     BarEntry::new("示波器…", ShowScope).enabled(self.snapshot.has_video()),
                 ));
+                items.push(BarItem::Entry(
+                    BarEntry::new("镜头分割…", ShowScenes)
+                        .enabled(self.file_editable() && self.snapshot.has_video()),
+                ));
             }
             BarMenu::Subtitle => {
                 items.push(BarItem::Entry(
@@ -330,6 +334,7 @@ impl PlayerApp {
             BarAction::EditMetadata => self.open_metadata_dialog(window, cx),
             BarAction::MakeProxy => self.open_proxy_dialog(cx),
             BarAction::ShowScope => self.open_scope_dialog(cx),
+            BarAction::ShowScenes => self.open_scenes_dialog(cx),
             BarAction::MulticamExport => self.open_multicam_dialog(cx),
             BarAction::ConcatExport => self.open_concat_dialog(cx),
             BarAction::SetAsDefaultPlayer => self.set_default_player(),

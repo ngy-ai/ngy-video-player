@@ -10,6 +10,7 @@ impl Render for PlayerApp {
         self.sync_metadata_source(cx);
         self.sync_proxy_source(cx);
         self.sync_scope_source(cx);
+        self.sync_scenes_source(cx);
         self.sync_multicam_source(cx);
         self.poll_clip_preview(cx);
         self.poll_ab_loop(cx);
@@ -137,6 +138,7 @@ impl Render for PlayerApp {
                     || this.on_metadata_key(event, cx)
                     || this.on_proxy_key(event, cx)
                     || this.on_scope_key(event, cx)
+                    || this.on_scenes_key(event, cx)
                     || this.on_multicam_key(event, cx)
                     || this.on_convert_key(event, cx)
                 {
@@ -279,6 +281,7 @@ impl Render for PlayerApp {
             .children(self.render_metadata_dialog(cx))
             .children(self.render_proxy_dialog(cx))
             .children(self.render_scope_dialog(cx))
+            .children(self.render_scenes_dialog(cx))
             .children(self.render_multicam_dialog(cx))
             .children(self.render_concat_dialog(cx))
             .children(self.render_file_info(cx))
