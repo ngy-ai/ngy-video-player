@@ -66,7 +66,7 @@ impl PlayerApp {
             IconName::FilePlus,
             self.panel_menu == Some(PanelMenu::Add),
             false,
-            Some("添加文件或文件夹"),
+            Some("添加文件或文件夹到当前列表"),
             cx.listener(|this, _: &ClickEvent, _window, cx| {
                 this.toggle_panel_menu(PanelMenu::Add, cx);
             }),
@@ -197,18 +197,22 @@ impl PlayerApp {
     }
 
     fn add_rows() -> Vec<PanelRow> {
-        [
-            ("添加文件…", PanelAction::AddFiles),
-            // 说明「含子文件夹」：不然用户会以为它和以前一样只收一层。
-            ("添加文件夹（含子文件夹）…", PanelAction::AddFolder),
-        ]
-        .into_iter()
-        .map(|(label, action)| PanelRow::Entry {
-            label: label.to_string(),
-            active: false,
-            action: Some(action),
-        })
-        .collect()
+        // 标题点明落点：「打开文件夹」会新建一页列表，这里的两个动作都只动当前页。
+        let mut rows = vec![PanelRow::Title("添加到当前列表")];
+        rows.extend(
+            [
+                ("添加文件…", PanelAction::AddFiles),
+                // 说明「含子文件夹」：不然用户会以为它和以前一样只收一层。
+                ("添加文件夹（含子文件夹）…", PanelAction::AddFolder),
+            ]
+            .into_iter()
+            .map(|(label, action)| PanelRow::Entry {
+                label: label.to_string(),
+                active: false,
+                action: Some(action),
+            }),
+        );
+        rows
     }
 
     fn sort_rows(&self) -> Vec<PanelRow> {

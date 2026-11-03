@@ -17,7 +17,12 @@ impl PlayerApp {
                 items.push(BarItem::Entry(
                     BarEntry::new("打开文件…", OpenFile).hint("O"),
                 ));
-                items.push(BarItem::Entry(BarEntry::new("打开文件夹…", OpenFolder)));
+                // 标出「新建列表」：面板里的「添加文件夹」是并进当前这一页，
+                // 两个入口长得像，靠这一句区分。
+                items.push(BarItem::Entry(BarEntry::new(
+                    "打开文件夹（新建列表）…",
+                    OpenFolder,
+                )));
                 items.push(BarItem::Separator);
                 // 没有片子、或者时长还没读出来时无从编辑。
                 items.push(BarItem::Entry(
