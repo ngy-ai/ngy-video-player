@@ -4,7 +4,9 @@
 //! `src/remux.rs` 的单测里，这里只验证「真能把轨道换进输出文件」。
 
 use futures::StreamExt as _;
-use ngy_video_player::remux::{RemuxEvent, RemuxJob, RemuxOutcome, RemuxRequest, TrackAction};
+use ngy_video_player::remux::{
+    RemuxEvent, RemuxJob, RemuxMode, RemuxOutcome, RemuxRequest, TrackAction,
+};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -42,6 +44,7 @@ fn 换音轨删音轨与内嵌字幕() {
 
     // 换音轨 + 内嵌字幕：输出应当只有一路视频、一路音频、一路字幕。
     let replaced = run(&RemuxRequest {
+        mode: RemuxMode::Edit,
         input: input.clone(),
         output: dir.join("both.mkv"),
         audio: TrackAction::Replace(music),
@@ -56,6 +59,7 @@ fn 换音轨删音轨与内嵌字幕() {
 
     // 删音轨：画面还在，音频没了。
     let muted = run(&RemuxRequest {
+        mode: RemuxMode::Edit,
         input: input.clone(),
         output: dir.join("muted.mkv"),
         audio: TrackAction::Remove,
@@ -69,6 +73,7 @@ fn 换音轨删音轨与内嵌字幕() {
 
     // 只内嵌字幕：原有的音轨按原样保留。
     let subtitled = run(&RemuxRequest {
+        mode: RemuxMode::Edit,
         input,
         output: dir.join("subbed.mkv"),
         audio: TrackAction::Keep,

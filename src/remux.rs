@@ -24,6 +24,39 @@ pub const OUTPUT_EXTENSION: &str = "mkv";
 /// 输出文件名里追加的后缀，用来和原文件、裁切结果区分开。
 const OUTPUT_SUFFIX: &str = "编辑";
 
+/// 只导出音轨时的容器。mka 是「去掉画面的 mkv」，任何音轨编码都能原样装进去，
+/// 换成 mp3/m4a 就得为 DTS、TrueHD、FLAC 找替代方案，反而会掉质量。
+pub const AUDIO_EXTENSION: &str = "mka";
+
+/// 只导出音轨时输出文件名里追加的后缀。
+const AUDIO_SUFFIX: &str = "音轨";
+
+/// 这次任务做什么。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RemuxMode {
+    /// 编辑轨道：画面流复制，音轨/字幕按 `TrackAction` 处置。
+    #[default]
+    Edit,
+    /// 只导出音轨：丢掉画面与字幕，音轨原样复制进 mka。
+    ExtractAudio,
+}
+
+impl RemuxMode {
+    pub fn output_extension(self) -> &'static str {
+        match self {
+            RemuxMode::Edit => OUTPUT_EXTENSION,
+            RemuxMode::ExtractAudio => AUDIO_EXTENSION,
+        }
+    }
+
+    fn suffix(self) -> &'static str {
+        match self {
+            RemuxMode::Edit => OUTPUT_SUFFIX,
+            RemuxMode::ExtractAudio => AUDIO_SUFFIX,
+        }
+    }
+}
+
 /// 某一路轨道在输出里的处置方式。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TrackAction {
@@ -44,6 +77,7 @@ impl TrackAction {
 /// 一次轨道编辑请求。
 #[derive(Clone, Debug)]
 pub struct RemuxRequest {
+    pub mode: RemuxMode,
     pub input: PathBuf,
     pub output: PathBuf,
     /// 音轨：保留 / 换成这个文件 / 删掉。
@@ -172,19 +206,20 @@ impl Drop for RemuxJob {
 /// 编辑结果的落点：与原文件同目录，名字加「 - 编辑」，已存在就往后编号。
 ///
 /// 不覆盖已有文件：编辑要复制整条视频流，一次手滑把同名文件盖掉就找不回来了。
-pub fn output_path(input: &Path) -> PathBuf {
+pub fn output_path(input: &Path, mode: RemuxMode) -> PathBuf {
     let dir = input.parent().unwrap_or_else(|| Path::new("."));
     let stem = input
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
         .filter(|stem| !stem.is_empty())
         .unwrap_or_else(|| "输出".to_string());
-    let base = format!("{stem} - {OUTPUT_SUFFIX}");
+    let base = format!("{stem} - {}", mode.suffix());
+    let extension = mode.output_extension();
 
-    let mut candidate = dir.join(format!("{base}.{OUTPUT_EXTENSION}"));
+    let mut candidate = dir.join(format!("{base}.{extension}"));
     let mut index = 2;
     while candidate.exists() {
-        candidate = dir.join(format!("{base} ({index}).{OUTPUT_EXTENSION}"));
+        candidate = dir.join(format!("{base} ({index}).{extension}"));
         index += 1;
         // 理论上不会走到这里；只是防止某个坏掉的目录让循环停不下来。
         if index > 999 {
@@ -253,9 +288,33 @@ fn build_command(executable: &Path, request: &RemuxRequest) -> Command {
         .arg("-loglevel")
         .arg("error")
         .arg("-progress")
-        .arg("pipe:1")
-        .arg("-i")
-        .arg(&request.input);
+        .arg("pipe:1");
+
+    // 只导出音轨走另一条完全不同的路：不需要任何轨道映射，只留第一路音频原样复制。
+    // `?` 让没有音轨的文件也走到「失败并给出原因」，而不是留下一句空的输出文件。
+    if request.mode == RemuxMode::ExtractAudio {
+        command
+            .arg("-i")
+            .arg(&request.input)
+            .arg("-vn")
+            .arg("-map")
+            .arg("0:a:0?")
+            .arg("-c:a")
+            .arg("copy")
+            .arg("-map_metadata")
+            .arg("0")
+            .arg("-map_chapters")
+            .arg("-1")
+            .arg("-avoid_negative_ts")
+            .arg("make_zero")
+            .arg(&request.output)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        return command;
+    }
+
+    command.arg("-i").arg(&request.input);
 
     let audio_input = match &request.audio {
         TrackAction::Replace(path) => {
@@ -351,10 +410,23 @@ mod tests {
 
     fn request(audio: TrackAction, subtitle: TrackAction) -> RemuxRequest {
         RemuxRequest {
+            mode: RemuxMode::Edit,
             input: PathBuf::from("movie.mkv"),
             output: PathBuf::from("movie - 编辑.mkv"),
             audio,
             subtitle,
+            duration: 600.0,
+            subtitle_codecs: Vec::new(),
+        }
+    }
+
+    fn extract() -> RemuxRequest {
+        RemuxRequest {
+            mode: RemuxMode::ExtractAudio,
+            input: PathBuf::from("movie.mkv"),
+            output: PathBuf::from("movie - 音轨.mka"),
+            audio: TrackAction::Keep,
+            subtitle: TrackAction::Remove,
             duration: 600.0,
             subtitle_codecs: Vec::new(),
         }
@@ -452,13 +524,32 @@ mod tests {
         let input = dir.join("课程 01.mp4");
         std::fs::write(&input, b"x").unwrap();
 
-        let first = output_path(&input);
+        let first = output_path(&input, RemuxMode::Edit);
         assert_eq!(first, dir.join("课程 01 - 编辑.mkv"));
         std::fs::write(&first, b"x").unwrap();
 
-        let second = output_path(&input);
+        let second = output_path(&input, RemuxMode::Edit);
         assert_eq!(second, dir.join("课程 01 - 编辑 (2).mkv"));
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn 只导出音轨时没有画面只有一路音频() {
+        let args = args(&extract());
+        assert!(has(&args, &["-vn"]));
+        assert!(has(&args, &["-map", "0:a:0?"]));
+        assert!(has(&args, &["-c:a", "copy"]));
+        assert!(!has(&args, &["-c:v", "copy"]), "不该再映射画面");
+        assert!(!has(&args, &["-map", "0:s?"]), "字幕不跟着导出");
+        assert!(has(&args, &["-map_chapters", "-1"]), "音轨文件不挂章节");
+        assert!(args.iter().any(|arg| arg.ends_with(" - 音轨.mka")));
+    }
+
+    #[test]
+    fn 只导出音轨的落点是_mka() {
+        let input = PathBuf::from("sample.mp4");
+        let output = output_path(&input, RemuxMode::ExtractAudio);
+        assert_eq!(output, PathBuf::from("sample - 音轨.mka"));
     }
 }

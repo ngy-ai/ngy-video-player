@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::remux::{
-    self as remux_core, RemuxEvent, RemuxJob, RemuxOutcome, RemuxRequest, TrackAction,
+    self as remux_core, RemuxEvent, RemuxJob, RemuxMode, RemuxOutcome, RemuxRequest, TrackAction,
 };
 use std::path::Path;
 
@@ -237,12 +237,46 @@ impl PlayerApp {
 
         let (audio, subtitle) = dialog.actions();
         let request = RemuxRequest {
-            output: remux_core::output_path(&dialog.path),
+            mode: RemuxMode::Edit,
+            output: remux_core::output_path(&dialog.path, RemuxMode::Edit),
             input: dialog.path.clone(),
             audio,
             subtitle,
             duration: dialog.duration,
             subtitle_codecs: dialog.subtitle_codecs.clone(),
+        };
+        self.launch_remux(request, cx);
+    }
+
+    /// 只导出音轨：不碰画面，第一路音频原样复制。没有内置音轨时按钮是禁用的，
+    /// 这里再挡一次，别起一个注定失败的 ffmpeg。
+    fn extract_audio(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self
+            .remux
+            .as_ref()
+            .filter(|dialog| dialog.editing() && dialog.target == EditTarget::Audio)
+        else {
+            return;
+        };
+        if dialog.builtin.is_empty() {
+            return;
+        }
+        let request = RemuxRequest {
+            mode: RemuxMode::ExtractAudio,
+            output: remux_core::output_path(&dialog.path, RemuxMode::ExtractAudio),
+            input: dialog.path.clone(),
+            audio: TrackAction::Keep,
+            subtitle: TrackAction::Remove,
+            duration: dialog.duration,
+            subtitle_codecs: Vec::new(),
+        };
+        self.launch_remux(request, cx);
+    }
+
+    /// 起后台任务并接管事件。编辑轨道与只导出音轨共用这一套状态机。
+    fn launch_remux(&mut self, request: RemuxRequest, cx: &mut Context<Self>) {
+        let Some(dialog) = self.remux.as_mut() else {
+            return;
         };
         let (tx, mut rx) = futures::channel::mpsc::unbounded();
         match RemuxJob::start(request, tx) {
@@ -476,6 +510,30 @@ impl PlayerApp {
                         this.child(settings_button("remux-keep", keep_label, true, keep))
                     }),
             )
+            // 「只导出音轨」是另一件事：不编辑轨道，而是把第一路音频原样复制成 mka。
+            // 摆在同一个对话框里，是因为用户想的都是「这条音轨要怎么办」。
+            .when(dialog.target == EditTarget::Audio, |this| {
+                this.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(settings_button(
+                            "remux-extract-audio",
+                            "只导出音轨",
+                            !dialog.builtin.is_empty(),
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.extract_audio(cx);
+                            }),
+                        ))
+                        .child(
+                            div()
+                                .text_size(px(10.0))
+                                .text_color(text_faint())
+                                .child("原样复制第一路音频，输出同目录 mka"),
+                        ),
+                )
+            })
             .into_any_element()
     }
 
