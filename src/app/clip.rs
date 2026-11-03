@@ -49,6 +49,10 @@ pub(super) struct ClipDialog {
     aligned: Option<f64>,
     /// 导出参数：剪切方式、编码、滤镜与轨道保留。
     options: clip_core::ExportOptions,
+    /// 可烧录的内置文本字幕轨；`None` 表示这个文件没有能烧的字幕。
+    subtitle: Option<clip_core::BurnSubtitle>,
+    /// 是否把那条字幕烧进画面。
+    burn_subtitle: bool,
     /// 正在预览片段时的终点与开始时刻（秒）。
     ///
     /// 记下开始时刻是为了躲开 seek 的延迟：刚跳到起点时位置事件可能还是旧的
@@ -57,7 +61,12 @@ pub(super) struct ClipDialog {
 }
 
 impl ClipDialog {
-    fn new(generation: u64, path: PathBuf, duration: f64) -> Self {
+    fn new(
+        generation: u64,
+        path: PathBuf,
+        duration: f64,
+        subtitle: Option<clip_core::BurnSubtitle>,
+    ) -> Self {
         Self {
             generation,
             path,
@@ -69,6 +78,10 @@ impl ClipDialog {
             job: None,
             aligned: None,
             options: clip_core::ExportOptions::default(),
+            subtitle,
+            // 有字幕不代表用户想烧：默认仍然只是复制软字幕，多一条无意的硬字幕
+            // 是不可逆的。
+            burn_subtitle: false,
             preview: None,
         }
     }
@@ -119,8 +132,14 @@ impl PlayerApp {
         self.close_multicam_dialog(cx);
         // 转换面板与裁切抢同一条右侧通道，先让位（正在跑的任务一并取消）。
         self.dismiss_convert_panel();
+        let subtitle = burnable_subtitle(&self.snapshot);
         self.clip_generation += 1;
-        self.clip = Some(ClipDialog::new(self.clip_generation, path, duration));
+        self.clip = Some(ClipDialog::new(
+            self.clip_generation,
+            path,
+            duration,
+            subtitle,
+        ));
         // 播放列表与裁切面板抢同一条右侧通道，先让位。
         self.set_playlist_visible(false);
         self.menu = None;
@@ -333,11 +352,19 @@ impl PlayerApp {
             }
             clip_core::OutputFormat::Mkv => {}
         }
+        let burn = if dialog.burn_subtitle {
+            dialog.subtitle.clone()
+        } else {
+            None
+        };
         let request = ClipRequest {
             output: clip_core::output_path(&dialog.path, options.format),
             input: dialog.path.clone(),
             range,
             options,
+            burn,
+            // 两遍响度的第一遍由任务自己跑，界面只表达「要不要两遍」。
+            loudness: None,
         };
         let (tx, mut rx) = futures::channel::mpsc::unbounded();
         match ClipJob::start(request, tx) {
@@ -429,6 +456,51 @@ impl PlayerApp {
         };
         dialog.field.take().is_some()
     }
+
+    /// 切换「烧录内置字幕」。
+    pub(super) fn toggle_clip_burn(&mut self, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.clip.as_mut() {
+            dialog.burn_subtitle ^= true;
+            cx.notify();
+        }
+    }
+}
+
+/// 找出文件里第一条能烧录的文本字幕。
+///
+/// mpv 的轨道 id 不是 ffmpeg 的流序号，但容器内字幕流的先后与 mpv 列出的顺序一致，
+/// 所以按「外挂字幕之外的第几条」换算成 `-map 0:s:N`。
+fn burnable_subtitle(snapshot: &Snapshot) -> Option<clip_core::BurnSubtitle> {
+    snapshot
+        .track(crate::player::TrackKind::Subtitle)
+        .into_iter()
+        .filter(|track| !track.external)
+        .enumerate()
+        .find(|(_, track)| is_text_subtitle(&track.codec))
+        .map(|(stream, track)| clip_core::BurnSubtitle {
+            stream,
+            name: track.display_name(),
+        })
+}
+
+/// 文本字幕才能烧。点阵字幕（PGS / VobSub / dvb_subtitle）是图片，没有文本可画，
+/// 硬要烧只会得到一张空白画面。
+fn is_text_subtitle(codec: &str) -> bool {
+    matches!(
+        codec.to_ascii_lowercase().as_str(),
+        "subrip"
+            | "srt"
+            | "ass"
+            | "ssa"
+            | "webvtt"
+            | "mov_text"
+            | "text"
+            | "microdvd"
+            | "subviewer"
+            | "sami"
+            | "realtext"
+            | "stl"
+    )
 }
 
 mod audio_options;

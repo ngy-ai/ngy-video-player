@@ -13,18 +13,20 @@ use futures::channel::mpsc::UnboundedSender;
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::Child;
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 mod encoder;
 mod export;
 mod keyframe;
+mod loudness;
 
 pub use export::{
     Crop, Edge, EncoderMode, ExportMode, ExportOptions, KeyframeAlign, OutputFormat, Pad,
     PixelFormat, Quality, Rotate, Scale, VideoCodec, VideoTransform,
 };
+pub use loudness::Loudness;
 
 /// 两端时间输入框允许的最短区间。低于这个值的请求基本是误操作，也让进度条失去意义。
 const MIN_DURATION: f64 = 0.05;
@@ -218,6 +220,18 @@ pub fn output_path(input: &Path, format: OutputFormat) -> PathBuf {
     candidate
 }
 
+/// 要烧进画面的内置字幕轨。
+///
+/// 只有文本字幕能烧：点阵字幕（PGS / VobSub）是图片，`subtitles` 滤镜没有文本
+/// 可画，只能继续作为软字幕保留。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BurnSubtitle {
+    /// 容器里的第几条字幕流，对应 `-map 0:s:N`。
+    pub stream: usize,
+    /// 给界面显示的轨道名。
+    pub name: String,
+}
+
 /// 一次裁切请求。
 #[derive(Clone, Debug)]
 pub struct ClipRequest {
@@ -225,6 +239,11 @@ pub struct ClipRequest {
     pub output: PathBuf,
     pub range: ClipRange,
     pub options: ExportOptions,
+    /// 烧录哪一条内置字幕；`None` 表示不烧。
+    pub burn: Option<BurnSubtitle>,
+    /// 两遍响度的第一遍结果。界面不填，任务在启动时测出来写进去；
+    /// `None` 表示走单遍 loudnorm。
+    pub loudness: Option<Loudness>,
 }
 
 /// 后台任务回报给界面的事件。
@@ -333,8 +352,22 @@ impl ClipJob {
         let encoder = encoder::pick(request.options.codec, request.options.encoder_mode)
             .map_err(anyhow::Error::msg)?;
         // 流复制只能在关键帧上起步，探测放在拼命令之前。
-        let (request, aligned) = align_to_keyframe(&executable, request);
-        let mut child = export::build_command(&executable, &request, encoder)
+        let (mut request, aligned) = align_to_keyframe(&executable, request);
+        // 两遍响度：先空跑一遍量出整段的响度。测量失败就退回单遍——多花的时间
+        // 已经花了，不该因为「量不准」让整单导出失败。
+        if request.options.wants_two_pass_loudness() {
+            match measure_loudness(&executable, &request) {
+                Ok(loudness) => request.loudness = Some(loudness),
+                Err(error) => log_warn!("响度测量失败，退回单遍标准化：{error:#}"),
+            }
+        }
+        // 烧录要先把那条字幕抽成独立的 ass：`subtitles` 滤镜只认文件路径，
+        // 读不到容器里的流。抽不出来的话整单没法做，直接返回错误让界面显示原因。
+        let burn = match &request.burn {
+            Some(subtitle) => Some(extract_subtitle(&executable, &request.input, subtitle)?),
+            None => None,
+        };
+        let mut child = export::build_command(&executable, &request, encoder, burn.as_deref())
             .spawn()
             .with_context(|| format!("启动 ffmpeg 失败：{}", executable.display()))?;
 
@@ -363,6 +396,7 @@ impl ClipJob {
         let task_cancelled = cancelled.clone();
         let output = request.output.clone();
         let total = request.range.duration();
+        let task_burn = burn;
         std::thread::spawn(move || {
             if let Some(stdout) = stdout {
                 read_progress(stdout, total, &tx);
@@ -397,6 +431,10 @@ impl ClipJob {
                     None => ClipOutcome::Failed("ffmpeg 进程已经结束".to_string()),
                 }
             };
+            // 临时字幕文件是这次任务的中间产物：ffmpeg 已经退出，留着只会占地方。
+            if let Some(path) = &task_burn {
+                let _ = std::fs::remove_file(path);
+            }
             let _ = tx.unbounded_send(ClipEvent::Done(outcome));
         });
 
@@ -421,6 +459,88 @@ impl Drop for ClipJob {
         // 关窗口退出时不能把 ffmpeg 留在后台继续写文件。
         self.cancel();
     }
+}
+
+/// 两遍响度的第一遍：只解码音频，让 loudnorm 把测量值打到 stderr 上。
+///
+/// 用 `-f null -` 丢弃输出，除了解码没有别的开销；没有音轨时会失败，调用方退回单遍。
+fn measure_loudness(executable: &Path, request: &ClipRequest) -> Result<Loudness> {
+    let output = Command::new(executable)
+        .arg("-hide_banner")
+        .arg("-nostdin")
+        .arg("-nostats")
+        // loudnorm 的统计走 info 级别的日志；压到 error 就什么都拿不到了。
+        .arg("-loglevel")
+        .arg("info")
+        .arg("-ss")
+        .arg(format!("{:.3}", request.range.start))
+        .arg("-i")
+        .arg(&request.input)
+        .arg("-t")
+        .arg(format!("{:.3}", request.range.duration()))
+        .arg("-vn")
+        .arg("-sn")
+        .arg("-dn")
+        .arg("-af")
+        .arg(format!("loudnorm={}", loudness::TARGETS))
+        .arg("-f")
+        .arg("null")
+        .arg("-")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| format!("启动 ffmpeg 测量响度失败：{}", executable.display()))?;
+    let text = String::from_utf8_lossy(&output.stderr);
+    loudness::parse(&text).ok_or_else(|| anyhow::Error::msg("ffmpeg 没有输出响度统计"))
+}
+
+/// 把容器里的第 `stream` 条字幕抽成临时 ass 文件。
+///
+/// 统一转 ass：它是文本字幕里表达力最强的格式，srt 那点样式转过去不会丢；
+/// 反过来 ass 转 srt 会丢掉定位与字体信息。
+fn extract_subtitle(executable: &Path, input: &Path, subtitle: &BurnSubtitle) -> Result<PathBuf> {
+    let path = std::env::temp_dir().join(format!(
+        "ngy-burn-{}-{}.ass",
+        std::process::id(),
+        subtitle.stream
+    ));
+    let output = Command::new(executable)
+        .arg("-hide_banner")
+        .arg("-nostdin")
+        .arg("-y")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-i")
+        .arg(input)
+        .arg("-map")
+        .arg(format!("0:s:{}", subtitle.stream))
+        .arg("-c:s")
+        .arg("ass")
+        .arg("-f")
+        .arg("ass")
+        .arg(&path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| format!("启动 ffmpeg 抽取字幕失败：{}", executable.display()))?;
+    if output.status.success() {
+        return Ok(path);
+    }
+    let detail = String::from_utf8_lossy(&output.stderr);
+    let detail = detail.trim();
+    // 点阵字幕走到这里：ffmpeg 会说「无法把 pgs 转成 ass」。这句话对用户太抽象，
+    // 所以前半句先把可能的原因说清楚。
+    let mut message = format!(
+        "抽取「{}」失败：这条轨道可能不是文本字幕，点阵字幕（PGS/VobSub）只能保留为软字幕",
+        subtitle.name
+    );
+    if !detail.is_empty() {
+        message.push('\n');
+        message.push_str(detail);
+    }
+    Err(anyhow::Error::msg(message))
 }
 
 /// 从 `-progress pipe:1` 的输出里读进度。

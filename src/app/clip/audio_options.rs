@@ -91,6 +91,23 @@ impl PlayerApp {
                     },
                     cx,
                 ))
+                // 两遍扫描只在开了标准化之后才有意义：单独摆一行会让人以为它
+                // 自己就能调音量。
+                .when(options.normalize_audio, |this| {
+                    this.child(toggle_row(
+                        "clip-option-loudnorm-two-pass",
+                        "两遍扫描（不压动态）",
+                        options.two_pass_loudness,
+                        |this, cx| {
+                            this.update_clip_options(
+                                |options| options.two_pass_loudness ^= true,
+                                cx,
+                            );
+                        },
+                        cx,
+                    ))
+                    .child(note("先量一遍整段再统一增益；多解一遍音频，长片会慢一些"))
+                })
                 .child(toggle_row(
                     "clip-option-sync-audio",
                     "音频漂移校正（长录制）",

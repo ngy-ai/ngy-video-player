@@ -6,7 +6,7 @@
 //! 音频那一段在 `audio_options.rs`：那边的控件是步进器，这里的是一排小按钮。
 
 use super::widgets::{
-    chip_row, note, option_chip, section_title, static_id, stepper_button, toggle_row,
+    chip_row, note, note_owned, option_chip, section_title, static_id, stepper_button, toggle_row,
 };
 use super::*;
 use crate::clip::{
@@ -315,9 +315,26 @@ impl PlayerApp {
             ));
         }
 
-        if options.format == OutputFormat::Mkv {
+        // 烧录只对文本字幕有意义；这个文件没有可烧的轨道时，这一行不出现。
+        if let Some(subtitle) = &dialog.subtitle {
             body = body
                 .child(toggle_row(
+                    "clip-option-burn-subtitle",
+                    "烧录内置字幕（硬字幕）",
+                    dialog.burn_subtitle,
+                    |this, cx| this.toggle_clip_burn(cx),
+                    cx,
+                ))
+                .child(note_owned(format!(
+                    "把「{}」画进画面，烧进去就再也关不掉；原字幕轨不再复制",
+                    subtitle.name
+                )));
+        }
+
+        if options.format == OutputFormat::Mkv {
+            // 烧录之后软字幕不再复制，这个开关留着只会让人以为还能同时保留两份。
+            if !dialog.burn_subtitle {
+                body = body.child(toggle_row(
                     "clip-option-subtitles",
                     "保留字幕",
                     options.keep_subtitles,
@@ -325,16 +342,17 @@ impl PlayerApp {
                         this.update_clip_options(|options| options.keep_subtitles ^= true, cx);
                     },
                     cx,
-                ))
-                .child(toggle_row(
-                    "clip-option-chapters",
-                    "章节与元数据",
-                    options.keep_chapters,
-                    |this, cx| {
-                        this.update_clip_options(|options| options.keep_chapters ^= true, cx);
-                    },
-                    cx,
                 ));
+            }
+            body = body.child(toggle_row(
+                "clip-option-chapters",
+                "章节与元数据",
+                options.keep_chapters,
+                |this, cx| {
+                    this.update_clip_options(|options| options.keep_chapters ^= true, cx);
+                },
+                cx,
+            ));
         } else if gif {
             body = body.child(note("GIF 只包含画面：没有声音，也没有字幕与章节。"));
         } else {

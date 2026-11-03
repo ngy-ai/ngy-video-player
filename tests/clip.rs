@@ -72,6 +72,98 @@ fn assert_output(output: &Path) {
     assert!(std::fs::metadata(output).unwrap().len() > 0);
 }
 
+/// 生成一段带一条 srt 字幕轨的视频，用来验证烧录。
+fn sample_with_subtitle(ffmpeg: &Path, dir: &Path) -> PathBuf {
+    let subtitle = dir.join("sub.srt");
+    std::fs::write(
+        &subtitle,
+        "1\n00:00:00,500 --> 00:00:02,000\n你好\n\n2\n00:00:02,000 --> 00:00:03,500\n世界\n",
+    )
+    .unwrap();
+    let input = dir.join("in-sub.mkv");
+    let status = Command::new(ffmpeg)
+        .args([
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=160x120:rate=25:duration=4",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=4",
+        ])
+        .arg("-i")
+        .arg(&subtitle)
+        .args([
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+            "-map",
+            "2:s",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            "-c:s",
+            "srt",
+            "-shortest",
+        ])
+        .arg(&input)
+        .status()
+        .expect("生成带字幕的测试视频失败");
+    assert!(status.success());
+    input
+}
+
+#[test]
+#[ignore = "需要本机安装 ffmpeg"]
+fn 烧录内置字幕() {
+    let ffmpeg = ngy_video_player::platform::ffmpeg::executable().expect("本机没有 ffmpeg");
+    let dir = std::env::temp_dir().join(format!("ngy-clip-burn-e2e-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = sample_with_subtitle(&ffmpeg, &dir);
+
+    let output = dir.join("burned.mkv");
+    let request = ClipRequest {
+        input,
+        output: output.clone(),
+        range: ClipRange {
+            start: 0.5,
+            end: 3.0,
+        },
+        options: ExportOptions::default(),
+        burn: Some(ngy_video_player::clip::BurnSubtitle {
+            stream: 0,
+            name: "SRT".to_string(),
+        }),
+        loudness: None,
+    };
+    let (outcome, _progress) = run(request);
+
+    match outcome {
+        ClipOutcome::Finished(path) => assert_eq!(path, output),
+        other => panic!("烧录字幕失败: {other:?}"),
+    }
+    assert_output(&output);
+    // 烧录之后容器里不该再有字幕流。
+    let streams = Command::new(&ffmpeg)
+        .args(["-hide_banner", "-i"])
+        .arg(&output)
+        .output()
+        .expect("探测输出文件失败");
+    let probe = String::from_utf8_lossy(&streams.stderr).into_owned();
+    assert!(
+        !probe.contains("Subtitle:"),
+        "字幕应当已经烧进画面：{probe}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 #[ignore = "需要本机安装 ffmpeg"]
 fn 裁切一段真实视频() {
@@ -89,6 +181,8 @@ fn 裁切一段真实视频() {
             end: 3.0,
         },
         options: ExportOptions::default(),
+        burn: None,
+        loudness: None,
     };
     let (outcome, progress) = run(request);
 
@@ -135,6 +229,8 @@ fn 滤镜与响度处理能被_ffmpeg_接受() {
             audio_offset: 0.2,
             ..ExportOptions::default()
         },
+        burn: None,
+        loudness: None,
     };
     let (outcome, _progress) = run(request);
 
@@ -167,6 +263,8 @@ fn 导出_hls_切片() {
             format: OutputFormat::Hls,
             ..ExportOptions::default()
         },
+        burn: None,
+        loudness: None,
     };
     let (outcome, _progress) = run(request);
 
@@ -205,6 +303,8 @@ fn 无损流复制一段真实视频() {
             mode: ExportMode::Copy,
             ..ExportOptions::default()
         },
+        burn: None,
+        loudness: None,
     };
     let (outcome, _progress) = run(request);
 

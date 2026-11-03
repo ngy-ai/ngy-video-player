@@ -18,6 +18,15 @@ pub(super) fn section_title(label: &'static str) -> AnyElement {
 
 /// 标题下面那行灰色说明。
 pub(super) fn note(text: &'static str) -> AnyElement {
+    note_text(text.to_string())
+}
+
+/// 内容要拼出来的说明（比如带上轨道名）。
+pub(super) fn note_owned(text: String) -> AnyElement {
+    note_text(text)
+}
+
+fn note_text(text: String) -> AnyElement {
     div()
         .text_size(px(10.0))
         .text_color(text_faint())

@@ -1,6 +1,6 @@
 use super::*;
 use crate::clip::ClipRange;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn request(options: ExportOptions) -> ClipRequest {
     ClipRequest {
@@ -11,12 +11,19 @@ fn request(options: ExportOptions) -> ClipRequest {
             end: 25.0,
         },
         options,
+        burn: None,
+        loudness: None,
     }
 }
 
 fn args(options: ExportOptions) -> Vec<String> {
+    command_args(options, None)
+}
+
+/// 带上「已经抽好的字幕文件」拼参数，验证烧录那一路。
+fn command_args(options: ExportOptions, burn: Option<&Path>) -> Vec<String> {
     let encoder = options.codec.software();
-    build_command(Path::new("ffmpeg"), &request(options), encoder)
+    build_command(Path::new("ffmpeg"), &request(options), encoder, burn)
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect()
@@ -67,6 +74,7 @@ fn 硬件编码器始终写死_8bit() {
         Path::new("ffmpeg"),
         &request(ExportOptions::default()),
         "h264_nvenc",
+        None,
     )
     .get_args()
     .map(|arg| arg.to_string_lossy().into_owned())
@@ -422,6 +430,83 @@ fn 采样率与声道只在重编码音频时写入() {
     let copied = args(copy);
     assert!(!copied.iter().any(|arg| arg == "-ar"));
     assert!(!copied.iter().any(|arg| arg == "-ac"));
+}
+
+#[test]
+fn 烧录字幕时不再复制软字幕() {
+    let subtitle = Path::new("C:/Users/me/字幕.ass");
+    let args = command_args(ExportOptions::default(), Some(subtitle));
+    assert!(!has(&args, &["-map", "0:s?"]), "烧录后不该再映射软字幕");
+    assert!(!args.iter().any(|arg| arg == "-c:s"));
+
+    let index = args.iter().position(|arg| arg == "-vf").expect("要有滤镜");
+    let filters = &args[index + 1];
+    // 盘符冒号必须转义，否则 ffmpeg 会把它当成滤镜参数的冒号分隔符。
+    assert!(
+        filters.contains("subtitles=filename='C\\:/Users/me/字幕.ass'"),
+        "{filters}"
+    );
+}
+
+#[test]
+fn 烧录字幕排在画面处理之后_gif_调色板之前() {
+    let options = ExportOptions {
+        format: OutputFormat::Gif,
+        sharpen: true,
+        ..ExportOptions::default()
+    };
+    let args = command_args(options, Some(Path::new("/tmp/a.ass")));
+    let index = args.iter().position(|arg| arg == "-vf").expect("要有滤镜");
+    let filters = &args[index + 1];
+    let sharpen = filters.find("unsharp").unwrap();
+    let subtitles = filters.find("subtitles=").unwrap();
+    let palette = filters.find("palettegen").unwrap();
+    assert!(sharpen < subtitles, "字幕画在最终画面上：{filters}");
+    assert!(subtitles < palette, "调色板必须排在最后：{filters}");
+}
+
+#[test]
+fn 两遍响度把测量值喂回滤镜() {
+    let options = ExportOptions {
+        normalize_audio: true,
+        two_pass_loudness: true,
+        ..ExportOptions::default()
+    };
+    let loudness = Loudness {
+        input_i: -23.06,
+        input_tp: -6.02,
+        input_lra: 7.2,
+        input_thresh: -33.1,
+        target_offset: 0.01,
+    };
+    let filters = options.audio_filters_with(Some(&loudness)).unwrap();
+    assert!(filters.contains("measured_I=-23.06"), "{filters}");
+    assert!(filters.contains("offset=0.01"), "{filters}");
+    assert!(filters.contains("linear=true"), "{filters}");
+
+    // 第一遍没跑成时退回单遍，不能拼出半截参数。
+    assert_eq!(
+        options.audio_filters().as_deref(),
+        Some("loudnorm=I=-16:TP=-1.5:LRA=11")
+    );
+}
+
+#[test]
+fn 两遍响度只在真重编码音频时才做() {
+    let copied = ExportOptions {
+        normalize_audio: true,
+        two_pass_loudness: true,
+        audio_copy: true,
+        ..ExportOptions::default()
+    };
+    assert!(!copied.wants_two_pass_loudness(), "复制码流不解码音频");
+
+    let off = ExportOptions {
+        normalize_audio: false,
+        two_pass_loudness: true,
+        ..ExportOptions::default()
+    };
+    assert!(!off.wants_two_pass_loudness(), "没开标准化就没有测量对象");
 }
 
 #[test]

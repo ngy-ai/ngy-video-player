@@ -11,6 +11,7 @@ mod transform;
 mod types;
 
 use super::ClipRequest;
+use super::loudness::Loudness;
 // 编码器偏好是裁切与格式转换共用的，定义在 `crate::encoder`，这里只重新导出，
 // 保持 `clip::EncoderMode` 这个既有入口不变。
 pub use crate::encoder::EncoderMode;
@@ -50,6 +51,11 @@ pub struct ExportOptions {
     pub audio_copy: bool,
     /// EBU R128 响度标准化，导出后音量与常见平台一致。
     pub normalize_audio: bool,
+    /// 两遍扫描：先量一遍整段响度，再按测量值做线性增益。
+    ///
+    /// 单遍 loudnorm 是「边统计边调」，片源忽大忽小时会先压后放；两遍不压动态，
+    /// 代价是多解码一遍音频，长片会明显变慢。
+    pub two_pass_loudness: bool,
     /// 音量增益（dB）。用来把整体抬高/压低几 dB，和响度标准化是两件事：
     /// 前者不改变动态，后者会把响度拉到目标值，两个都开时增益作用在标准化之后。
     pub volume_db: f32,
@@ -93,6 +99,7 @@ impl Default for ExportOptions {
             transform: VideoTransform::default(),
             audio_copy: false,
             normalize_audio: false,
+            two_pass_loudness: false,
             volume_db: 0.0,
             sample_rate: None,
             channels: None,
@@ -163,24 +170,24 @@ impl ExportOptions {
         if self.sharpen {
             filters.push("unsharp=5:5:0.8:3:3:0.4".to_string());
         }
-        if self.format == OutputFormat::Gif {
-            // GIF 只有 256 色：先限帧率、缩到 480 宽，再用两遍法生成调色板。
-            // `split` 把同一帧同时喂给「统计调色板」与「套用调色板」两条链，
-            // 这样出来的颜色比默认的固定调色板干净得多，代价是多解一遍。
-            filters.push("fps=12".to_string());
-            // 只缩不放：小尺寸素材再放大只会把文件撑大，还更糊。
-            filters.push("scale=min(480\\,iw):-2:flags=lanczos".to_string());
-            filters.push("split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse".to_string());
-        }
         (!filters.is_empty()).then(|| filters.join(","))
     }
 
-    /// 音频滤镜。响度标准化按单遍处理：裁切出来的片段通常不长，两遍扫描
-    /// 要多解一遍音频，收益不明显。
+    /// 两遍响度能不能用：得真的重编码音频，并且开着标准化。
+    pub fn wants_two_pass_loudness(&self) -> bool {
+        self.two_pass_loudness && self.normalize_audio && self.audio_filters_available()
+    }
+
+    /// 音频滤镜（单遍响度）。
     ///
     /// 音频偏移用「延迟」与「裁掉开头」两种写法实现：`adelay` 只推迟音频，
     /// 不碰画面；负数则把开头剪掉，等价于让声音提前。
     pub fn audio_filters(&self) -> Option<String> {
+        self.audio_filters_with(None)
+    }
+
+    /// 音频滤镜。`measured` 有值时用两遍扫描的测量值做线性增益。
+    pub fn audio_filters_with(&self, measured: Option<&Loudness>) -> Option<String> {
         if !self.audio_filters_available() {
             return None;
         }
@@ -199,7 +206,10 @@ impl ExportOptions {
             filters.push(format!("atrim=start={:.3},asetpts=PTS-STARTPTS", -offset));
         }
         if self.normalize_audio {
-            filters.push("loudnorm=I=-16:TP=-1.5:LRA=11".to_string());
+            filters.push(match measured {
+                Some(loudness) => loudness.filter(),
+                None => format!("loudnorm={}", super::loudness::TARGETS),
+            });
         }
         // 增益排在 loudnorm 后面：反过来的话标准化会把刚加上去的几 dB 又拉回目标值，
         // 用户看到的是「调了没反应」。
@@ -210,12 +220,40 @@ impl ExportOptions {
     }
 }
 
+/// GIF 的输出链：限帧率、缩到 480 宽（只缩不放）、再用两遍法生成调色板。
+///
+/// `split` 把同一帧同时喂给「统计调色板」与「套用调色板」两条链，颜色比默认的
+/// 固定调色板干净得多，代价是多解一遍。这段必须排在最后——调色板一旦生成，
+/// 后面就只能画 256 色的图了，烧录字幕得在它之前。
+pub(super) const GIF_FILTERS: &str = "fps=12,scale=min(480\\,iw):-2:flags=lanczos,\
+     split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse";
+
+/// 把临时字幕文件写成 `subtitles` 滤镜参数。
+///
+/// ffmpeg 的滤镜串用 `:` 和 `,` 分隔参数，Windows 路径里的盘符冒号必须转义，
+/// 反斜杠统一换成正斜杠；再整体包进单引号，路径里的空格与括号就不用再管。
+fn subtitle_filter(path: &Path) -> String {
+    let escaped = path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .replace('\'', "\\'")
+        .replace(':', "\\:");
+    format!("subtitles=filename='{escaped}'")
+}
+
 /// 拼 ffmpeg 参数。
+///
+/// `burn` 是已经抽好的字幕文件；有值时把它烧进画面，并且不再复制内置字幕轨。
 ///
 /// `-ss` 放在 `-i` 前：重编码时 ffmpeg 会先跳到目标附近再精确解码到目标帧，
 /// 起点精确到帧，长视频也不用从第 0 秒解起；流复制时这一跳只能落在关键帧上，
 /// 这也是「无损」必须接受的偏差。
-pub(super) fn build_command(executable: &Path, request: &ClipRequest, encoder: &str) -> Command {
+pub(super) fn build_command(
+    executable: &Path,
+    request: &ClipRequest,
+    encoder: &str,
+    burn: Option<&Path>,
+) -> Command {
     let options = &request.options;
     let mut command = Command::new(executable);
     command
@@ -249,7 +287,9 @@ pub(super) fn build_command(executable: &Path, request: &ClipRequest, encoder: &
     if options.keep_audio && !gif {
         command.arg("-map").arg("0:a?");
     }
-    if options.keep_subtitles && !hls && !gif {
+    // 烧录之后画面里已经有字幕了，再复制一份软字幕只会让播放器叠两遍。
+    let burning = burn.is_some();
+    if options.keep_subtitles && !hls && !gif && !burning {
         command.arg("-map").arg("0:s?");
     }
     command
@@ -285,8 +325,20 @@ pub(super) fn build_command(executable: &Path, request: &ClipRequest, encoder: &
                 command.arg("-pix_fmt").arg("yuv420p");
             }
         }
-        if let Some(filters) = options.video_filters() {
-            command.arg("-vf").arg(filters);
+        // 滤镜链的顺序是有讲究的：先做几何与画面处理，再把字幕烧上去（按最终
+        // 画面大小排版），GIF 的调色板必须排最后，否则字幕也会被压进 256 色里。
+        let mut filters: Vec<String> = Vec::new();
+        if let Some(base) = options.video_filters() {
+            filters.push(base);
+        }
+        if let Some(path) = burn {
+            filters.push(subtitle_filter(path));
+        }
+        if gif {
+            filters.push(GIF_FILTERS.to_string());
+        }
+        if !filters.is_empty() {
+            command.arg("-vf").arg(filters.join(","));
         }
         if options.force_cfr && !gif {
             // `-fps_mode` 是 ffmpeg 5.1+ 的写法，`-vsync cfr` 在新版本会告警。
@@ -305,7 +357,7 @@ pub(super) fn build_command(executable: &Path, request: &ClipRequest, encoder: &
                 command.arg("-c:a").arg("copy");
             } else {
                 command.arg("-c:a").arg("aac").arg("-b:a").arg("192k");
-                let filters = options.audio_filters();
+                let filters = options.audio_filters_with(request.loudness.as_ref());
                 if let Some(filters) = &filters {
                     command.arg("-af").arg(filters);
                 }
@@ -325,7 +377,7 @@ pub(super) fn build_command(executable: &Path, request: &ClipRequest, encoder: &
                 }
             }
         }
-        if options.keep_subtitles && !hls && !gif {
+        if options.keep_subtitles && !hls && !gif && !burning {
             command.arg("-c:s").arg("copy");
         }
     }
