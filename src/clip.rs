@@ -208,6 +208,14 @@ pub fn cut_out_output_path(input: &Path) -> PathBuf {
     numbered_output(input, OutputFormat::Mkv, "删除片段")
 }
 
+/// 分割的两个落点：前后两段各一个文件。
+pub fn split_output_paths(input: &Path) -> (PathBuf, PathBuf) {
+    (
+        numbered_output(input, OutputFormat::Mkv, "段落1"),
+        numbered_output(input, OutputFormat::Mkv, "段落2"),
+    )
+}
+
 fn numbered_output(input: &Path, format: OutputFormat, suffix: &str) -> PathBuf {
     let dir = input.parent().unwrap_or_else(|| Path::new("."));
     let stem = input
@@ -243,6 +251,31 @@ pub struct BurnSubtitle {
     pub name: String,
 }
 
+/// 这次裁切要做什么。
+///
+/// 三种操作共用同一套区间输入与导出参数，只是区间的含义不同：保留、抠掉、
+/// 或者拿来当切点。分成枚举而不是几个布尔量，省得同时勾上两个互相打架的开关。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CutKind {
+    /// 只保留区间。
+    #[default]
+    Keep,
+    /// 去掉区间，保留前后两段并拼成一个文件。
+    RemoveMiddle,
+    /// 在区间起点切成两个文件。
+    Split,
+}
+
+impl CutKind {
+    /// 产物是一个还是两个。
+    pub fn output_count(self) -> usize {
+        match self {
+            CutKind::Split => 2,
+            _ => 1,
+        }
+    }
+}
+
 /// 一次裁切请求。
 #[derive(Clone, Debug)]
 pub struct ClipRequest {
@@ -255,11 +288,8 @@ pub struct ClipRequest {
     /// 两遍响度的第一遍结果。界面不填，任务在启动时测出来写进去；
     /// `None` 表示走单遍 loudnorm。
     pub loudness: Option<Loudness>,
-    /// 「删除中间段」：把 `range` 去掉，保留前后两段拼成一个文件。
-    ///
-    /// 这条路一定重编码：第二段从区间末尾起头，流复制找不到可用的关键帧，
-    /// 拼出来的接缝会花屏。所以调用方传进来的 `mode` 会被忽略。
-    pub remove_middle: bool,
+    /// 这次要做什么。`RemoveMiddle` 与 `Split` 都会强制重编码。
+    pub kind: CutKind,
     /// 源文件总时长。只有「删除中间段」需要——后半段要一直留到片尾。
     pub duration: f64,
 }
@@ -372,7 +402,7 @@ impl ClipJob {
             .map_err(anyhow::Error::msg)?;
         // 「删除中间段」走另一条路：先分别编码前后两段，再拼起来。它不看流复制
         // 的关键帧对齐（区间是「要删掉的部分」，对齐会改变用户选的切点）。
-        if request.remove_middle {
+        if request.kind != CutKind::Keep {
             request.options.mode = ExportMode::Exact;
             // 两遍响度在这里不划算：每段都要单独量一遍，收益抵不上时间。
             request.loudness = None;

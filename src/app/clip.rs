@@ -56,8 +56,8 @@ pub(super) struct ClipDialog {
     subtitle: Option<clip_core::BurnSubtitle>,
     /// 是否把那条字幕烧进画面。
     burn_subtitle: bool,
-    /// 「删除中间段」：把选中的区间抠掉，保留前后两段拼成一个文件。
-    remove_middle: bool,
+    /// 这次要做什么：保留区间、抠掉区间，还是在区间起点切成两个文件。
+    kind: clip_core::CutKind,
     /// 正在预览片段时的终点与开始时刻（秒）。
     ///
     /// 记下开始时刻是为了躲开 seek 的延迟：刚跳到起点时位置事件可能还是旧的
@@ -87,7 +87,7 @@ impl ClipDialog {
             // 有字幕不代表用户想烧：默认仍然只是复制软字幕，多一条无意的硬字幕
             // 是不可逆的。
             burn_subtitle: false,
-            remove_middle: false,
+            kind: clip_core::CutKind::Keep,
             preview: None,
         }
     }
@@ -363,11 +363,12 @@ impl PlayerApp {
         } else {
             None
         };
-        // 删除中间段时区间是「要扔掉的部分」，产物永远是一个 mkv。
-        let output = if dialog.remove_middle {
-            clip_core::cut_out_output_path(&dialog.path)
-        } else {
-            clip_core::output_path(&dialog.path, options.format)
+        // 区间在三种操作里是同一份输入、不同的含义，产物落点也跟着不同。
+        let output = match dialog.kind {
+            clip_core::CutKind::RemoveMiddle => clip_core::cut_out_output_path(&dialog.path),
+            // 分割的第一段先占住这个字段；第二段由任务自己算（同一套命名规则）。
+            clip_core::CutKind::Split => clip_core::split_output_paths(&dialog.path).0,
+            clip_core::CutKind::Keep => clip_core::output_path(&dialog.path, options.format),
         };
         let request = ClipRequest {
             output,
@@ -377,7 +378,7 @@ impl PlayerApp {
             burn,
             // 两遍响度的第一遍由任务自己跑，界面只表达「要不要两遍」。
             loudness: None,
-            remove_middle: dialog.remove_middle,
+            kind: dialog.kind,
             duration: dialog.duration,
         };
         let (tx, mut rx) = futures::channel::mpsc::unbounded();
@@ -482,11 +483,18 @@ impl PlayerApp {
         }
     }
 
-    /// 切换「删除中间段」。打开时顺手把剪切方式切回精确重编码：流复制接不上。
-    pub(super) fn toggle_clip_remove_middle(&mut self, cx: &mut Context<Self>) {
+    /// 切换裁切方式。三种操作互斥，再点一次回到「保留区间」。
+    ///
+    /// 删除中间段与分割都要求重编码：切出来的段大多不从关键帧起头，流复制接不上；
+    /// 产物也只能是 mkv。
+    pub(super) fn toggle_clip_kind(&mut self, kind: clip_core::CutKind, cx: &mut Context<Self>) {
         if let Some(dialog) = self.clip.as_mut() {
-            dialog.remove_middle ^= true;
-            if dialog.remove_middle {
+            dialog.kind = if dialog.kind == kind {
+                clip_core::CutKind::Keep
+            } else {
+                kind
+            };
+            if dialog.kind != clip_core::CutKind::Keep {
                 dialog.options.mode = clip_core::ExportMode::Exact;
                 dialog.options.format = clip_core::OutputFormat::Mkv;
             }

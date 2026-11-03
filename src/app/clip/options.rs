@@ -10,7 +10,7 @@ use super::widgets::{
 };
 use super::*;
 use crate::clip::{
-    ColorMatrix, ColorRange, Crop, DEFAULT_BITRATE_KBPS, Edge, EncoderMode, ExportMode,
+    ColorMatrix, ColorRange, Crop, CutKind, DEFAULT_BITRATE_KBPS, Edge, EncoderMode, ExportMode,
     ExportOptions, KeyframeAlign, OutputFormat, Pad, PixelFormat, Quality, RateControl, Rotate,
     Scale, VideoCodec,
 };
@@ -41,9 +41,10 @@ impl PlayerApp {
         // GIF 只能重编码，导出方式没有可选性；露出来只会让人以为能无损导出。
         let gif = options.format == OutputFormat::Gif;
 
-        // 「删除中间段」和「取一段」是互斥的两件事：前者留下首尾、扔掉区间，
-        // 后者只留区间。放在最上面，因为它改变的是区间的含义。
-        let cut_out = dialog.remove_middle;
+        // 区间在三种操作里的含义不同：保留它、抠掉它、或者拿它的起点当切点。
+        // 这三个开关放在最上面，因为它们改变的是下面所有设置的前提。
+        let kind = dialog.kind;
+        let cut_out = kind != CutKind::Keep;
 
         let mut body = div()
             .flex()
@@ -52,13 +53,24 @@ impl PlayerApp {
             .child(toggle_row(
                 "clip-option-remove-middle",
                 "删除这段（保留前后）",
-                cut_out,
-                |this, cx| this.toggle_clip_remove_middle(cx),
+                kind == CutKind::RemoveMiddle,
+                |this, cx| this.toggle_clip_kind(CutKind::RemoveMiddle, cx),
                 cx,
             ))
-            .child(note(
-                "把选中的区间抠掉，首尾两段拼成一个新文件；必须重编码，产物固定为 mkv",
-            ));
+            .child(toggle_row(
+                "clip-option-split",
+                "在「开始」处分成两个文件",
+                kind == CutKind::Split,
+                |this, cx| this.toggle_clip_kind(CutKind::Split, cx),
+                cx,
+            ))
+            .child(note(match kind {
+                CutKind::Keep => "默认只保留选中区间；上面两项都不勾时，结束为空表示一直到片尾",
+                CutKind::RemoveMiddle => {
+                    "把选中的区间抠掉，首尾两段拼成一个文件；必须重编码，产物固定为 mkv"
+                }
+                CutKind::Split => "在「开始」处切开，写出段落1 与段落2 两个文件；必须重编码",
+            }));
 
         if !gif && !cut_out {
             body = body

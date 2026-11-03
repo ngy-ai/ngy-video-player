@@ -5,7 +5,7 @@
 
 use futures::StreamExt as _;
 use ngy_video_player::clip::{
-    ClipEvent, ClipJob, ClipOutcome, ClipRange, ClipRequest, ExportMode, ExportOptions,
+    ClipEvent, ClipJob, ClipOutcome, ClipRange, ClipRequest, CutKind, ExportMode, ExportOptions,
     OutputFormat,
 };
 use std::path::{Path, PathBuf};
@@ -141,7 +141,7 @@ fn 烧录内置字幕() {
             name: "SRT".to_string(),
         }),
         loudness: None,
-        remove_middle: false,
+        kind: CutKind::Keep,
         duration: 4.0,
     };
     let (outcome, _progress) = run(request);
@@ -204,7 +204,7 @@ fn 删除中间段之后首尾接上() {
         options: ExportOptions::default(),
         burn: None,
         loudness: None,
-        remove_middle: true,
+        kind: CutKind::RemoveMiddle,
         duration: 4.0,
     };
     let (outcome, _progress) = run(request);
@@ -217,6 +217,46 @@ fn 删除中间段之后首尾接上() {
     // 4 秒去掉 1 秒，剩下约 3 秒。
     let seconds = probe_seconds(&ffmpeg, &output);
     assert!((2.5..3.5).contains(&seconds), "剩余时长不对：{seconds}");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+#[ignore = "需要本机安装 ffmpeg"]
+fn 在切点处分成两个文件() {
+    let ffmpeg = ngy_video_player::platform::ffmpeg::executable().expect("本机没有 ffmpeg");
+    let dir = std::env::temp_dir().join(format!("ngy-clip-split-e2e-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = sample(&ffmpeg, &dir);
+
+    let request = ClipRequest {
+        output: ngy_video_player::clip::split_output_paths(&input).0,
+        input: input.clone(),
+        range: ClipRange {
+            start: 1.5,
+            end: 3.0,
+        },
+        options: ExportOptions::default(),
+        burn: None,
+        loudness: None,
+        kind: CutKind::Split,
+        duration: 4.0,
+    };
+    let (outcome, _progress) = run(request);
+
+    let paths = match outcome {
+        ClipOutcome::Finished(paths) => paths,
+        other => panic!("分割失败: {other:?}"),
+    };
+    assert_eq!(paths.len(), 2, "分割应当写出两个文件");
+    for path in &paths {
+        assert_output(path);
+    }
+    // 4 秒在 1.5 秒处切开：前半 1.5 秒、后半 2.5 秒。
+    let head = probe_seconds(&ffmpeg, &paths[0]);
+    let tail = probe_seconds(&ffmpeg, &paths[1]);
+    assert!((1.2..1.8).contains(&head), "前半时长不对：{head}");
+    assert!((2.2..2.8).contains(&tail), "后半时长不对：{tail}");
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -240,7 +280,7 @@ fn 裁切一段真实视频() {
         options: ExportOptions::default(),
         burn: None,
         loudness: None,
-        remove_middle: false,
+        kind: CutKind::Keep,
         duration: 4.0,
     };
     let (outcome, progress) = run(request);
@@ -290,7 +330,7 @@ fn 滤镜与响度处理能被_ffmpeg_接受() {
         },
         burn: None,
         loudness: None,
-        remove_middle: false,
+        kind: CutKind::Keep,
         duration: 4.0,
     };
     let (outcome, _progress) = run(request);
@@ -326,7 +366,7 @@ fn 导出_hls_切片() {
         },
         burn: None,
         loudness: None,
-        remove_middle: false,
+        kind: CutKind::Keep,
         duration: 4.0,
     };
     let (outcome, _progress) = run(request);
@@ -368,7 +408,7 @@ fn 无损流复制一段真实视频() {
         },
         burn: None,
         loudness: None,
-        remove_middle: false,
+        kind: CutKind::Keep,
         duration: 4.0,
     };
     let (outcome, _progress) = run(request);

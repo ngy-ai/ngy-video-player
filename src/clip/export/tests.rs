@@ -1,5 +1,5 @@
 use super::*;
-use crate::clip::ClipRange;
+use crate::clip::{ClipRange, CutKind};
 use std::path::{Path, PathBuf};
 
 fn request(options: ExportOptions) -> ClipRequest {
@@ -13,7 +13,7 @@ fn request(options: ExportOptions) -> ClipRequest {
         options,
         burn: None,
         loudness: None,
-        remove_middle: false,
+        kind: CutKind::Keep,
         duration: 600.0,
     }
 }

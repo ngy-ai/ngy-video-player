@@ -1,10 +1,10 @@
-//! 「删除中间段」：去掉选定区间，把前后两段拼成一个文件。
+//! 多段任务：「删除中间段」与「分割」。
 //!
-//! 两段必须用完全相同的参数编码，拼接才能直接复制流——所以先用普通裁切把每段
-//! 写到临时文件，再用 concat 分离器拼起来。中途多占一份片长的临时空间，换来的是
-//! 整片只编码一遍。
+//! 前者去掉选定区间、把前后两段拼成一个文件；后者在切点处把片子分成两个文件。
+//! 两者都是「先逐段编码，再决定怎么收尾」：删除中间段写临时文件再 concat，分割
+//! 直接写到各自的落点。
 //!
-//! 这条路一定重编码：第二段从区间末尾起头，流复制找不到可用的关键帧，接缝会花屏。
+//! 这两条路一定重编码：被切出来的段大多不从关键帧起头，流复制接不上，接缝会花屏。
 
 use super::*;
 use std::fmt::Write as _;
@@ -30,6 +30,23 @@ pub(super) fn segments(range: ClipRange, duration: f64) -> Vec<ClipRange> {
     parts
 }
 
+/// 在切点处把片子分成前后两段。切点贴着两端时不产生空片段。
+pub(super) fn split_segments(range: ClipRange, duration: f64) -> Vec<ClipRange> {
+    if range.start <= MIN_DURATION || range.start >= duration - MIN_DURATION {
+        return Vec::new();
+    }
+    vec![
+        ClipRange {
+            start: 0.0,
+            end: range.start,
+        },
+        ClipRange {
+            start: range.start,
+            end: duration,
+        },
+    ]
+}
+
 /// 启动多段任务。`burn` 是已经抽好的字幕文件，各段共用同一份。
 pub(super) fn start(
     executable: &Path,
@@ -38,10 +55,26 @@ pub(super) fn start(
     burn: Option<PathBuf>,
     tx: UnboundedSender<ClipEvent>,
 ) -> Result<ClipJob> {
-    let parts = segments(request.range, request.duration);
-    if parts.is_empty() {
-        anyhow::bail!("这个区间就是整条视频，删掉之后什么都不剩");
-    }
+    let (parts, targets, concat_to) = if request.kind == CutKind::Split {
+        let parts = split_segments(request.range, request.duration);
+        if parts.is_empty() {
+            anyhow::bail!("切点要落在片子的中间，不能贴着头尾");
+        }
+        let (first, second) = split_output_paths(&request.input);
+        (parts, vec![first, second], None)
+    } else {
+        let parts = segments(request.range, request.duration);
+        if parts.is_empty() {
+            anyhow::bail!("这个区间就是整条视频，删掉之后什么都不剩");
+        }
+        // 删除中间段要先写临时文件：两段拼完才能得到最终产物。
+        let temps: Vec<PathBuf> = (0..parts.len())
+            .map(|index| {
+                std::env::temp_dir().join(format!("ngy-cut-{}-{index}.mkv", std::process::id()))
+            })
+            .collect();
+        (parts, temps, Some(request.output.clone()))
+    };
 
     let child = Arc::new(Mutex::new(None));
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -58,8 +91,8 @@ pub(super) fn start(
             cancelled: &job_cancelled,
             tx: &tx,
         };
-        let outcome = match run(&request, &parts, &task) {
-            Ok(()) => ClipOutcome::Finished(vec![request.output.clone()]),
+        let outcome = match run(&request, &parts, &targets, concat_to.as_deref(), &task) {
+            Ok(paths) => ClipOutcome::Finished(paths),
             Err(error) => {
                 remove_output(&request.output);
                 if job_cancelled.load(Ordering::SeqCst) {
@@ -93,8 +126,14 @@ struct Task<'a> {
     tx: &'a UnboundedSender<ClipEvent>,
 }
 
-/// 依次编码每一段，最后拼接。进度按各段的时长折算到整单上。
-fn run(request: &ClipRequest, parts: &[ClipRange], task: &Task<'_>) -> Result<()> {
+/// 依次编码每一段，最后按需要拼接。进度按各段的时长折算到整单上。
+fn run(
+    request: &ClipRequest,
+    parts: &[ClipRange],
+    targets: &[PathBuf],
+    concat_to: Option<&Path>,
+    task: &Task<'_>,
+) -> Result<Vec<PathBuf>> {
     let executable = task.executable;
     let encoder = task.encoder;
     let burn = task.burn;
@@ -102,20 +141,19 @@ fn run(request: &ClipRequest, parts: &[ClipRange], task: &Task<'_>) -> Result<()
     let cancelled = task.cancelled;
     let tx = task.tx;
     let total: f64 = parts.iter().map(|part| part.duration()).sum();
-    let mut temps: Vec<PathBuf> = Vec::new();
+    let mut written: Vec<PathBuf> = Vec::new();
     let mut elapsed = 0.0;
 
     for (index, part) in parts.iter().enumerate() {
         if cancelled.load(Ordering::SeqCst) {
-            cleanup(&temps);
+            discard(&written);
             anyhow::bail!("已取消");
         }
-        let temp = std::env::temp_dir().join(format!("ngy-cut-{}-{index}.mkv", std::process::id()));
-        temps.push(temp.clone());
+        let target = &targets[index];
 
         let mut segment = request.clone();
         segment.range = *part;
-        segment.output = temp;
+        segment.output = target.clone();
 
         let mut spawned = export::build_command(executable, &segment, encoder, burn)
             .spawn()
@@ -140,21 +178,30 @@ fn run(request: &ClipRequest, parts: &[ClipRange], task: &Task<'_>) -> Result<()
         match status {
             Some(Ok(status)) if status.success() => {}
             other => {
-                cleanup(&temps);
+                // 失败时把已经写出来的产物也删掉，别留半套让人以为导出了一半。
+                discard(&written);
+                let _ = fs::remove_file(target);
                 anyhow::bail!(failure_message(other, &tail));
             }
         }
+        written.push(target.clone());
 
         if cancelled.load(Ordering::SeqCst) {
-            cleanup(&temps);
+            discard(&written);
             anyhow::bail!("已取消");
         }
     }
 
-    concat(executable, &temps, &request.output)?;
-    cleanup(&temps);
     let _ = tx.unbounded_send(ClipEvent::Progress(1.0));
-    Ok(())
+    match concat_to {
+        Some(output) => {
+            concat(executable, &written, output)?;
+            // 临时分段只有在拼完之后才能删。
+            discard(&written);
+            Ok(vec![output.to_path_buf()])
+        }
+        None => Ok(written),
+    }
 }
 
 /// 拼接：两段编码参数完全一致，直接复制流。
@@ -248,7 +295,8 @@ fn failure_message(
     }
 }
 
-fn cleanup(parts: &[PathBuf]) {
+/// 删掉已经写出的中间产物 / 半成品。
+fn discard(parts: &[PathBuf]) {
     for part in parts {
         let _ = fs::remove_file(part);
     }
@@ -279,5 +327,19 @@ mod tests {
         assert!(segments(range(0.0, 20.0), 20.0).is_empty());
         // 误差在半帧以内也不算。
         assert!(segments(range(0.0, 20.02), 20.0).is_empty());
+    }
+
+    #[test]
+    fn 分割在切点处一分为二() {
+        assert_eq!(
+            split_segments(range(8.0, 12.0), 20.0),
+            vec![range(0.0, 8.0), range(8.0, 20.0)]
+        );
+    }
+
+    #[test]
+    fn 切点贴着两端时不分() {
+        assert!(split_segments(range(0.0, 5.0), 20.0).is_empty());
+        assert!(split_segments(range(20.0, 20.0), 20.0).is_empty());
     }
 }

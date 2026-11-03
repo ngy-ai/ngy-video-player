@@ -248,8 +248,10 @@ impl PlayerApp {
                 ))
                 .child(primary_button(
                     "clip-start",
-                    if dialog.remove_middle {
+                    if dialog.kind == clip_core::CutKind::RemoveMiddle {
                         "删除中间段"
+                    } else if dialog.kind == clip_core::CutKind::Split {
+                        "分割为两个文件"
                     } else if dialog.options.format == clip_core::OutputFormat::Hls {
                         "开始导出 HLS"
                     } else if dialog.options.format == clip_core::OutputFormat::Gif {
@@ -280,8 +282,10 @@ impl PlayerApp {
                 .text_size(px(10.0))
                 .text_color(text_faint())
                 .whitespace_normal()
-                .child(if dialog.remove_middle {
+                .child(if dialog.kind == clip_core::CutKind::RemoveMiddle {
                     "把选中的区间抠掉后重新编码拼接；中途要占一份片长的临时空间。"
+                } else if dialog.kind == clip_core::CutKind::Split {
+                    "在「开始」处切成前后两个文件，都落在原片同目录；结束时间在这里不参与。"
                 } else if dialog.options.format == clip_core::OutputFormat::Hls {
                     "输出 m3u8 与同名 .ts 分片；只保留画面与音轨，字幕与章节不写入。"
                 } else if dialog.options.format == clip_core::OutputFormat::Gif {
