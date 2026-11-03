@@ -17,12 +17,14 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+mod concat;
 mod cutout;
 mod encoder;
 mod export;
 mod keyframe;
 mod loudness;
 
+pub use concat::{ConcatEvent, ConcatJob, ConcatOutcome, ConcatRequest};
 pub use export::{
     ColorMatrix, ColorRange, Crop, DEFAULT_BITRATE_KBPS, Edge, EncoderMode, ExportMode,
     ExportOptions, KeyframeAlign, OutputFormat, Pad, PixelFormat, Quality, RateControl, Rotate,
@@ -206,6 +208,11 @@ pub fn output_path(input: &Path, format: OutputFormat) -> PathBuf {
 /// 「删除中间段」的落点：后缀换成「删除片段」，免得和普通裁切混在一起。
 pub fn cut_out_output_path(input: &Path) -> PathBuf {
     numbered_output(input, OutputFormat::Mkv, "删除片段")
+}
+
+/// 拼接的落点：放在第一个文件旁边，名字加「 - 拼接」。
+pub fn concat_output_path(first: &Path) -> PathBuf {
+    numbered_output(first, OutputFormat::Mkv, "拼接")
 }
 
 /// 分割的两个落点：前后两段各一个文件。

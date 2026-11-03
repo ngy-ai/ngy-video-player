@@ -250,7 +250,9 @@ fn concat(executable: &Path, parts: &[PathBuf], output: &Path) -> Result<()> {
 }
 
 /// 收集 ffmpeg 的 stderr 末尾若干行，失败时给用户看。
-fn drain_stderr(stderr: Option<std::process::ChildStderr>) -> Arc<Mutex<VecDeque<String>>> {
+pub(super) fn drain_stderr(
+    stderr: Option<std::process::ChildStderr>,
+) -> Arc<Mutex<VecDeque<String>>> {
     let tail = Arc::new(Mutex::new(VecDeque::new()));
     let Some(stderr) = stderr else {
         return tail;
@@ -269,7 +271,7 @@ fn drain_stderr(stderr: Option<std::process::ChildStderr>) -> Arc<Mutex<VecDeque
     tail
 }
 
-fn failure_message(
+pub(super) fn failure_message(
     status: Option<std::io::Result<ExitStatus>>,
     tail: &Mutex<VecDeque<String>>,
 ) -> String {

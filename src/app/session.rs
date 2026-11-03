@@ -60,6 +60,8 @@ impl PlayerApp {
             scope_generation: 0,
             multicam: None,
             multicam_generation: 0,
+            concat: None,
+            concat_generation: 0,
             settings,
             on_top_applied: false,
             focus,

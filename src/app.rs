@@ -78,6 +78,7 @@ mod ab_loop;
 mod associations;
 mod bar;
 mod clip;
+mod concat;
 mod constants;
 mod controls;
 mod convert;
@@ -105,6 +106,7 @@ mod widgets;
 mod window;
 
 use self::clip::ClipDialog;
+use self::concat::ConcatDialog;
 use self::constants::*;
 use self::convert::ConvertDialog;
 use self::format::*;
@@ -293,6 +295,10 @@ pub struct PlayerApp {
     multicam: Option<MulticamDialog>,
     /// 双机位任务代次，作用同 `clip_generation`。
     multicam_generation: u64,
+    /// 拼接对话框；`None` 表示没打开。
+    concat: Option<ConcatDialog>,
+    /// 拼接任务代次，作用同 `clip_generation`。
+    concat_generation: u64,
     settings: Settings,
     /// 上一次真正下发给窗口系统的置顶状态。
     ///
@@ -561,6 +567,8 @@ enum BarAction {
     ShowScope,
     /// 双机位并排导出。
     MulticamExport,
+    /// 把当前播放列表拼成一个文件。
+    ConcatExport,
     SetAsDefaultPlayer,
     OpenDefaultApps,
     RemoveAssociations,

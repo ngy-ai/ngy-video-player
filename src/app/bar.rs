@@ -47,6 +47,10 @@ impl PlayerApp {
                     BarEntry::new("双机位并排导出…", MulticamExport)
                         .enabled(self.file_editable() && self.snapshot.has_video()),
                 ));
+                items.push(BarItem::Entry(
+                    BarEntry::new("把列表拼成一个文件…", ConcatExport)
+                        .enabled(self.playlist().file_count() >= 2),
+                ));
                 items.push(BarItem::Separator);
                 items.push(BarItem::Entry(BarEntry::new("退出", Quit)));
             }
@@ -327,6 +331,7 @@ impl PlayerApp {
             BarAction::MakeProxy => self.open_proxy_dialog(cx),
             BarAction::ShowScope => self.open_scope_dialog(cx),
             BarAction::MulticamExport => self.open_multicam_dialog(cx),
+            BarAction::ConcatExport => self.open_concat_dialog(cx),
             BarAction::SetAsDefaultPlayer => self.set_default_player(),
             BarAction::OpenDefaultApps => self.open_default_apps(),
             BarAction::RemoveAssociations => self.remove_associations(window, cx),

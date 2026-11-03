@@ -5,8 +5,8 @@
 
 use futures::StreamExt as _;
 use ngy_video_player::clip::{
-    ClipEvent, ClipJob, ClipOutcome, ClipRange, ClipRequest, CutKind, ExportMode, ExportOptions,
-    OutputFormat,
+    ClipEvent, ClipJob, ClipOutcome, ClipRange, ClipRequest, ConcatEvent, ConcatJob, ConcatOutcome,
+    ConcatRequest, CutKind, ExportMode, ExportOptions, OutputFormat,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -217,6 +217,48 @@ fn 删除中间段之后首尾接上() {
     // 4 秒去掉 1 秒，剩下约 3 秒。
     let seconds = probe_seconds(&ffmpeg, &output);
     assert!((2.5..3.5).contains(&seconds), "剩余时长不对：{seconds}");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+fn run_concat(request: ConcatRequest) -> ConcatOutcome {
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let _job = ConcatJob::start(request, tx).expect("启动拼接失败");
+    futures::executor::block_on(async {
+        while let Some(event) = rx.next().await {
+            if let ConcatEvent::Done(outcome) = event {
+                return outcome;
+            }
+        }
+        panic!("任务没有回报结果");
+    })
+}
+
+#[test]
+#[ignore = "需要本机安装 ffmpeg"]
+fn 两个文件按顺序拼成一个() {
+    let ffmpeg = ngy_video_player::platform::ffmpeg::executable().expect("本机没有 ffmpeg");
+    let dir = std::env::temp_dir().join(format!("ngy-concat-e2e-{}", std::process::id()));
+    let first = dir.join("a");
+    let second = dir.join("b");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    let a = sample(&ffmpeg, &first);
+    let b = sample(&ffmpeg, &second);
+
+    let output = dir.join("joined.mkv");
+    let outcome = run_concat(ConcatRequest {
+        inputs: vec![a, b],
+        output: output.clone(),
+    });
+    match outcome {
+        ConcatOutcome::Finished(path) => assert_eq!(path, output),
+        other => panic!("拼接失败: {other:?}"),
+    }
+    assert_output(&output);
+    // 两段各 4 秒。
+    let seconds = probe_seconds(&ffmpeg, &output);
+    assert!((7.0..9.0).contains(&seconds), "拼接后时长不对：{seconds}");
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
