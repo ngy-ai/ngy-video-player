@@ -23,8 +23,9 @@ mod keyframe;
 mod loudness;
 
 pub use export::{
-    Crop, Edge, EncoderMode, ExportMode, ExportOptions, KeyframeAlign, OutputFormat, Pad,
-    PixelFormat, Quality, Rotate, Scale, VideoCodec, VideoTransform,
+    Crop, DEFAULT_BITRATE_KBPS, Edge, EncoderMode, ExportMode, ExportOptions, KeyframeAlign,
+    OutputFormat, Pad, PixelFormat, Quality, RateControl, Rotate, Scale, VideoCodec,
+    VideoTransform,
 };
 pub use loudness::Loudness;
 

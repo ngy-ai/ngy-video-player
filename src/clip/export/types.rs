@@ -1,4 +1,4 @@
-//! 导出参数里的枚举：剪切方式、输出格式、编码、画质、像素格式。
+//! 导出参数里的枚举：剪切方式、输出格式、编码、画质、码率控制、像素格式。
 //!
 //! 全是「几选一」的小类型，一律配 `ALL` + `label` + `hint` 三件套，面板照着铺
 //! 按钮就行。集中在一个文件是因为它们只被 `ExportOptions` 与界面引用，
@@ -78,6 +78,36 @@ impl OutputFormat {
     /// 所以要压过用户选的「无损流复制」。
     pub fn forces_reencode(self) -> bool {
         matches!(self, OutputFormat::Gif)
+    }
+}
+
+/// 码率控制方式。
+///
+/// 「质量档」是默认：软件编码走 CRF，硬件编码按档位给目标码率，体积与画质都随
+/// 内容变化。需要**体积可预测**时才切到「固定码率」——比如上传平台有码率上限，
+/// 或者要往一张盘里塞满若干小时。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RateControl {
+    #[default]
+    Quality,
+    Bitrate,
+}
+
+impl RateControl {
+    pub const ALL: [RateControl; 2] = [RateControl::Quality, RateControl::Bitrate];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            RateControl::Quality => "质量优先",
+            RateControl::Bitrate => "固定码率",
+        }
+    }
+
+    pub fn hint(self) -> &'static str {
+        match self {
+            RateControl::Quality => "按画面复杂度自动分配码率，同样画质下体积最小",
+            RateControl::Bitrate => "码率钉死，体积可预估；剧烈运动场景画质会掉",
+        }
     }
 }
 

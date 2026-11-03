@@ -126,6 +126,31 @@ pub(crate) fn bitrate_args(encoder: &str, bitrate: &str) -> Vec<String> {
     args.iter().map(|arg| (*arg).to_string()).collect()
 }
 
+/// 恒定码率参数（不含 `-c:v`）。
+///
+/// 把上下限都钉在目标值上，编码器才不会再按画面复杂度浮动——「体积可预估」是
+/// 这条路唯一的目的。`buffer` 一般是目标码率的两倍，给编码器留两秒的余量。
+pub(crate) fn cbr_args(encoder: &str, bitrate: &str, buffer: &str) -> Vec<String> {
+    let mut args: Vec<String> = Vec::new();
+    if encoder.ends_with("_nvenc") || encoder.ends_with("_amf") {
+        // 这两家默认是 VBR，必须显式改成 cbr，否则 minrate/maxrate 不生效。
+        args.extend(["-rc".to_string(), "cbr".to_string()]);
+    } else if encoder.ends_with("_qsv") {
+        args.extend(["-preset".to_string(), "medium".to_string()]);
+    }
+    args.extend([
+        "-b:v".to_string(),
+        bitrate.to_string(),
+        "-minrate".to_string(),
+        bitrate.to_string(),
+        "-maxrate".to_string(),
+        bitrate.to_string(),
+        "-bufsize".to_string(),
+        buffer.to_string(),
+    ]);
+    args
+}
+
 /// 这个名字是不是硬件编码器。软件编码器与它无关，调用方据此决定码控方式。
 pub(crate) fn is_hardware(encoder: &str) -> bool {
     H264_HARDWARE.contains(&encoder) || HEVC_HARDWARE.contains(&encoder)

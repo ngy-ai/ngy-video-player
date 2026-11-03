@@ -10,8 +10,8 @@ use super::widgets::{
 };
 use super::*;
 use crate::clip::{
-    Crop, Edge, EncoderMode, ExportMode, ExportOptions, KeyframeAlign, OutputFormat, Pad,
-    PixelFormat, Quality, Rotate, Scale, VideoCodec,
+    Crop, DEFAULT_BITRATE_KBPS, Edge, EncoderMode, ExportMode, ExportOptions, KeyframeAlign,
+    OutputFormat, Pad, PixelFormat, Quality, RateControl, Rotate, Scale, VideoCodec,
 };
 
 impl PlayerApp {
@@ -145,25 +145,53 @@ impl PlayerApp {
                         })),
                 )
                 .child(note(options.encoder_mode.hint()))
+                .child(section_title("码率控制"))
                 .child(
                     div()
                         .flex()
                         .items_center()
                         .gap(px(6.0))
-                        .children(Quality::ALL.map(|quality| {
+                        .children(RateControl::ALL.map(|control| {
                             option_chip(
-                                static_id("clip-quality", quality.label()),
-                                quality.label(),
-                                options.quality == quality,
+                                static_id("clip-rate", control.label()),
+                                control.label(),
+                                options.rate_control == control,
                                 cx.listener(move |this, _: &ClickEvent, _window, cx| {
                                     this.update_clip_options(
-                                        |options| options.quality = quality,
+                                        |options| options.rate_control = control,
                                         cx,
                                     );
                                 }),
                             )
                         })),
                 )
+                .child(note(options.rate_control.hint()))
+                // 两种码控的控件完全不同：质量优先调档位与 CRF，固定码率只调码率。
+                .when(options.rate_control == RateControl::Quality, |this| {
+                    this.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .children(Quality::ALL.map(|quality| {
+                                option_chip(
+                                    static_id("clip-quality", quality.label()),
+                                    quality.label(),
+                                    options.quality == quality,
+                                    cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                                        this.update_clip_options(
+                                            |options| options.quality = quality,
+                                            cx,
+                                        );
+                                    }),
+                                )
+                            })),
+                    )
+                    .child(crf_row(options.crf, cx))
+                })
+                .when(options.rate_control == RateControl::Bitrate, |this| {
+                    this.child(bitrate_row(options.bitrate_kbps, cx))
+                })
                 .child(section_title("像素格式"))
                 .child(
                     div()
@@ -365,6 +393,148 @@ impl PlayerApp {
     fn nudge_crop(&mut self, edge: Edge, delta: f32, cx: &mut Context<Self>) {
         self.update_clip_options(|options| options.transform.crop.nudge(edge, delta), cx);
     }
+}
+
+/// 自定义 CRF 一行：`−  CRF 20  +`，点数字回到「自动」。
+///
+/// 只在软件编码时有意义——硬件编码器不认 `-crf`；界面按「编码器=自动」时可能
+/// 落到硬件上，所以这行的说明里带一句提醒。
+fn crf_row(crf: Option<u8>, cx: &mut Context<PlayerApp>) -> AnyElement {
+    let label = match crf {
+        Some(value) => format!("CRF {value}"),
+        None => "CRF 自动".to_string(),
+    };
+    let step = |delta: i32| {
+        cx.listener(move |this, _: &ClickEvent, _window, cx| {
+            this.update_clip_options(
+                |options| {
+                    let current = options.crf.unwrap_or_else(|| options.quality.crf()) as i32;
+                    options.crf = Some((current + delta).clamp(0, 51) as u8);
+                },
+                cx,
+            );
+        })
+    };
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(4.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(text())
+                        .child("自定义 CRF"),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .child(stepper_button("clip-crf-less", "-", step(-1)))
+                        .child(
+                            div()
+                                .id("clip-crf-value")
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .w(px(76.0))
+                                .h(px(24.0))
+                                .rounded(px(6.0))
+                                .bg(ui::surface_active())
+                                .text_size(px(11.0))
+                                .text_color(ui::accent())
+                                .cursor(CursorStyle::PointingHand)
+                                .hover(|style| style.bg(ui::surface_hover()))
+                                .child(label)
+                                .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                    cx.stop_propagation();
+                                    this.update_clip_options(|options| options.crf = None, cx);
+                                })),
+                        )
+                        .child(stepper_button("clip-crf-more", "+", step(1))),
+                ),
+        )
+        .child(note(
+            "越小越清晰、体积越大；「自动」等于按上面的画质档换算。只对软件编码生效",
+        ))
+        .into_any_element()
+}
+
+/// 固定码率一行：`−  6000 kbps  +`，点数字回到默认值。
+fn bitrate_row(kbps: u32, cx: &mut Context<PlayerApp>) -> AnyElement {
+    let step = |delta: i32| {
+        cx.listener(move |this, _: &ClickEvent, _window, cx| {
+            this.update_clip_options(
+                |options| {
+                    let next = options.bitrate_kbps as i32 + delta;
+                    options.bitrate_kbps = next.clamp(200, 50_000) as u32;
+                },
+                cx,
+            );
+        })
+    };
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(4.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(text())
+                        .child("目标码率"),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .child(stepper_button("clip-bitrate-less", "-", step(-500)))
+                        .child(
+                            div()
+                                .id("clip-bitrate-value")
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .w(px(84.0))
+                                .h(px(24.0))
+                                .rounded(px(6.0))
+                                .bg(ui::surface_active())
+                                .text_size(px(11.0))
+                                .text_color(ui::accent())
+                                .cursor(CursorStyle::PointingHand)
+                                .hover(|style| style.bg(ui::surface_hover()))
+                                .child(format!("{kbps} kbps"))
+                                .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                    cx.stop_propagation();
+                                    this.update_clip_options(
+                                        |options| {
+                                            options.bitrate_kbps = DEFAULT_BITRATE_KBPS;
+                                        },
+                                        cx,
+                                    );
+                                })),
+                        )
+                        .child(stepper_button("clip-bitrate-more", "+", step(500))),
+                ),
+        )
+        .child(note(
+            "按 500 kbps 步进；1080p 一般 5000–8000，720p 一般 2500–4000",
+        ))
+        .into_any_element()
 }
 
 /// 裁切四边：上下两行各放一对，四个控件才塞得进右侧面板。

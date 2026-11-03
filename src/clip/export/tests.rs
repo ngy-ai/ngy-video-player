@@ -466,6 +466,31 @@ fn 烧录字幕排在画面处理之后_gif_调色板之前() {
 }
 
 #[test]
+fn 自定义_crf_替换画质档() {
+    let options = ExportOptions {
+        quality: Quality::High,
+        crf: Some(28),
+        ..ExportOptions::default()
+    };
+    let args = args(options);
+    assert!(has(&args, &["-crf", "28"]));
+    assert!(!has(&args, &["-crf", "18"]), "画质档被自定义值覆盖");
+}
+
+#[test]
+fn 固定码率时不再写_crf() {
+    let options = ExportOptions {
+        rate_control: RateControl::Bitrate,
+        bitrate_kbps: 8_000,
+        ..ExportOptions::default()
+    };
+    let args = args(options);
+    assert!(has(&args, &["-maxrate", "8000k"]));
+    assert!(has(&args, &["-bufsize", "16000k"]));
+    assert!(!args.iter().any(|arg| arg == "-crf"));
+}
+
+#[test]
 fn 两遍响度把测量值喂回滤镜() {
     let options = ExportOptions {
         normalize_audio: true,

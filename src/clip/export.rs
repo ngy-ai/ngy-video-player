@@ -16,7 +16,9 @@ use super::loudness::Loudness;
 // 保持 `clip::EncoderMode` 这个既有入口不变。
 pub use crate::encoder::EncoderMode;
 pub use transform::{Crop, Edge, Pad, Rotate, Scale, VideoTransform};
-pub use types::{ExportMode, KeyframeAlign, OutputFormat, PixelFormat, Quality, VideoCodec};
+pub use types::{
+    ExportMode, KeyframeAlign, OutputFormat, PixelFormat, Quality, RateControl, VideoCodec,
+};
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -32,6 +34,12 @@ pub struct ExportOptions {
     /// 编码器偏好。实际选中的编码器由任务启动时探测决定。
     pub encoder_mode: EncoderMode,
     pub quality: Quality,
+    /// 码率控制方式。见 [`RateControl`]。
+    pub rate_control: RateControl,
+    /// 自定义 CRF。`None` 表示按画质档换算；软件编码器才认这个值。
+    pub crf: Option<u8>,
+    /// 固定码率（kbps），只在 [`RateControl::Bitrate`] 下生效。
+    pub bitrate_kbps: u32,
     /// 输出像素格式。默认跟随源，10bit 不会被悄悄压成 8bit。
     pub pixel_format: PixelFormat,
     /// HDR（PQ/HLG）转 SDR：把高光压进 BT.709，否则导出的画面会发灰。
@@ -91,6 +99,9 @@ impl Default for ExportOptions {
             codec: VideoCodec::H264,
             encoder_mode: EncoderMode::Auto,
             quality: Quality::Standard,
+            rate_control: RateControl::Quality,
+            crf: None,
+            bitrate_kbps: DEFAULT_BITRATE_KBPS,
             pixel_format: PixelFormat::Source,
             tonemap_hdr: false,
             deinterlace: false,
@@ -220,6 +231,9 @@ impl ExportOptions {
     }
 }
 
+/// 固定码率的默认值：6000 kbps 是 1080p 上传最常见的档位，画质够看、体积可控。
+pub const DEFAULT_BITRATE_KBPS: u32 = 6_000;
+
 /// GIF 的输出链：限帧率、缩到 480 宽（只缩不放）、再用两遍法生成调色板。
 ///
 /// `split` 把同一帧同时喂给「统计调色板」与「套用调色板」两条链，颜色比默认的
@@ -311,7 +325,7 @@ pub(super) fn build_command(
             command.arg("-c:v").arg("gif");
         } else {
             command.arg("-c:v").arg(encoder);
-            for arg in super::encoder::video_args(encoder, options.quality) {
+            for arg in super::encoder::video_args(encoder, options) {
                 command.arg(arg);
             }
             // 默认不写 `-pix_fmt`：省略它，ffmpeg 会在「源格式 ∩ 编码器支持列表」里
