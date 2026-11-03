@@ -307,7 +307,7 @@ fn read_stderr(
     duration: Arc<Mutex<Option<f64>>>,
 ) {
     for line in BufReader::new(stderr).lines().map_while(|line| line.ok()) {
-        if let Some(seconds) = parse_duration(&line) {
+        if let Some(seconds) = crate::platform::ffmpeg::parse_duration_line(&line) {
             *duration.lock().unwrap() = Some(seconds);
         }
         let mut tail = tail.lock().unwrap();
@@ -316,20 +316,6 @@ fn read_stderr(
         }
         tail.push_back(line);
     }
-}
-
-/// 从 `  Duration: 00:01:30.00, start: ...` 里取总时长。`N/A` 返回 `None`。
-fn parse_duration(line: &str) -> Option<f64> {
-    let rest = line.trim_start().strip_prefix("Duration:")?;
-    let stamp = rest.split(',').next()?.trim();
-    let mut parts = stamp.split(':');
-    let hours: f64 = parts.next()?.trim().parse().ok()?;
-    let minutes: f64 = parts.next()?.trim().parse().ok()?;
-    let seconds: f64 = parts.next()?.trim().parse().ok()?;
-    if parts.next().is_some() {
-        return None;
-    }
-    Some(hours * 3600.0 + minutes * 60.0 + seconds)
 }
 
 /// 从 `-progress pipe:1` 的输出里读进度。
@@ -459,16 +445,6 @@ mod tests {
         assert_ne!(requests[0].output, requests[1].output);
 
         std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn 时长行能解析也认得_n_a() {
-        assert_eq!(
-            parse_duration("  Duration: 00:01:30.50, start: 0.000000, bitrate: 12 kb/s"),
-            Some(90.5)
-        );
-        assert_eq!(parse_duration("  Duration: N/A, bitrate: N/A"), None);
-        assert_eq!(parse_duration("  Stream #0:0"), None);
     }
 
     fn args_of(input: &str, output: &str, target: &str) -> Vec<String> {

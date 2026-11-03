@@ -5,6 +5,7 @@
 //! 交给 ffmpeg 覆盖——它们属于这一个播放列表。
 
 use super::OutputFormat;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// 裁切结果的落点：与原文件同目录，名字加「 - 片段」。
@@ -30,8 +31,26 @@ pub fn split_output_paths(input: &Path) -> (PathBuf, PathBuf) {
     )
 }
 
+/// 批处理的落点：名字加「 - 批处理」，与单文件裁切的产物区分开。
+///
+/// `taken` 是这一批里已经分出去的落点：同一个目录下的 `a.mkv` 与 `a.mp4` 会算出
+/// 同一个名字，只看「文件是否存在」挡不住。
+pub fn batch_output_path(input: &Path, format: OutputFormat, taken: &HashSet<PathBuf>) -> PathBuf {
+    numbered_output_with(input, format, "批处理", |path| taken.contains(path))
+}
+
 /// 拼 `原名 - 后缀.ext`，撞名时加 `(2)`、`(3)`。
 pub(super) fn numbered_output(input: &Path, format: OutputFormat, suffix: &str) -> PathBuf {
+    numbered_output_with(input, format, suffix, |_| false)
+}
+
+/// 同上，`taken` 用来挡掉「还没落盘但已经许给别人」的名字。
+fn numbered_output_with(
+    input: &Path,
+    format: OutputFormat,
+    suffix: &str,
+    taken: impl Fn(&Path) -> bool,
+) -> PathBuf {
     let dir = input.parent().unwrap_or_else(|| Path::new("."));
     let stem = input
         .file_stem()
@@ -43,7 +62,7 @@ pub(super) fn numbered_output(input: &Path, format: OutputFormat, suffix: &str) 
 
     let mut candidate = dir.join(format!("{base}.{extension}"));
     let mut index = 2;
-    while candidate.exists() {
+    while candidate.exists() || taken(&candidate) {
         candidate = dir.join(format!("{base} ({index}).{extension}"));
         index += 1;
         // 理论上不会走到这里；只是防止某个坏掉的目录让循环停不下来。
@@ -75,6 +94,25 @@ mod tests {
         // HLS 只认自己的播放列表，不会被已有的 mkv 影响。
         let hls = output_path(&input, OutputFormat::Hls);
         assert_eq!(hls, dir.join("课程 01 - 片段.m3u8"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn 同一批里重名的落点错开() {
+        let dir = std::env::temp_dir().join(format!("ngy-batch-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // 同一目录下的同名不同扩展：两者的「 - 批处理.mkv」是同一个名字。
+        let mkv = dir.join("片子.mkv");
+        let mp4 = dir.join("片子.mp4");
+
+        let mut taken = HashSet::new();
+        let first = batch_output_path(&mkv, OutputFormat::Mkv, &taken);
+        taken.insert(first.clone());
+        let second = batch_output_path(&mp4, OutputFormat::Mkv, &taken);
+
+        assert_eq!(first, dir.join("片子 - 批处理.mkv"));
+        assert_eq!(second, dir.join("片子 - 批处理 (2).mkv"));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

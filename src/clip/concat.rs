@@ -10,7 +10,7 @@ use anyhow::{Context as _, Result};
 use futures::channel::mpsc::UnboundedSender;
 use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, Read};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -52,7 +52,7 @@ impl ConcatJob {
         let total: f64 = request
             .inputs
             .iter()
-            .map(|input| probe_duration(&executable, input).unwrap_or(0.0))
+            .map(|input| crate::platform::ffmpeg::probe_duration(&executable, input).unwrap_or(0.0))
             .sum();
 
         let list = std::env::temp_dir().join(format!("ngy-join-{}.txt", std::process::id()));
@@ -158,48 +158,5 @@ fn read_progress(stdout: impl Read, total: f64, tx: &UnboundedSender<ConcatEvent
         };
         let progress = (micros / total_us).clamp(0.0, 1.0) as f32;
         let _ = tx.unbounded_send(ConcatEvent::Progress(progress));
-    }
-}
-
-/// 探测一个文件的时长（秒）。读 `Duration: HH:MM:SS.ss` 那一行。
-fn probe_duration(executable: &Path, input: &Path) -> Option<f64> {
-    let output = Command::new(executable)
-        .args(["-hide_banner", "-nostdin", "-i"])
-        .arg(input)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&output.stderr).into_owned();
-    parse_duration(&text)
-}
-
-/// 从 ffmpeg 的探测输出里读出时长。没有时长（比如损坏的文件）时返回 `None`。
-fn parse_duration(text: &str) -> Option<f64> {
-    let start = text.find("Duration: ")? + "Duration: ".len();
-    // 形如 `00:01:02.34`，固定 11 个字符；不足说明格式不对，直接放弃。
-    let stamp = text.get(start..start + 11)?;
-    let mut parts = stamp.split(':');
-    let hours: f64 = parts.next()?.parse().ok()?;
-    let minutes: f64 = parts.next()?.parse().ok()?;
-    let seconds: f64 = parts.next()?.parse().ok()?;
-    Some(hours * 3600.0 + minutes * 60.0 + seconds)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn 从探测输出里读时长() {
-        let text = "  Duration: 00:01:02.34, start: 0.000000, bitrate: 1234 kb/s";
-        assert_eq!(parse_duration(text), Some(62.34));
-    }
-
-    #[test]
-    fn 没有时长时不猜() {
-        assert_eq!(parse_duration("Input #0, matroska"), None);
-        assert_eq!(parse_duration("Duration: N/A"), None);
     }
 }

@@ -6,6 +6,7 @@
 //!
 //! 本文件只放模块声明与对外出口，具体实现按职责分在同名子目录里。
 
+mod batch;
 mod concat;
 mod cutout;
 mod encoder;
@@ -18,6 +19,9 @@ mod preset;
 mod range;
 mod types;
 
+pub use batch::{
+    BatchEvent, BatchFailure, BatchItem, BatchJob, BatchOutcome, BatchSummary, plan_batch,
+};
 pub use concat::{ConcatEvent, ConcatJob, ConcatOutcome, ConcatRequest};
 pub use export::{
     ColorMatrix, ColorRange, Crop, DEFAULT_BITRATE_KBPS, DEFAULT_SPLIT_MB, Edge, EncoderMode,
@@ -27,7 +31,9 @@ pub use export::{
 };
 pub use job::ClipJob;
 pub use loudness::Loudness;
-pub use naming::{concat_output_path, cut_out_output_path, output_path, split_output_paths};
+pub use naming::{
+    batch_output_path, concat_output_path, cut_out_output_path, output_path, split_output_paths,
+};
 pub use preset::{ExportPreset, PresetStore, normalize_name};
 pub use range::{
     ClipRange, ParsedTime, RangeError, format_time, parse_time, parse_time_with_fps,

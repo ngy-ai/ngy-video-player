@@ -7,9 +7,9 @@
 //! 查找顺序：`NGY_FFMPEG` → 内嵌 → exe 同目录 → `libs/<平台>/`（开发期）→ `PATH`。
 //! 后两档是给 `cargo run` 与「用户本来就有 ffmpeg」的场景留的退路。
 
-use anyhow::Result;
-use std::path::PathBuf;
-use std::process::{Child, ExitStatus};
+use anyhow::{Context as _, Result, anyhow};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 
 // `build.rs` 生成的表：这次构建内嵌了哪个可执行文件（`NAME`）、内容是什么（`BYTES`）。
@@ -158,9 +158,65 @@ pub fn wait_polling(child: &Arc<Mutex<Option<Child>>>) -> Option<std::io::Result
     }
 }
 
+/// 读一个媒体文件的时长（秒）。
+///
+/// 没有 ffprobe 可用，直接跑 `ffmpeg -i`：读不到输出文件时它会把 `Duration:` 打在
+/// stderr 上并以非零码退出，这里只取那一行。批处理拿它当进度分母，拼接拿它算总进度。
+pub fn probe_duration(executable: &Path, input: &Path) -> Result<f64> {
+    let output = Command::new(executable)
+        .args(["-hide_banner", "-nostdin", "-i"])
+        .arg(input)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| format!("启动 ffmpeg 探测时长失败：{}", executable.display()))?;
+    let text = String::from_utf8_lossy(&output.stderr);
+    parse_duration_line(&text).ok_or_else(|| anyhow!("读不出这个文件的时长：{}", input.display()))
+}
+
+/// 从 ffmpeg 的输出里找 `Duration: HH:MM:SS.ss`。
+///
+/// `N/A`（直播流、损坏的文件）返回 `None`：调用方据此退化成「不确定进度」，
+/// 而不是拿 0 当分母算出一串无穷大。
+pub(crate) fn parse_duration_line(text: &str) -> Option<f64> {
+    let line = text
+        .lines()
+        .find(|line| line.trim_start().starts_with("Duration:"))?;
+    let stamp = line
+        .trim_start()
+        .strip_prefix("Duration:")?
+        .split(',')
+        .next()?
+        .trim();
+    let mut parts = stamp.split(':');
+    let hours: f64 = parts.next()?.parse().ok()?;
+    let minutes: f64 = parts.next()?.parse().ok()?;
+    let seconds: f64 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(hours * 3600.0 + minutes * 60.0 + seconds)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 时长行能解析也认得_n_a() {
+        assert_eq!(
+            parse_duration_line("  Duration: 00:01:30.50, start: 0.000000, bitrate: 12 kb/s"),
+            Some(90.5)
+        );
+        assert_eq!(parse_duration_line("  Duration: N/A, bitrate: N/A"), None);
+        assert_eq!(parse_duration_line("  Stream #0:0"), None);
+        // 多行输出里只认 Duration 那一行。
+        assert_eq!(
+            parse_duration_line("Input #0\n  Duration: 00:00:02.00, start: 0.0\nStream"),
+            Some(2.0)
+        );
+    }
 
     #[test]
     fn 平台目录名与构建脚本一致() {

@@ -5,8 +5,9 @@
 
 use futures::StreamExt as _;
 use ngy_video_player::clip::{
-    ClipEvent, ClipJob, ClipOutcome, ClipRange, ClipRequest, ConcatEvent, ConcatJob, ConcatOutcome,
-    ConcatRequest, CutKind, ExportMode, ExportOptions, OutputFormat,
+    BatchEvent, BatchJob, BatchOutcome, ClipEvent, ClipJob, ClipOutcome, ClipRange, ClipRequest,
+    ConcatEvent, ConcatJob, ConcatOutcome, ConcatRequest, CutKind, ExportMode, ExportOptions,
+    OutputFormat, plan_batch,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -468,7 +469,8 @@ fn 无损流复制一段真实视频() {
 #[ignore = "需要本机安装 ffmpeg"]
 fn 按大小切分成多段() {
     let ffmpeg = ngy_video_player::platform::ffmpeg::executable().expect("本机没有 ffmpeg");
-    let dir = std::env::temp_dir().join(format!("ngy-clip-split-e2e-{}", std::process::id()));
+    // 目录名要避开上面那条分割测试：两条测试并行跑，共用一个目录会互相删文件。
+    let dir = std::env::temp_dir().join(format!("ngy-clip-split-size-e2e-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
 
     // 切分只在关键帧上发生（这里每 6 秒一个），源要够长才有几段：
@@ -528,6 +530,49 @@ fn 按大小切分成多段() {
     }
     // 临时文件不能留下，否则导出成功却在目录里留一堆垃圾。
     assert!(!dir.join("split.part.mkv").exists(), "临时文件没删掉");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+#[ignore = "需要本机安装 ffmpeg"]
+fn 批处理逐个文件整段导出() {
+    let ffmpeg = ngy_video_player::platform::ffmpeg::executable().expect("本机没有 ffmpeg");
+    let dir = std::env::temp_dir().join(format!("ngy-clip-batch-e2e-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let first = sample(&ffmpeg, &dir);
+    // 同一目录下的第二个文件：落点按名字错开，不能互相覆盖。
+    let second = dir.join("in2.mp4");
+    std::fs::copy(&first, &second).unwrap();
+
+    let items = plan_batch(&[first.clone(), second.clone()], OutputFormat::Mkv);
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let _job = BatchJob::start(items, ExportOptions::default(), tx).expect("启动批处理失败");
+
+    let (summary, progress) = futures::executor::block_on(async {
+        let mut progress = 0;
+        while let Some(event) = rx.next().await {
+            match event {
+                BatchEvent::Progress { .. } => progress += 1,
+                BatchEvent::ItemStarted { .. } | BatchEvent::ItemFinished { .. } => {}
+                BatchEvent::Finished(BatchOutcome::Done(summary)) => return (summary, progress),
+                BatchEvent::Finished(BatchOutcome::Cancelled(_)) => panic!("不该被取消"),
+            }
+        }
+        panic!("批处理没有回报结果");
+    });
+
+    assert!(progress > 0, "应当收到每个文件的进度");
+    assert!(
+        summary.failures.is_empty(),
+        "有文件处理失败：{:?}",
+        summary.failures
+    );
+    assert_eq!(summary.outputs.len(), 2);
+    for output in &summary.outputs {
+        assert_output(output);
+    }
+    assert_eq!(summary.skipped, 0);
 
     std::fs::remove_dir_all(&dir).unwrap();
 }

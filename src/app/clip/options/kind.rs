@@ -17,6 +17,10 @@ impl PlayerApp {
         dialog: &ClipDialog,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        // 批处理按整段导出：没有区间可选，三种剪切方式也都不适用。
+        if dialog.batch() {
+            return None;
+        }
         let kind = dialog.kind;
         Some(
             div()

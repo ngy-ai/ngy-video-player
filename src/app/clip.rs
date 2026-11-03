@@ -26,8 +26,41 @@ enum ClipState {
     Running {
         progress: f32,
     },
+    /// 批处理正在跑：第 `index` 项（0 起）、共 `total` 项、当前项的文件名与进度。
+    ///
+    /// `done`/`failed` 是已经收尾的项数——批处理一项要几十秒到几分钟，
+    /// 光看一根进度条看不出「还剩几个」。
+    BatchRunning {
+        index: usize,
+        total: usize,
+        name: String,
+        ratio: Option<f32>,
+        done: usize,
+        failed: usize,
+    },
     /// 产物列表：普通裁切只有一个，分割会写出两个。
     Done(Vec<PathBuf>),
+    BatchDone {
+        summary: clip_core::BatchSummary,
+        cancelled: bool,
+    },
+    Failed(String),
+}
+
+/// 这一批文件从哪儿来。
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ClipSource {
+    /// 当前播放的文件，按面板上的区间裁。
+    Current,
+    /// 一个文件夹（含子文件夹），每个文件整段套用导出参数。
+    Folder(PathBuf),
+}
+
+/// 文件夹扫描的结果。
+#[derive(Clone, Debug)]
+enum ClipScan {
+    Scanning,
+    Ready(Vec<PathBuf>),
     Failed(String),
 }
 
@@ -78,6 +111,16 @@ pub(super) struct ClipDialog {
     /// 记下开始时刻是为了躲开 seek 的延迟：刚跳到起点时位置事件可能还是旧的
     /// （甚至已经超过终点），不能拿它判断「播到结尾了」。
     preview: Option<(f64, Instant)>,
+    /// 这次处理哪些文件：当前文件按区间裁，还是整个文件夹整段导出。
+    source: ClipSource,
+    /// 文件夹来源的扫描进度。
+    scan: ClipScan,
+    /// 扫描代次：换文件夹后旧扫描的回包要能被认出来丢掉。
+    ///
+    /// 和 `generation` 分开：换文件夹不该让正在跑的批处理事件全部作废。
+    scan_generation: u64,
+    /// 正在跑的批处理任务。
+    batch: Option<Arc<clip_core::BatchJob>>,
 }
 
 impl ClipDialog {
@@ -121,11 +164,37 @@ impl ClipDialog {
             presets: clip_core::PresetStore::load(),
             preset_name,
             preview: None,
+            source: ClipSource::Current,
+            scan: ClipScan::Ready(Vec::new()),
+            scan_generation: 0,
+            batch: None,
         }
     }
 
     fn editing(&self) -> bool {
         matches!(self.state, ClipState::Editing | ClipState::Failed(_))
+    }
+
+    /// 是否在批处理模式（来源是整个文件夹）。
+    fn batch(&self) -> bool {
+        matches!(self.source, ClipSource::Folder(_))
+    }
+
+    /// 批处理能处理的文件；不在批处理模式或还没扫完时为空。
+    fn batch_inputs(&self) -> &[PathBuf] {
+        match (&self.source, &self.scan) {
+            (ClipSource::Folder(_), ClipScan::Ready(files)) => files,
+            _ => &[],
+        }
+    }
+
+    /// 已经产出的文件。运行中与编辑态为空。
+    fn outputs(&self) -> &[PathBuf] {
+        match &self.state {
+            ClipState::Done(paths) => paths,
+            ClipState::BatchDone { summary, .. } => &summary.outputs,
+            _ => &[],
+        }
     }
 
     /// 当前输入能构成什么区间。`Ok(None)` 表示两端都留空。
@@ -200,6 +269,10 @@ impl PlayerApp {
         let Some(dialog) = self.clip.as_ref() else {
             return;
         };
+        // 批处理面对的是一整个文件夹，正在播的片子换了不影响它。
+        if dialog.batch() {
+            return;
+        }
         if self.snapshot.path.as_deref() != Some(dialog.path.as_path()) {
             self.close_clip_dialog(cx);
         }
@@ -207,10 +280,13 @@ impl PlayerApp {
 
     /// 收面板但不刷新。给同一帧里还要继续改状态的调用方（切播放列表）。
     pub(super) fn dismiss_clip_panel(&mut self) {
-        if let Some(dialog) = self.clip.take()
-            && let Some(job) = &dialog.job
-        {
-            job.cancel();
+        if let Some(dialog) = self.clip.take() {
+            if let Some(job) = &dialog.job {
+                job.cancel();
+            }
+            if let Some(job) = &dialog.batch {
+                job.cancel();
+            }
         }
     }
 
@@ -366,43 +442,33 @@ impl PlayerApp {
 
     /// 起一个后台任务。参数校验失败时留在编辑态，把原因显示在对话框里。
     pub(super) fn start_clip(&mut self, cx: &mut Context<Self>) {
-        let Some(dialog) = self.clip.as_mut() else {
+        let Some(dialog) = self.clip.as_ref() else {
             return;
         };
         if !dialog.editing() {
             return;
         }
+        if dialog.batch() {
+            self.start_clip_batch(cx);
+            return;
+        }
+
+        let Some(dialog) = self.clip.as_mut() else {
+            return;
+        };
         let range = match dialog.range() {
             Ok(Some(range)) => range,
             // 两端都留空不是「复制一份」：按钮本来就是禁用的，这里再挡一次。
             Ok(None) | Err(_) => return,
         };
-
-        let mut options = dialog.options.clone();
-        // 水印文字以输入框里的当前值为准：勾选时当场校验，空文字直接拒绝，
-        // 而不是导出一个「看起来勾了却没画」的文件。
-        if options.watermark.enabled {
-            let text = dialog.watermark_text.read(cx).value().trim().to_string();
-            if text.is_empty() {
-                dialog.state =
-                    ClipState::Failed("水印文字是空的：先在「文字水印」下面输入内容".into());
+        let options = match resolve_clip_options(dialog, cx) {
+            Ok(options) => options,
+            Err(message) => {
+                dialog.state = ClipState::Failed(message);
                 cx.notify();
                 return;
             }
-            options.watermark.text = text;
-        }
-        // 切片输出（HLS 两种分片与 DASH）只装画面与音轨；界面上这几个开关会被
-        // 隐藏，这里再兜一次底，防止旧状态带进来。
-        if options.format.is_segmented() {
-            options.keep_subtitles = false;
-            options.keep_chapters = false;
-        }
-        if options.format == clip_core::OutputFormat::Gif {
-            // GIF 没有音轨，也没有章节可挂；界面上这些开关同样被隐藏。
-            options.keep_audio = false;
-            options.keep_subtitles = false;
-            options.keep_chapters = false;
-        }
+        };
         let burn = if dialog.burn_subtitle {
             dialog.subtitle.clone()
         } else {
@@ -481,11 +547,8 @@ impl PlayerApp {
         let Some(dialog) = self.clip.as_ref() else {
             return;
         };
-        let ClipState::Done(paths) = &dialog.state else {
-            return;
-        };
         // 多产物时只打开第一个：一次弹两个播放器反而添乱。
-        let Some(path) = paths.first().cloned() else {
+        let Some(path) = dialog.outputs().first().cloned() else {
             return;
         };
         match platform::open::open(&path) {
@@ -499,14 +562,11 @@ impl PlayerApp {
         let Some(dialog) = self.clip.as_ref() else {
             return;
         };
-        let ClipState::Done(paths) = &dialog.state else {
-            return;
-        };
-        let Some(path) = paths.first().cloned() else {
+        let Some(path) = dialog.outputs().first().cloned() else {
             return;
         };
         match platform::reveal::reveal(&path) {
-            Ok(()) => self.flash("已在文件管理器里定位片段"),
+            Ok(()) => self.flash("已在文件管理器里定位产物"),
             Err(message) => self.flash(message),
         }
         cx.notify();
@@ -548,6 +608,39 @@ impl PlayerApp {
     }
 }
 
+/// 把输入框里的水印文字并进参数，并按输出格式收掉不该留的轨道开关。
+///
+/// 单文件裁切与批处理共用：两条路都得先过这一关，否则水印能勾上却不画、
+/// 或者 HLS 里写进一张字幕轨让播放列表中招。
+fn resolve_clip_options(
+    dialog: &ClipDialog,
+    cx: &Context<PlayerApp>,
+) -> Result<clip_core::ExportOptions, String> {
+    let mut options = dialog.options.clone();
+    // 水印文字以输入框里的当前值为准：勾选时当场校验，空文字直接拒绝，
+    // 而不是导出一个「看起来勾了却没画」的文件。
+    if options.watermark.enabled {
+        let text = dialog.watermark_text.read(cx).value().trim().to_string();
+        if text.is_empty() {
+            return Err("水印文字是空的：先在「文字水印」下面输入内容".into());
+        }
+        options.watermark.text = text;
+    }
+    // 切片输出（HLS 两种分片与 DASH）只装画面与音轨；界面上这几个开关会被
+    // 隐藏，这里再兜一次底，防止旧状态带进来。
+    if options.format.is_segmented() {
+        options.keep_subtitles = false;
+        options.keep_chapters = false;
+    }
+    if options.format == clip_core::OutputFormat::Gif {
+        // GIF 没有音轨，也没有章节可挂；界面上这些开关同样被隐藏。
+        options.keep_audio = false;
+        options.keep_subtitles = false;
+        options.keep_chapters = false;
+    }
+    Ok(options)
+}
+
 /// 找出文件里第一条能烧录的文本字幕。
 ///
 /// mpv 的轨道 id 不是 ffmpeg 的流序号，但容器内字幕流的先后与 mpv 列出的顺序一致，
@@ -586,6 +679,7 @@ fn is_text_subtitle(codec: &str) -> bool {
 }
 
 mod audio_options;
+mod batch;
 mod options;
 mod panel;
 mod widgets;

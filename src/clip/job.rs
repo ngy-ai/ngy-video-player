@@ -165,6 +165,10 @@ fn align_to_keyframe(executable: &Path, mut request: ClipRequest) -> (ClipReques
         return (request, None);
     }
     let wanted = request.range;
+    // 起点就在文件开头：整段导出（批处理）不必再起一个进程去探关键帧。
+    if wanted.start <= 0.0005 {
+        return (request, None);
+    }
 
     let frames = match keyframe::around(executable, &request.input, wanted.start) {
         Ok(frames) => frames,

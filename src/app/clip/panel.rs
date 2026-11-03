@@ -20,7 +20,11 @@ impl PlayerApp {
         let body = match &dialog.state {
             ClipState::Editing | ClipState::Failed(_) => self.render_clip_editor(dialog, cx),
             ClipState::Running { progress } => self.render_clip_progress(*progress, cx),
+            ClipState::BatchRunning { .. } => self.render_clip_batch_progress(dialog, cx),
             ClipState::Done(paths) => self.render_clip_done(paths, cx),
+            ClipState::BatchDone { summary, cancelled } => {
+                self.render_clip_batch_done(summary, *cancelled, cx)
+            }
         };
 
         Some(
@@ -51,12 +55,13 @@ impl PlayerApp {
                         .pl(px(14.0))
                         .pr(px(6.0))
                         .py(px(8.0))
-                        .child(
-                            div()
-                                .text_size(px(14.0))
-                                .text_color(text())
-                                .child("裁切片段"),
-                        )
+                        .child(div().text_size(px(14.0)).text_color(text()).child(
+                            if dialog.batch() {
+                                "批处理导出"
+                            } else {
+                                "裁切片段"
+                            },
+                        ))
                         .child(icon_button(
                             "clip-close",
                             IconName::X,
@@ -83,52 +88,50 @@ impl PlayerApp {
     }
 
     fn render_clip_editor(&self, dialog: &ClipDialog, cx: &mut Context<Self>) -> AnyElement {
-        let name = file_name(&dialog.path);
+        let batch = dialog.batch();
         let range = dialog.range();
-        // 两端都留空时按钮不可用：这不是「复制整份文件」的入口。
-        let can_start = matches!(range, Ok(Some(_)));
-        let hint: Option<(String, bool)> = match &range {
-            Ok(None) => Some(("开始和结束都留空：请至少填写一端".to_string(), false)),
-            Ok(Some(range)) => Some((
-                format!(
-                    "{} → {}，共 {}",
-                    clip_core::format_time(range.start),
-                    clip_core::format_time(range.end),
-                    clip_core::format_time(range.duration())
-                ),
-                true,
-            )),
-            Err(error) => Some((error.message().to_string(), false)),
+        // 单文件模式要求至少填一端（这不是「复制整份文件」的入口）；
+        // 批处理模式看的是文件夹里有没有可处理的文件。
+        let can_start = if batch {
+            !dialog.batch_inputs().is_empty()
+        } else {
+            matches!(range, Ok(Some(_)))
         };
 
-        // 当前进度用和「全长」同一套格式：拖完进度条、逐帧微调以后，眼睛要能
-        // 立刻核对停在哪一帧，控制条上的 mm:ss 精度不够。
-        let position = self.snapshot.position.clamp(0.0, dialog.duration.max(0.0));
+        let mut body = div().flex().flex_col().gap(px(12.0));
 
-        let mut body = div().flex().flex_col().gap(px(12.0)).child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(4.0))
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(text())
-                        .child(ui::ellipsis(name)),
-                )
-                .child(
-                    div()
-                        .text_size(px(11.0))
-                        .text_color(text_muted())
-                        .child(format!("全长 {}", clip_core::format_time(dialog.duration))),
-                )
-                .child(
-                    div()
-                        .text_size(px(11.0))
-                        .text_color(text_muted())
-                        .child(format!("当前 {}", clip_core::format_time(position))),
-                ),
-        );
+        // 批处理面对的是一整个文件夹，当前文件的时长与播放位置在这里没有意义。
+        if !batch {
+            // 当前进度用和「全长」同一套格式：拖完进度条、逐帧微调以后，眼睛要能
+            // 立刻核对停在哪一帧，控制条上的 mm:ss 精度不够。
+            let position = self.snapshot.position.clamp(0.0, dialog.duration.max(0.0));
+            body = body.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0))
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(text())
+                            .child(ui::ellipsis(file_name(&dialog.path))),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(text_muted())
+                            .child(format!("全长 {}", clip_core::format_time(dialog.duration))),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(text_muted())
+                            .child(format!("当前 {}", clip_core::format_time(position))),
+                    ),
+            );
+        }
+
+        body = body.child(self.render_clip_source(dialog, cx));
 
         // 失败原因来自 ffmpeg，可能有多行；单独一块红字，别和输入校验混在一起。
         if let ClipState::Failed(message) = &dialog.state {
@@ -145,163 +148,212 @@ impl PlayerApp {
             );
         }
 
-        body = body.child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(10.0))
-                .child(self.render_clip_field(
-                    ClipField::Start,
-                    "开始",
-                    &dialog.start,
-                    "留空 = 从头；也收 01:02:03;15",
-                    cx,
-                ))
-                .child(self.render_clip_field(
-                    ClipField::End,
-                    "结束",
-                    &dialog.end,
-                    "留空 = 到最后；也收 01:02:03;15",
-                    cx,
+        // 区间输入、定位按钮都只对单文件有意义；批处理按整段导出。
+        if !batch {
+            let hint: Option<(String, bool)> = match &range {
+                Ok(None) => Some(("开始和结束都留空：请至少填写一端".to_string(), false)),
+                Ok(Some(range)) => Some((
+                    format!(
+                        "{} → {}，共 {}",
+                        clip_core::format_time(range.start),
+                        clip_core::format_time(range.end),
+                        clip_core::format_time(range.duration())
+                    ),
+                    true,
                 )),
-        );
+                Err(error) => Some((error.message().to_string(), false)),
+            };
 
-        if let Some((text, ok)) = hint {
             body = body.child(
                 div()
-                    .text_size(px(11.0))
-                    .text_color(if ok { ui::accent() } else { ui::danger() })
-                    .child(text),
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.0))
+                    .child(self.render_clip_field(
+                        ClipField::Start,
+                        "开始",
+                        &dialog.start,
+                        "留空 = 从头；也收 01:02:03;15",
+                        cx,
+                    ))
+                    .child(self.render_clip_field(
+                        ClipField::End,
+                        "结束",
+                        &dialog.end,
+                        "留空 = 到最后；也收 01:02:03;15",
+                        cx,
+                    )),
             );
+
+            if let Some((text, ok)) = hint {
+                body = body.child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(if ok { ui::accent() } else { ui::danger() })
+                        .child(text),
+                );
+            }
+
+            body = body
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(settings_button(
+                            "clip-mark-start",
+                            "设为开始",
+                            true,
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.clip_mark(ClipField::Start, cx);
+                            }),
+                        ))
+                        .child(settings_button(
+                            "clip-mark-end",
+                            "设为结束",
+                            true,
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.clip_mark(ClipField::End, cx);
+                            }),
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(settings_button(
+                            "clip-frame-back",
+                            "上一帧",
+                            true,
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.step_frame(-1, cx);
+                            }),
+                        ))
+                        .child(settings_button(
+                            "clip-toggle-play",
+                            if self.snapshot.paused {
+                                "播放"
+                            } else {
+                                "暂停"
+                            },
+                            true,
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.toggle_play(cx);
+                            }),
+                        ))
+                        .child(settings_button(
+                            "clip-frame-step",
+                            "下一帧",
+                            true,
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.step_frame(1, cx);
+                            }),
+                        )),
+                );
         }
 
-        body.child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(8.0))
-                .child(settings_button(
-                    "clip-mark-start",
-                    "设为开始",
-                    true,
-                    cx.listener(|this, _: &ClickEvent, _window, cx| {
-                        this.clip_mark(ClipField::Start, cx);
-                    }),
-                ))
-                .child(settings_button(
-                    "clip-mark-end",
-                    "设为结束",
-                    true,
-                    cx.listener(|this, _: &ClickEvent, _window, cx| {
-                        this.clip_mark(ClipField::End, cx);
-                    }),
-                )),
-        )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(8.0))
-                .child(settings_button(
-                    "clip-frame-back",
-                    "上一帧",
-                    true,
-                    cx.listener(|this, _: &ClickEvent, _window, cx| {
-                        this.step_frame(-1, cx);
-                    }),
-                ))
-                .child(settings_button(
-                    "clip-toggle-play",
-                    if self.snapshot.paused {
-                        "播放"
-                    } else {
-                        "暂停"
-                    },
-                    true,
-                    cx.listener(|this, _: &ClickEvent, _window, cx| {
-                        this.toggle_play(cx);
-                    }),
-                ))
-                .child(settings_button(
-                    "clip-frame-step",
-                    "下一帧",
-                    true,
-                    cx.listener(|this, _: &ClickEvent, _window, cx| {
-                        this.step_frame(1, cx);
-                    }),
-                )),
-        )
-        .child(self.render_clip_options(dialog, cx))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap(px(8.0))
-                .child(settings_button(
-                    "clip-preview-range",
-                    "预览片段",
-                    true,
-                    cx.listener(|this, _: &ClickEvent, _window, cx| {
-                        this.clip_preview_range(cx);
-                    }),
-                ))
-                .child(primary_button(
-                    "clip-start",
-                    if dialog.kind == clip_core::CutKind::RemoveMiddle {
-                        "删除中间段"
-                    } else if dialog.kind == clip_core::CutKind::Split {
-                        "分割为两个文件"
-                    } else if dialog.options.format.is_split() {
-                        "按大小切分"
-                    } else if dialog.options.format.is_segmented() {
-                        "开始导出切片"
-                    } else if dialog.options.format == clip_core::OutputFormat::Gif {
-                        "导出 GIF"
-                    } else if dialog.options.mode == clip_core::ExportMode::Copy {
-                        "开始无损剪切"
-                    } else {
-                        "开始裁切"
-                    },
-                    can_start,
-                    cx.listener(move |this, _: &ClickEvent, _window, cx| {
-                        this.start_clip(cx);
-                    }),
-                )),
-        )
-        .child(
-            div()
-                .text_size(px(10.0))
-                .text_color(text_muted())
-                .whitespace_normal()
+        body = body.child(self.render_clip_options(dialog, cx));
+        if batch {
+            body = body
                 .child(
-                    "用控制条上的进度条定位，停在哪一帧就点「设为开始 / 设为结束」。\
-                     空格播放/暂停，←/→ 5 秒，Ctrl/⌘+←/→ 逐帧。",
-                ),
-        )
-        .child(
-            div()
-                .text_size(px(10.0))
-                .text_color(text_faint())
-                .whitespace_normal()
-                .child(if dialog.kind == clip_core::CutKind::RemoveMiddle {
-                    "把选中的区间抠掉后重新编码拼接；中途要占一份片长的临时空间。"
-                } else if dialog.kind == clip_core::CutKind::Split {
-                    "在「开始」处切成前后两个文件，都落在原片同目录；结束时间在这里不参与。"
-                } else if dialog.options.format.is_split() {
-                    "切成若干个带编号的 mkv，每段都是独立可播的文件；字幕与章节照常保留。"
-                } else if dialog.options.format.is_segmented() {
-                    "输出播放列表与同名分片；只保留画面与音轨，字幕与章节不写入。"
-                } else if dialog.options.format == clip_core::OutputFormat::Gif {
-                    "导出 12fps、480 宽的循环动图；没有声音。片段越长，文件越大。"
-                } else if dialog.options.mode == clip_core::ExportMode::Copy {
-                    "流复制为 mkv：不重新编码，几秒完成；切点会吸附到关键帧上，\
-                     实际起点与设定值可能差一小段，导出完成后会告诉你差多少。"
-                } else {
-                    "重编码为 mkv，耗时与片长相关；开始后可取消。"
-                }),
-        )
-        .into_any_element()
+                    div()
+                        .text_size(px(10.0))
+                        .text_color(text_faint())
+                        .whitespace_normal()
+                        .child(
+                            "把每个文件整段按上面的设置导出，产物落在源文件旁边，\
+                             名字加「 - 批处理」。批处理不烧录字幕，也不做「删除中间段 / 分割」。",
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .child(primary_button(
+                            "clip-batch-start",
+                            "开始批处理",
+                            can_start,
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.start_clip(cx);
+                            }),
+                        )),
+                );
+        } else {
+            body = body
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(8.0))
+                        .child(settings_button(
+                            "clip-preview-range",
+                            "预览片段",
+                            true,
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.clip_preview_range(cx);
+                            }),
+                        ))
+                        .child(primary_button(
+                            "clip-start",
+                            if dialog.kind == clip_core::CutKind::RemoveMiddle {
+                                "删除中间段"
+                            } else if dialog.kind == clip_core::CutKind::Split {
+                                "分割为两个文件"
+                            } else if dialog.options.format.is_split() {
+                                "按大小切分"
+                            } else if dialog.options.format.is_segmented() {
+                                "开始导出切片"
+                            } else if dialog.options.format == clip_core::OutputFormat::Gif {
+                                "导出 GIF"
+                            } else if dialog.options.mode == clip_core::ExportMode::Copy {
+                                "开始无损剪切"
+                            } else {
+                                "开始裁切"
+                            },
+                            can_start,
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.start_clip(cx);
+                            }),
+                        )),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.0))
+                        .text_color(text_muted())
+                        .whitespace_normal()
+                        .child(
+                            "用控制条上的进度条定位，停在哪一帧就点「设为开始 / 设为结束」。\
+                             空格播放/暂停，←/→ 5 秒，Ctrl/⌘+←/→ 逐帧。",
+                        ),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.0))
+                        .text_color(text_faint())
+                        .whitespace_normal()
+                        .child(if dialog.kind == clip_core::CutKind::RemoveMiddle {
+                            "把选中的区间抠掉后重新编码拼接；中途要占一份片长的临时空间。"
+                        } else if dialog.kind == clip_core::CutKind::Split {
+                            "在「开始」处切成前后两个文件，都落在原片同目录；结束时间在这里不参与。"
+                        } else if dialog.options.format.is_split() {
+                            "切成若干个带编号的 mkv，每段都是独立可播的文件；字幕与章节照常保留。"
+                        } else if dialog.options.format.is_segmented() {
+                            "输出播放列表与同名分片；只保留画面与音轨，字幕与章节不写入。"
+                        } else if dialog.options.format == clip_core::OutputFormat::Gif {
+                            "导出 12fps、480 宽的循环动图；没有声音。片段越长，文件越大。"
+                        } else if dialog.options.mode == clip_core::ExportMode::Copy {
+                            "流复制为 mkv：不重新编码，几秒完成；切点会吸附到关键帧上，\
+                             实际起点与设定值可能差一小段，导出完成后会告诉你差多少。"
+                        } else {
+                            "重编码为 mkv，耗时与片长相关；开始后可取消。"
+                        }),
+                );
+        }
+
+        body.into_any_element()
     }
 
     fn render_clip_field(

@@ -237,6 +237,24 @@ pub(super) fn file_name(path: &std::path::Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
+/// 失败原因只取第一行、截到 80 字：ffmpeg 后面跟着一大段参数回显，面板放不下。
+///
+/// 格式转换与批处理的失败列表共用：两处都是一长串 ffmpeg 输出挂在一个文件名后面。
+pub(super) fn brief_reason(message: &str) -> String {
+    let line = message
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or(message)
+        .trim();
+    if line.chars().count() <= 80 {
+        line.to_string()
+    } else {
+        let mut text: String = line.chars().take(79).collect();
+        text.push('…');
+        text
+    }
+}
+
 /// 设置窗口里的一个按钮：描边 + 文字，宽度跟着文字走。
 ///
 /// 不用控制条上那套图标按钮：那一排是「一直摆在画面上」的开关，尺寸要小；设置窗口

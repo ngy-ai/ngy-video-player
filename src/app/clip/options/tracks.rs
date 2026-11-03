@@ -47,7 +47,8 @@ impl PlayerApp {
         }
 
         // 烧录只对文本字幕有意义；这个文件没有可烧的轨道时，这一行不出现。
-        if let Some(subtitle) = &dialog.subtitle {
+        // 批处理里每个文件的内置字幕轨都不一样，任务侧不做烧录，这里也就不露开关。
+        if let Some(subtitle) = dialog.subtitle.as_ref().filter(|_| !dialog.batch()) {
             body = body
                 .child(toggle_row(
                     "clip-option-burn-subtitle",

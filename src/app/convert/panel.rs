@@ -787,19 +787,3 @@ fn render_picker_row(
         }))
         .into_any_element()
 }
-
-/// 失败原因只取第一行、截到 80 字：ffmpeg 后面跟着一大段参数回显，面板放不下。
-fn brief_reason(message: &str) -> String {
-    let line = message
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or(message)
-        .trim();
-    if line.chars().count() <= 80 {
-        line.to_string()
-    } else {
-        let mut text: String = line.chars().take(79).collect();
-        text.push('…');
-        text
-    }
-}
