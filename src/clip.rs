@@ -718,7 +718,7 @@ impl ClipJob {
                                 }
                             }
                         } else {
-                            ClipOutcome::Finished(vec![output])
+                            ClipOutcome::Finished(vec![output.clone()])
                         }
                     }
                     Some(Ok(status)) => {
@@ -744,6 +744,10 @@ impl ClipJob {
             // 临时字幕文件是这次任务的中间产物：ffmpeg 已经退出，留着只会占地方。
             if let Some(path) = &task_burn {
                 let _ = std::fs::remove_file(path);
+            }
+            // 切分的第一遍失败时，那个 `.part.mkv` 也是半成品，不能留在目录里。
+            if split && !matches!(outcome, ClipOutcome::Finished(_)) {
+                let _ = std::fs::remove_file(&output);
             }
             let _ = tx.unbounded_send(ClipEvent::Done(outcome));
         });
