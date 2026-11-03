@@ -59,7 +59,7 @@ pub(super) fn start(
             tx: &tx,
         };
         let outcome = match run(&request, &parts, &task) {
-            Ok(()) => ClipOutcome::Finished(request.output.clone()),
+            Ok(()) => ClipOutcome::Finished(vec![request.output.clone()]),
             Err(error) => {
                 remove_output(&request.output);
                 if job_cancelled.load(Ordering::SeqCst) {

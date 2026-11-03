@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::clip as clip_core;
-use std::path::Path;
+use std::path::PathBuf;
 
 impl PlayerApp {
     /// 右侧面板本体。与播放列表共用一条通道：视频和控制条按它让位，
@@ -20,7 +20,7 @@ impl PlayerApp {
         let body = match &dialog.state {
             ClipState::Editing | ClipState::Failed(_) => self.render_clip_editor(dialog, cx),
             ClipState::Running { progress } => self.render_clip_progress(*progress, cx),
-            ClipState::Done(path) => self.render_clip_done(path, cx),
+            ClipState::Done(paths) => self.render_clip_done(paths, cx),
         };
 
         Some(
@@ -428,24 +428,27 @@ impl PlayerApp {
             .into_any_element()
     }
 
-    fn render_clip_done(&self, path: &Path, cx: &mut Context<Self>) -> AnyElement {
-        let mut body = div()
-            .flex()
-            .flex_col()
-            .gap(px(10.0))
-            .child(
-                div()
-                    .text_size(px(13.0))
-                    .text_color(text())
-                    .child("片段已保存"),
-            )
-            .child(
+    fn render_clip_done(&self, paths: &[PathBuf], cx: &mut Context<Self>) -> AnyElement {
+        let mut body = div().flex().flex_col().gap(px(10.0)).child(
+            div()
+                .text_size(px(13.0))
+                .text_color(text())
+                .child(if paths.len() > 1 {
+                    format!("已保存 {} 个文件", paths.len())
+                } else {
+                    "片段已保存".to_string()
+                }),
+        );
+        // 分割会写出两个文件，逐个列出来，用户才知道东西落在哪。
+        for path in paths {
+            body = body.child(
                 div()
                     .text_size(px(11.0))
                     .text_color(text_muted())
                     .whitespace_normal()
                     .child(path.display().to_string()),
             );
+        }
 
         // 无损剪切只能在关键帧上起步，实际起点与设定值几乎总差一截。
         // 不说清楚的话，用户会以为剪切位置不准。

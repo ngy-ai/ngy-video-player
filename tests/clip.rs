@@ -147,7 +147,7 @@ fn 烧录内置字幕() {
     let (outcome, _progress) = run(request);
 
     match outcome {
-        ClipOutcome::Finished(path) => assert_eq!(path, output),
+        ClipOutcome::Finished(paths) => assert_eq!(paths, vec![output.clone()]),
         other => panic!("烧录字幕失败: {other:?}"),
     }
     assert_output(&output);
@@ -210,7 +210,7 @@ fn 删除中间段之后首尾接上() {
     let (outcome, _progress) = run(request);
 
     match outcome {
-        ClipOutcome::Finished(path) => assert_eq!(path, output),
+        ClipOutcome::Finished(paths) => assert_eq!(paths, vec![output.clone()]),
         other => panic!("删除中间段失败: {other:?}"),
     }
     assert_output(&output);
@@ -246,7 +246,7 @@ fn 裁切一段真实视频() {
     let (outcome, progress) = run(request);
 
     match outcome {
-        ClipOutcome::Finished(path) => assert_eq!(path, output),
+        ClipOutcome::Finished(paths) => assert_eq!(paths, vec![output.clone()]),
         other => panic!("裁切失败: {other:?}"),
     }
     assert!(!progress.is_empty(), "应当收到进度事件");
@@ -296,7 +296,7 @@ fn 滤镜与响度处理能被_ffmpeg_接受() {
     let (outcome, _progress) = run(request);
 
     match outcome {
-        ClipOutcome::Finished(path) => assert_eq!(path, output),
+        ClipOutcome::Finished(paths) => assert_eq!(paths, vec![output.clone()]),
         other => panic!("滤镜链被 ffmpeg 拒绝: {other:?}"),
     }
     assert_output(&output);
@@ -332,7 +332,7 @@ fn 导出_hls_切片() {
     let (outcome, _progress) = run(request);
 
     match outcome {
-        ClipOutcome::Finished(path) => assert_eq!(path, output),
+        ClipOutcome::Finished(paths) => assert_eq!(paths, vec![output.clone()]),
         other => panic!("HLS 导出失败: {other:?}"),
     }
     assert!(output.is_file(), "播放列表不存在");
@@ -374,7 +374,7 @@ fn 无损流复制一段真实视频() {
     let (outcome, _progress) = run(request);
 
     match outcome {
-        ClipOutcome::Finished(path) => assert_eq!(path, output),
+        ClipOutcome::Finished(paths) => assert_eq!(paths, vec![output.clone()]),
         other => panic!("无损剪切失败: {other:?}"),
     }
     assert_output(&output);

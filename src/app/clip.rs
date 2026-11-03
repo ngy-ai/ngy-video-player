@@ -22,8 +22,11 @@ enum ClipField {
 #[derive(Clone, Debug)]
 enum ClipState {
     Editing,
-    Running { progress: f32 },
-    Done(PathBuf),
+    Running {
+        progress: f32,
+    },
+    /// 产物列表：普通裁切只有一个，分割会写出两个。
+    Done(Vec<PathBuf>),
     Failed(String),
 }
 
@@ -415,7 +418,7 @@ impl PlayerApp {
                         ClipEvent::Done(outcome) => {
                             dialog.job = None;
                             dialog.state = match outcome {
-                                ClipOutcome::Finished(path) => ClipState::Done(path),
+                                ClipOutcome::Finished(paths) => ClipState::Done(paths),
                                 ClipOutcome::Cancelled => ClipState::Editing,
                                 ClipOutcome::Failed(message) => ClipState::Failed(message),
                             };
@@ -432,14 +435,15 @@ impl PlayerApp {
         let Some(dialog) = self.clip.as_ref() else {
             return;
         };
-        let ClipState::Done(path) = &dialog.state else {
+        let ClipState::Done(paths) = &dialog.state else {
             return;
         };
-        match platform::open::open(path) {
-            Ok(()) => {
-                let path = path.clone();
-                self.flash(format!("已打开 {}", path.display()));
-            }
+        // 多产物时只打开第一个：一次弹两个播放器反而添乱。
+        let Some(path) = paths.first().cloned() else {
+            return;
+        };
+        match platform::open::open(&path) {
+            Ok(()) => self.flash(format!("已打开 {}", path.display())),
             Err(message) => self.flash(message),
         }
         cx.notify();
@@ -449,10 +453,12 @@ impl PlayerApp {
         let Some(dialog) = self.clip.as_ref() else {
             return;
         };
-        let ClipState::Done(path) = &dialog.state else {
+        let ClipState::Done(paths) = &dialog.state else {
             return;
         };
-        let path = path.clone();
+        let Some(path) = paths.first().cloned() else {
+            return;
+        };
         match platform::reveal::reveal(&path) {
             Ok(()) => self.flash("已在文件管理器里定位片段"),
             Err(message) => self.flash(message),

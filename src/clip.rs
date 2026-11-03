@@ -274,7 +274,8 @@ pub enum ClipEvent {
 
 #[derive(Clone, Debug)]
 pub enum ClipOutcome {
-    Finished(PathBuf),
+    /// 产物可能是多个（分割会写出两个文件），按写出顺序排列。
+    Finished(Vec<PathBuf>),
     Cancelled,
     Failed(String),
 }
@@ -440,7 +441,7 @@ impl ClipJob {
                 ClipOutcome::Cancelled
             } else {
                 match status {
-                    Some(Ok(status)) if status.success() => ClipOutcome::Finished(output),
+                    Some(Ok(status)) if status.success() => ClipOutcome::Finished(vec![output]),
                     Some(Ok(status)) => {
                         let detail = tail
                             .lock()
