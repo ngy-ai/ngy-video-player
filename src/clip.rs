@@ -27,8 +27,8 @@ mod loudness;
 pub use concat::{ConcatEvent, ConcatJob, ConcatOutcome, ConcatRequest};
 pub use export::{
     ColorMatrix, ColorRange, Crop, DEFAULT_BITRATE_KBPS, Edge, EncoderMode, ExportMode,
-    ExportOptions, KeyframeAlign, OutputFormat, Pad, PixelFormat, Quality, RateControl, Rotate,
-    Scale, VideoCodec, VideoTransform,
+    ExportOptions, KeyframeAlign, MAX_FREEZE_SECONDS, OutputFormat, Pad, PixelFormat, Quality,
+    RateControl, Rotate, Scale, VideoCodec, VideoTransform, Watermark, WatermarkPosition,
 };
 pub use loudness::Loudness;
 
@@ -463,7 +463,8 @@ impl ClipJob {
         let task_child = child.clone();
         let task_cancelled = cancelled.clone();
         let output = request.output.clone();
-        let total = request.range.duration();
+        // 开头定格会多出几秒，进度分母不跟着加长，进度条会提前走到满。
+        let total = request.options.output_duration(request.range.duration());
         let task_burn = burn;
         std::thread::spawn(move || {
             if let Some(stdout) = stdout {

@@ -8,6 +8,7 @@ use super::*;
 use crate::clip::{
     self as clip_core, ClipEvent, ClipJob, ClipOutcome, ClipRange, ClipRequest, RangeError,
 };
+use gpui_kit::component::input::InputState;
 
 /// 输入框里最多放得下 `01:02:03.500` 这样的内容。
 const MAX_INPUT_CHARS: usize = 12;
@@ -58,6 +59,11 @@ pub(super) struct ClipDialog {
     burn_subtitle: bool,
     /// 这次要做什么：保留区间、抠掉区间，还是在区间起点切成两个文件。
     kind: clip_core::CutKind,
+    /// 水印文字框。
+    ///
+    /// 导出参数里存的是最终字面量，输入框留在这里：水印多是中文，
+    /// 自绘的数字输入框没有输入法，打不进去。
+    watermark_text: Entity<InputState>,
     /// 正在预览片段时的终点与开始时刻（秒）。
     ///
     /// 记下开始时刻是为了躲开 seek 的延迟：刚跳到起点时位置事件可能还是旧的
@@ -71,7 +77,14 @@ impl ClipDialog {
         path: PathBuf,
         duration: f64,
         subtitle: Option<clip_core::BurnSubtitle>,
+        window: &mut Window,
+        cx: &mut Context<PlayerApp>,
     ) -> Self {
+        let watermark_text = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(String::new())
+                .placeholder("例如：@频道名 / 会议录像")
+        });
         Self {
             generation,
             path,
@@ -88,6 +101,7 @@ impl ClipDialog {
             // 是不可逆的。
             burn_subtitle: false,
             kind: clip_core::CutKind::Keep,
+            watermark_text,
             preview: None,
         }
     }
@@ -112,7 +126,7 @@ impl ClipDialog {
 
 impl PlayerApp {
     /// 打开对话框。没有正在播放的文件、或者时长还没读出来时，只给一条提示。
-    pub(super) fn open_clip_dialog(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn open_clip_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // 再点一次菜单就是收起：面板不挡播放，开关语义比「重新开一个」自然。
         if self.clip.is_some() {
             self.close_clip_dialog(cx);
@@ -145,6 +159,8 @@ impl PlayerApp {
             path,
             duration,
             subtitle,
+            window,
+            cx,
         ));
         // 播放列表与裁切面板抢同一条右侧通道，先让位。
         self.set_playlist_visible(false);
@@ -343,6 +359,18 @@ impl PlayerApp {
         };
 
         let mut options = dialog.options.clone();
+        // 水印文字以输入框里的当前值为准：勾选时当场校验，空文字直接拒绝，
+        // 而不是导出一个「看起来勾了却没画」的文件。
+        if options.watermark.enabled {
+            let text = dialog.watermark_text.read(cx).value().trim().to_string();
+            if text.is_empty() {
+                dialog.state =
+                    ClipState::Failed("水印文字是空的：先在「文字水印」下面输入内容".into());
+                cx.notify();
+                return;
+            }
+            options.watermark.text = text;
+        }
         match options.format {
             clip_core::OutputFormat::Hls => {
                 // HLS 的 TS 分片只装画面与音轨；界面上这两个开关会被隐藏，

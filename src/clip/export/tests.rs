@@ -529,6 +529,111 @@ fn 固定码率时不再写_crf() {
 }
 
 #[test]
+fn 倒放同时反转画面与声音() {
+    let options = ExportOptions {
+        reverse: true,
+        ..ExportOptions::default()
+    };
+    let filters = options.video_filters().unwrap();
+    assert!(
+        filters.split(',').any(|filter| filter == "reverse"),
+        "{filters}"
+    );
+    let audio = options.audio_filters().unwrap();
+    assert!(
+        audio.split(',').any(|filter| filter == "areverse"),
+        "{audio}"
+    );
+}
+
+#[test]
+fn 倒放压过音频复制() {
+    // `areverse` 需要解码后的样本，`-c:a copy` 下它会静默失效，
+    // 结果是画面倒放、声音正放——比不勾更糟。
+    let options = ExportOptions {
+        reverse: true,
+        audio_copy: true,
+        ..ExportOptions::default()
+    };
+    assert!(!options.copies_audio());
+    let args = args(options);
+    assert!(has(&args, &["-c:a", "aac"]));
+    assert!(!has(&args, &["-c:a", "copy"]));
+}
+
+#[test]
+fn 开头定格补画面并把声音推迟() {
+    let options = ExportOptions {
+        freeze_lead: 2.0,
+        ..ExportOptions::default()
+    };
+    let filters = options.video_filters().unwrap();
+    assert!(
+        filters.contains("tpad=start_mode=clone:start_duration=2.000"),
+        "{filters}"
+    );
+    let audio = options.audio_filters().unwrap();
+    assert!(audio.contains("adelay=2000:all=1"), "{audio}");
+
+    // -t 必须按加长后的时长写：按原区间写会把定格那段直接截掉。
+    let options = ExportOptions {
+        freeze_lead: 2.0,
+        ..ExportOptions::default()
+    };
+    let args = args(options);
+    assert!(has(&args, &["-t", "17.000"]), "{args:?}");
+}
+
+#[test]
+fn 定格时长被夹到量程内() {
+    let options = ExportOptions {
+        freeze_lead: -3.0,
+        ..ExportOptions::default()
+    };
+    assert_eq!(options.freeze_seconds(), 0.0);
+    assert_eq!(options.video_filters(), None);
+
+    let too_long = ExportOptions {
+        freeze_lead: 900.0,
+        ..ExportOptions::default()
+    };
+    assert_eq!(too_long.freeze_seconds(), MAX_FREEZE_SECONDS);
+}
+
+#[test]
+fn 水印画在几何变换之后() {
+    let options = ExportOptions {
+        sharpen: true,
+        watermark: Watermark {
+            enabled: true,
+            text: "示例台标".into(),
+            position: WatermarkPosition::TopRight,
+            size: 32,
+            opacity: 0.6,
+        },
+        ..ExportOptions::default()
+    };
+    let filters = options.video_filters().unwrap();
+    let unsharp = filters.find("unsharp").unwrap();
+    let drawtext = filters.find("drawtext").unwrap();
+    assert!(unsharp < drawtext, "水印要按最终画面定位：{filters}");
+    assert!(filters.contains("text='示例台标'"), "{filters}");
+    assert!(filters.contains("x=w-tw-24:y=24"), "{filters}");
+}
+
+#[test]
+fn 流复制时倒放与定格都不落地() {
+    let options = ExportOptions {
+        mode: ExportMode::Copy,
+        reverse: true,
+        freeze_lead: 3.0,
+        ..ExportOptions::default()
+    };
+    assert_eq!(options.video_filters(), None);
+    assert_eq!(options.audio_filters(), None);
+}
+
+#[test]
 fn 两遍响度把测量值喂回滤镜() {
     let options = ExportOptions {
         normalize_audio: true,

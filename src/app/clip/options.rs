@@ -11,9 +11,10 @@ use super::widgets::{
 use super::*;
 use crate::clip::{
     ColorMatrix, ColorRange, Crop, CutKind, DEFAULT_BITRATE_KBPS, Edge, EncoderMode, ExportMode,
-    ExportOptions, KeyframeAlign, OutputFormat, Pad, PixelFormat, Quality, RateControl, Rotate,
-    Scale, VideoCodec,
+    ExportOptions, KeyframeAlign, MAX_FREEZE_SECONDS, OutputFormat, Pad, PixelFormat, Quality,
+    RateControl, Rotate, Scale, VideoCodec, Watermark, WatermarkPosition,
 };
+use gpui_kit::component::input::Input;
 
 impl PlayerApp {
     /// 改一项导出参数。面板开着才生效，改完立刻重绘。
@@ -343,6 +344,30 @@ impl PlayerApp {
                     },
                     cx,
                 ))
+                // 倒放与定格改的是帧的先后顺序，和上面的画质处理不是一类事，
+                // 单独开一段；两项都只在重编码时可用，正好都在这个分支里。
+                .child(section_title("时间"))
+                .child(toggle_row(
+                    "clip-option-reverse",
+                    "倒放",
+                    options.reverse,
+                    |this, cx| {
+                        this.update_clip_options(|options| options.reverse ^= true, cx);
+                    },
+                    cx,
+                ))
+                .child(note(
+                    "整段从后往前播，画面与声音都会重编码；倒放要把整段帧攒在内存里，只适合短片。",
+                ))
+                .child(step_row(
+                    "clip-freeze",
+                    "开头定格",
+                    freeze_label(options.freeze_seconds()),
+                    "把首帧冻住这么久再开始播，用来做标题卡；声音同步推迟。点数值归零。",
+                    StepperTarget::Freeze,
+                    cx,
+                ))
+                .child(watermark_controls(dialog, options, cx))
                 // 色彩放在画面处理之后：色调映射、范围与矩阵都属于「最后一步定调」，
                 // 排在一起用户才看得出它们是同一类操作。
                 .child(section_title("色彩"))
@@ -456,6 +481,192 @@ impl PlayerApp {
     fn nudge_crop(&mut self, edge: Edge, delta: f32, cx: &mut Context<Self>) {
         self.update_clip_options(|options| options.transform.crop.nudge(edge, delta), cx);
     }
+}
+
+/// 定格时长的显示文本。0 不说「0 秒」，说「不定格」：面板上所有开关的
+/// 关闭态都用同一句话，用户不必记哪个数字代表关。
+fn freeze_label(seconds: f32) -> String {
+    if seconds <= 0.0 {
+        "不定格".to_string()
+    } else {
+        format!("{seconds:.1} 秒")
+    }
+}
+
+/// 三处步进器共用一套加减与归位逻辑。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StepperTarget {
+    /// 开头定格，0.5 秒一格。
+    Freeze,
+    /// 水印字号，4px 一格。
+    FontSize,
+    /// 水印不透明度，10% 一格。
+    Opacity,
+}
+
+fn apply_step(options: &mut ExportOptions, target: StepperTarget, delta: i32) {
+    match target {
+        StepperTarget::Freeze => {
+            // 存的是秒，按 0.5 秒的整数倍走，界面上的数字才不会变成 1.7000001。
+            let halves = (options.freeze_seconds() * 2.0).round() as i32 + delta;
+            let halves = halves.clamp(0, (MAX_FREEZE_SECONDS * 2.0) as i32);
+            options.freeze_lead = halves as f32 / 2.0;
+        }
+        StepperTarget::FontSize => {
+            let next = options.watermark.size as i32 + delta * Watermark::SIZE_STEP;
+            options.watermark.size =
+                next.clamp(Watermark::MIN_SIZE as i32, Watermark::MAX_SIZE as i32) as u32;
+        }
+        StepperTarget::Opacity => {
+            let next = (options.watermark.opacity * 100.0).round() as i32
+                + delta * Watermark::OPACITY_STEP;
+            options.watermark.opacity = next.clamp(5, 100) as f32 / 100.0;
+        }
+    }
+}
+
+fn reset_value(options: &mut ExportOptions, target: StepperTarget) {
+    match target {
+        StepperTarget::Freeze => options.freeze_lead = 0.0,
+        StepperTarget::FontSize => options.watermark.size = Watermark::default().size,
+        StepperTarget::Opacity => options.watermark.opacity = Watermark::default().opacity,
+    }
+}
+
+/// 一行步进器：`−  当前值  +`，点数值回到默认。
+///
+/// 三个控件长得一样、只有步长与量程不同，做成一个函数，免得改了字号那行
+/// 忘了改不透明度那行。
+fn step_row(
+    prefix: &'static str,
+    label: &'static str,
+    value: String,
+    hint: &'static str,
+    target: StepperTarget,
+    cx: &mut Context<PlayerApp>,
+) -> AnyElement {
+    let change = |delta: i32| {
+        cx.listener(move |this, _: &ClickEvent, _window, cx| {
+            this.update_clip_options(|options| apply_step(options, target, delta), cx);
+        })
+    };
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(4.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(8.0))
+                .child(div().text_size(px(12.0)).text_color(text()).child(label))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .child(stepper_button(
+                            SharedString::from(format!("{prefix}-less")),
+                            "-",
+                            change(-1),
+                        ))
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("{prefix}-value")))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .w(px(76.0))
+                                .h(px(24.0))
+                                .rounded(px(6.0))
+                                .bg(ui::surface_active())
+                                .text_size(px(11.0))
+                                .text_color(ui::accent())
+                                .cursor(CursorStyle::PointingHand)
+                                .hover(|style| style.bg(ui::surface_hover()))
+                                .child(value)
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                                    cx.stop_propagation();
+                                    this.update_clip_options(
+                                        |options| reset_value(options, target),
+                                        cx,
+                                    );
+                                })),
+                        )
+                        .child(stepper_button(
+                            SharedString::from(format!("{prefix}-more")),
+                            "+",
+                            change(1),
+                        )),
+                ),
+        )
+        .child(note(hint))
+        .into_any_element()
+}
+
+/// 文字水印：勾选框、文字输入、落点、字号、不透明度。
+///
+/// 没勾的时候只留一行开关，把整段控件收起来：面板已经很长，
+/// 而绝大多数导出都用不到水印。
+fn watermark_controls(
+    dialog: &ClipDialog,
+    options: &ExportOptions,
+    cx: &mut Context<PlayerApp>,
+) -> AnyElement {
+    let mut body = div().flex().flex_col().gap(px(6.0)).child(toggle_row(
+        "clip-option-watermark",
+        "文字水印",
+        options.watermark.enabled,
+        |this, cx| {
+            this.update_clip_options(|options| options.watermark.enabled ^= true, cx);
+        },
+        cx,
+    ));
+
+    if !options.watermark.enabled {
+        return body
+            .child(note("把一行文字压在画面上，用来标注来源或版权。"))
+            .into_any_element();
+    }
+
+    body = body
+        .child(
+            div().child(
+                Input::new(&dialog.watermark_text)
+                    .id("clip-watermark-text")
+                    .w_full(),
+            ),
+        )
+        .child(chip_row(
+            "clip-watermark-pos",
+            &WatermarkPosition::ALL,
+            options.watermark.position,
+            WatermarkPosition::label,
+            |options, position| options.watermark.position = position,
+            cx,
+        ))
+        .child(step_row(
+            "clip-watermark-size",
+            "字号",
+            format!("{} px", options.watermark.size),
+            "按输出画面的像素算：1080p 用 28 左右，4K 素材要调到 50 以上。",
+            StepperTarget::FontSize,
+            cx,
+        ))
+        .child(step_row(
+            "clip-watermark-opacity",
+            "不透明度",
+            format!("{:.0}%", options.watermark.opacity * 100.0),
+            "半透明的水印不挡画面，但压在高光上会看不清；配了淡阴影兜底。",
+            StepperTarget::Opacity,
+            cx,
+        ))
+        .child(note(
+            "文字留空时不会导出；用的是系统里的中文字体，找不到字体文件时交给 ffmpeg 自己挑。",
+        ));
+    body.into_any_element()
 }
 
 /// 自定义 CRF 一行：`−  CRF 20  +`，点数字回到「自动」。

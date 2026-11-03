@@ -319,7 +319,7 @@ impl PlayerApp {
             BarAction::ToggleHelp => self.toggle_settings(SettingsTab::Shortcuts),
             BarAction::OpenSettings(tab) => self.open_settings(tab),
             BarAction::TakeScreenshot => self.take_screenshot(cx),
-            BarAction::Trim => self.open_clip_dialog(cx),
+            BarAction::Trim => self.open_clip_dialog(window, cx),
             BarAction::Convert => self.open_convert_dialog(cx),
             BarAction::MarkAbStart => self.mark_ab_start(cx),
             BarAction::MarkAbEnd => self.mark_ab_end(cx),

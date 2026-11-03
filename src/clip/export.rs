@@ -7,6 +7,7 @@
 //!
 //! 滤镜与响度处理只在重编码时可用：流复制根本没有解码后的样本可以加工。
 
+mod effects;
 mod transform;
 mod types;
 
@@ -15,6 +16,7 @@ use super::loudness::Loudness;
 // 编码器偏好是裁切与格式转换共用的，定义在 `crate::encoder`，这里只重新导出，
 // 保持 `clip::EncoderMode` 这个既有入口不变。
 pub use crate::encoder::EncoderMode;
+pub use effects::{Watermark, WatermarkPosition};
 pub use transform::{Crop, Edge, Pad, Rotate, Scale, VideoTransform};
 pub use types::{
     ColorMatrix, ColorRange, ExportMode, KeyframeAlign, OutputFormat, PixelFormat, Quality,
@@ -98,6 +100,16 @@ pub struct ExportOptions {
     pub keep_subtitles: bool,
     /// 章节与容器元数据。
     pub keep_chapters: bool,
+    /// 倒放：整段反过来播。
+    ///
+    /// 画面用 `reverse`、声音用 `areverse`，两者都必须重编码；`reverse` 会把整段
+    /// 解码后的帧攒在内存里，长片会直接把内存吃光，面板上只留给短片用。
+    pub reverse: bool,
+    /// 开头定格（秒）：把首帧冻住这么久再开始播，用来做标题卡。
+    /// `0` 表示不冻结。音频同步推迟同样的时长。
+    pub freeze_lead: f32,
+    /// 文字水印。
+    pub watermark: Watermark,
 }
 
 impl Default for ExportOptions {
@@ -134,6 +146,9 @@ impl Default for ExportOptions {
             keep_audio: true,
             keep_subtitles: true,
             keep_chapters: true,
+            reverse: false,
+            freeze_lead: 0.0,
+            watermark: Watermark::default(),
         }
     }
 }
@@ -151,7 +166,8 @@ impl ExportOptions {
     /// HLS 的 TS 分片只认 AAC / AC3 / MP3，源是 FLAC、Opus 时复制会让整批导出失败，
     /// 所以这条路上勾了也按转码处理。
     fn copies_audio(&self) -> bool {
-        self.audio_copy && self.format == OutputFormat::Mkv
+        // 倒放要 `areverse`，样本必须解出来；勾了「音频不重编码」也得作废。
+        self.audio_copy && self.format == OutputFormat::Mkv && !self.reverse
     }
 
     /// 音频还能不能挂滤镜。`-c:a copy` 时样本根本不解出来，`-af` 会被忽略，
@@ -193,11 +209,26 @@ impl ExportOptions {
             filters.push(color);
         }
         filters.extend(self.transform.filters());
+        // 倒放排在几何变换之后：`reverse` 会把整段帧攒在内存里，先缩到目标尺寸
+        // 再攒，占用能少一个数量级。
+        if self.reverse {
+            filters.push("reverse".to_string());
+        }
+        if self.freeze_seconds() > 0.0 {
+            filters.push(format!(
+                "tpad=start_mode=clone:start_duration={:.3}",
+                self.freeze_seconds()
+            ));
+        }
         if self.denoise {
             filters.push("hqdn3d=4:3:6:4.5".to_string());
         }
         if self.sharpen {
             filters.push("unsharp=5:5:0.8:3:3:0.4".to_string());
+        }
+        // 水印压在最后：几何变换之后再画，坐标才是最终画面里的坐标。
+        if let Some(watermark) = self.watermark.filter() {
+            filters.push(watermark);
         }
         (!filters.is_empty()).then(|| filters.join(","))
     }
@@ -227,6 +258,28 @@ impl ExportOptions {
         self.audio_filters_with(None)
     }
 
+    /// 输出时长。
+    ///
+    /// 开头定格会多出来一截：`-t` 与进度分母都必须按加长后的算，否则定格那段
+    /// 会被 `-t` 直接截掉，进度条也会提前走满。
+    pub fn output_duration(&self, range_duration: f64) -> f64 {
+        let freeze = if self.filters_available() {
+            self.freeze_seconds() as f64
+        } else {
+            0.0
+        };
+        range_duration.max(0.0) + freeze
+    }
+
+    /// 定格时长：非数字、负数与过大的值都收进 0–[`MAX_FREEZE_SECONDS`]。
+    pub fn freeze_seconds(&self) -> f32 {
+        if self.freeze_lead.is_finite() {
+            self.freeze_lead.clamp(0.0, MAX_FREEZE_SECONDS)
+        } else {
+            0.0
+        }
+    }
+
     /// 音频滤镜。`measured` 有值时用两遍扫描的测量值做线性增益。
     pub fn audio_filters_with(&self, measured: Option<&Loudness>) -> Option<String> {
         if !self.audio_filters_available() {
@@ -237,6 +290,17 @@ impl ExportOptions {
             // 按音频包时间戳补齐/丢弃样本，长时间录制里声卡与视频时钟的微小
             // 偏差不会越积越多。first_pts=0 让第一段从 0 开始，避免整轨前移。
             filters.push("aresample=async=1:first_pts=0".to_string());
+        }
+        // 倒放与定格都改变时间轴，排在偏移之前：偏移是「相对最终画面」的位移，
+        // 反过来排会让偏移量作用在还没重排的声音上。
+        if self.reverse {
+            filters.push("areverse".to_string());
+        }
+        if self.freeze_seconds() > 0.0 {
+            filters.push(format!(
+                "adelay={}:all=1",
+                (self.freeze_seconds() * 1000.0).round() as i64
+            ));
         }
         let offset = self.audio_offset.clamp(-5.0, 5.0);
         // 偏移必须排在 loudnorm 前面：loudnorm 输出的是动态声道布局，
@@ -264,6 +328,9 @@ impl ExportOptions {
 /// 固定码率的默认值：6000 kbps 是 1080p 上传最常见的档位，画质够看、体积可控。
 pub const DEFAULT_BITRATE_KBPS: u32 = 6_000;
 
+/// 开头定格的上限。再长就不该用「裁切」来做，而是去剪辑软件里排时间轴了。
+pub const MAX_FREEZE_SECONDS: f32 = 10.0;
+
 /// GIF 的输出链：限帧率、缩到 480 宽（只缩不放）、再用两遍法生成调色板。
 ///
 /// `split` 把同一帧同时喂给「统计调色板」与「套用调色板」两条链，颜色比默认的
@@ -277,12 +344,7 @@ pub(super) const GIF_FILTERS: &str = "fps=12,scale=min(480\\,iw):-2:flags=lanczo
 /// ffmpeg 的滤镜串用 `:` 和 `,` 分隔参数，Windows 路径里的盘符冒号必须转义，
 /// 反斜杠统一换成正斜杠；再整体包进单引号，路径里的空格与括号就不用再管。
 fn subtitle_filter(path: &Path) -> String {
-    let escaped = path
-        .to_string_lossy()
-        .replace('\\', "/")
-        .replace('\'', "\\'")
-        .replace(':', "\\:");
-    format!("subtitles=filename='{escaped}'")
+    format!("subtitles=filename='{}'", effects::filter_path(path))
 }
 
 /// 拼 ffmpeg 参数。
@@ -320,7 +382,11 @@ pub(super) fn build_command(
         .arg("-i")
         .arg(&request.input)
         .arg("-t")
-        .arg(format!("{:.3}", request.range.duration()))
+        // 开头定格已经算进输出时长：`-t` 按原区间写会把定格那段截掉。
+        .arg(format!(
+            "{:.3}",
+            options.output_duration(request.range.duration())
+        ))
         // 大写 V 排除封面图（attached_pic），否则第一路「视频」可能是一张 jpeg。
         .arg("-map")
         .arg("0:V:0?");
