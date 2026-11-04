@@ -145,6 +145,19 @@ impl Render for MiniPlayer {
                 this.forward(cx, |app, cx| app.toggle_play(cx));
                 cx.notify();
             }))
+            // 主窗口能拖入文件，小窗同样得能：否则小窗模式下换片要先收起来。
+            // 路径交给主窗口统一处理——扫描、排序、列表归属都只有那一份状态。
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, _window, cx| {
+                let dropped: Vec<PathBuf> = paths.0.iter().cloned().collect();
+                if dropped.is_empty() {
+                    return;
+                }
+                this.forward(cx, move |app, cx| {
+                    app.open_paths(dropped, cx);
+                    app.poke();
+                    cx.notify();
+                });
+            }))
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, cx| {
                 // 只在音量面板展开时接管滚轮：那一刻指针必然停在图标或面板上，
                 // 也就是「用户正在调音量」。其余位置滚轮不做任何事——小窗没有
