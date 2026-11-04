@@ -66,8 +66,9 @@ impl Render for MiniPlayer {
                         ),
                 )
             })
-            // 切集时浮一条标题：悬浮条只在指针停留时可见，切完集用户看不到换了什么。
-            .when(self.title_flash && !self.state.empty, |this| {
+            // 切集、切循环模式时浮一条提示：悬浮条只在指针停留时可见，
+            // 否则用户看不到刚才发生了什么。
+            .when_some(self.flash.clone(), |this, flash| {
                 this.child(
                     div()
                         .id("mini-title-flash")
@@ -91,7 +92,7 @@ impl Render for MiniPlayer {
                                 cx.stop_propagation();
                             }),
                         )
-                        .child(self.state.title.clone()),
+                        .child(flash),
                 )
             })
             // 两条同进同出：分开触发的话鼠标在中间移来移去会让它们各闪各的。

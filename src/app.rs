@@ -608,6 +608,8 @@ struct MiniState {
     empty: bool,
     /// 当前播放页的条目数。小窗的上一集 / 下一集按钮据此决定是否可点。
     items: usize,
+    /// 循环模式。右键菜单显示当前值，切换后小窗也要跟着更新。
+    loop_mode: LoopMode,
 }
 
 impl MiniState {
@@ -617,6 +619,7 @@ impl MiniState {
         self.title == other.title
             && self.empty == other.empty
             && self.items == other.items
+            && self.loop_mode == other.loop_mode
             && self.playing == other.playing
             && self.muted == other.muted
             && (self.position - other.position).abs() < 0.005

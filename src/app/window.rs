@@ -340,6 +340,7 @@ impl PlayerApp {
             muted: self.snapshot.muted,
             empty: self.playlist().is_empty(),
             items: self.playlist().len(),
+            loop_mode: self.settings.loop_mode,
         }
     }
 

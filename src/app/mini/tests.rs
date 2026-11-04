@@ -87,6 +87,7 @@ fn 小窗状态只在可见内容变化时重绘() {
         muted: false,
         empty: false,
         items: 3,
+        loop_mode: LoopMode::Off,
     };
     assert!(base.same_as(&base.clone()));
 
@@ -108,4 +109,8 @@ fn 小窗状态只在可见内容变化时重绘() {
     let mut listed = base.clone();
     listed.items = 4;
     assert!(!listed.same_as(&base));
+
+    let mut looped = base.clone();
+    looped.loop_mode = LoopMode::All;
+    assert!(!looped.same_as(&base));
 }

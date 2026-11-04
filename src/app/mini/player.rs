@@ -54,10 +54,10 @@ pub(in crate::app) struct MiniPlayer {
     pub(in crate::app) menu: Option<Point<Pixels>>,
     /// 已经下发给窗口的标题。任务栏按钮显示的就是它，变了才重设。
     pub(in crate::app) window_title: String,
-    /// 切集后临时显示的标题浮层；`true` 表示正在显示，2 秒后自动收回。
-    pub(in crate::app) title_flash: bool,
-    /// 浮层代次：连续切集时会起多个定时器，旧的那个不能把新浮层提前收掉。
-    pub(in crate::app) title_flash_seq: u64,
+    /// 临时浮层的文字（切集标题、循环模式）；`None` 表示不显示，2 秒后自动收回。
+    pub(in crate::app) flash: Option<SharedString>,
+    /// 浮层代次：连续触发时会起多个定时器，旧的那个不能把新浮层提前收掉。
+    pub(in crate::app) flash_seq: u64,
     pub(in crate::app) focus: FocusHandle,
 }
 
@@ -93,8 +93,8 @@ impl MiniPlayer {
             app_gone: false,
             menu: None,
             window_title: String::new(),
-            title_flash: false,
-            title_flash_seq: 0,
+            flash: None,
+            flash_seq: 0,
             focus: cx.focus_handle(),
         }
     }
@@ -197,25 +197,29 @@ impl MiniPlayer {
         // 标题变了就是切了集。悬浮条在指针移开后 500ms 就收，用户看不到换了什么，
         // 这里单独浮一条标题出来。
         if self.state.title != state.title && !state.title.is_empty() {
-            self.flash_title(cx);
+            self.flash_text(state.title.clone(), cx);
+        }
+        // 循环模式在右键菜单里切，小窗没有别的反馈，也浮一条模式名。
+        if self.state.loop_mode != state.loop_mode {
+            self.flash_text(SharedString::from(state.loop_mode.label()), cx);
         }
         self.state = state;
         cx.notify();
     }
 
-    /// 让标题浮层显示 2 秒。代次用于连续切集：上一个定时器不能把新浮层提前收掉。
-    fn flash_title(&mut self, cx: &mut Context<Self>) {
-        self.title_flash_seq = self.title_flash_seq.wrapping_add(1);
-        let seq = self.title_flash_seq;
-        self.title_flash = true;
+    /// 让浮层显示 2 秒。代次用于连续触发：上一个定时器不能把新浮层提前收掉。
+    fn flash_text(&mut self, text: SharedString, cx: &mut Context<Self>) {
+        self.flash_seq = self.flash_seq.wrapping_add(1);
+        let seq = self.flash_seq;
+        self.flash = Some(text);
         cx.notify();
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(2)).await;
             this.update(cx, |mini, cx| {
-                if mini.title_flash_seq != seq || !mini.title_flash {
+                if mini.flash_seq != seq || mini.flash.is_none() {
                     return;
                 }
-                mini.title_flash = false;
+                mini.flash = None;
                 cx.notify();
             })
             .ok();

@@ -17,7 +17,7 @@ impl MiniPlayer {
         let Some(position) = self.menu else {
             return div().into_any_element();
         };
-        let height = MENU_ITEM_HEIGHT * 3.0 + MENU_PADDING * 2.0;
+        let height = MENU_ITEM_HEIGHT * 4.0 + MENU_PADDING * 2.0;
         let viewport = window.viewport_size();
         let max_left = (f32::from(viewport.width) - MENU_WIDTH - 8.0).max(0.0);
         let max_top = (f32::from(viewport.height) - height - 8.0).max(0.0);
@@ -53,6 +53,24 @@ impl MiniPlayer {
                 }),
             ))
             .child(self.menu_item(
+                "mini-menu-loop",
+                match self.state.loop_mode {
+                    LoopMode::Off => "循环：顺序",
+                    LoopMode::All => "循环：列表",
+                    LoopMode::One => "循环：单集",
+                },
+                cx.listener(|this, _: &ClickEvent, _window, cx| {
+                    // 与主窗口的菜单同一顺序：顺序 → 列表 → 单集 → 顺序。
+                    let next = match this.state.loop_mode {
+                        LoopMode::Off => LoopMode::All,
+                        LoopMode::All => LoopMode::One,
+                        LoopMode::One => LoopMode::Off,
+                    };
+                    this.menu = None;
+                    this.forward(cx, move |app, cx| app.set_loop(next, cx));
+                }),
+            ))
+            .child(self.menu_item(
                 "mini-menu-restore",
                 "回到主窗口",
                 cx.listener(|this, _: &ClickEvent, window, cx| {
@@ -68,10 +86,10 @@ impl MiniPlayer {
             .into_any_element()
     }
 
-    fn menu_item(
+    fn menu_item<L: IntoElement + 'static>(
         &self,
         id: &'static str,
-        label: &'static str,
+        label: L,
         on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> AnyElement {
         div()
