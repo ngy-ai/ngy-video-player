@@ -66,6 +66,34 @@ impl Render for MiniPlayer {
                         ),
                 )
             })
+            // 切集时浮一条标题：悬浮条只在指针停留时可见，切完集用户看不到换了什么。
+            .when(self.title_flash && !self.state.empty, |this| {
+                this.child(
+                    div()
+                        .id("mini-title-flash")
+                        .absolute()
+                        .top(px(40.0))
+                        .left(px(10.0))
+                        .right(px(10.0))
+                        .px(px(8.0))
+                        .py(px(6.0))
+                        .rounded(px(6.0))
+                        .bg(ui::scrim())
+                        .text_size(px(12.0))
+                        .text_color(text())
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        // 浮层盖在画面上，别让点它变成「点画面暂停」。
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .child(self.state.title.clone()),
+                )
+            })
             // 两条同进同出：分开触发的话鼠标在中间移来移去会让它们各闪各的。
             .when(self.controls, |this| {
                 this.child(self.render_bar(cx))

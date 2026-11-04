@@ -52,6 +52,10 @@ pub(in crate::app) struct MiniPlayer {
     pub(in crate::app) app_gone: bool,
     /// 已经下发给窗口的标题。任务栏按钮显示的就是它，变了才重设。
     pub(in crate::app) window_title: String,
+    /// 切集后临时显示的标题浮层；`true` 表示正在显示，2 秒后自动收回。
+    pub(in crate::app) title_flash: bool,
+    /// 浮层代次：连续切集时会起多个定时器，旧的那个不能把新浮层提前收掉。
+    pub(in crate::app) title_flash_seq: u64,
     pub(in crate::app) focus: FocusHandle,
 }
 
@@ -86,6 +90,8 @@ impl MiniPlayer {
             dismissed: false,
             app_gone: false,
             window_title: String::new(),
+            title_flash: false,
+            title_flash_seq: 0,
             focus: cx.focus_handle(),
         }
     }
@@ -185,8 +191,33 @@ impl MiniPlayer {
         if self.state.same_as(&state) {
             return;
         }
+        // 标题变了就是切了集。悬浮条在指针移开后 500ms 就收，用户看不到换了什么，
+        // 这里单独浮一条标题出来。
+        if self.state.title != state.title && !state.title.is_empty() {
+            self.flash_title(cx);
+        }
         self.state = state;
         cx.notify();
+    }
+
+    /// 让标题浮层显示 2 秒。代次用于连续切集：上一个定时器不能把新浮层提前收掉。
+    fn flash_title(&mut self, cx: &mut Context<Self>) {
+        self.title_flash_seq = self.title_flash_seq.wrapping_add(1);
+        let seq = self.title_flash_seq;
+        self.title_flash = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(2)).await;
+            this.update(cx, |mini, cx| {
+                if mini.title_flash_seq != seq || !mini.title_flash {
+                    return;
+                }
+                mini.title_flash = false;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// 把动作转给主窗口：播放器状态只有一份，小窗自己不持有 mpv 句柄。
