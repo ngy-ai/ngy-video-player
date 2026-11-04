@@ -46,8 +46,8 @@ pub(super) fn render_loop(
     // 整帧铺满视频区域的：不主动重画的话，旧比例的帧会被拉伸到新区域，
     // 看起来就是「切播放列表时画面变形」。这里记一笔，下一轮无条件重画一次。
     let mut resized = false;
-    // 还没有任何画面（刚启动、纯音频）时不重画：那会送出一张纯黑图，
-    // 把界面上的「拖入文件」空状态盖掉。
+    // 本代次还没送出过画面（刚启动、纯音频、或刚换片）时不主动重画：
+    // 那会送出一张纯黑图，把界面上的空状态盖掉。
     let mut rendered_once = false;
     let mut rendered_epoch = shared.frame_epoch.load(Ordering::SeqCst);
 
@@ -67,7 +67,7 @@ pub(super) fn render_loop(
         if epoch != rendered_epoch {
             // 换片 / 停止：缓冲里还是上一部片子的像素，而 rendered_once 仍为真时
             // 尺寸变化会把它重画成一帧。清零并回到「本次还没送出过画面」的状态，
-            // 之后只有 mpv 真正报告新帧才允许送帧。
+            // 直到引擎确认新文件有视频轨（见 `Shared::confirm_video`）。
             buffer.clear();
             rendered_once = false;
             resized = false;
@@ -88,10 +88,15 @@ pub(super) fn render_loop(
         // 但两种「界面主动要求」要例外：暂停时这就是唯一能让画面重新适配的机会。
         //   * 尺寸变了（拖窗口、开关播放列表）
         //   * 换滤镜/比例这类只改画法、不改尺寸的设置（会走 request_redraw）
-        let forced = shared.redraw.swap(false, Ordering::SeqCst) && rendered_once;
+        // 先消耗 redraw 再读 video_ready：confirm_video 是先写代次、再置 redraw，
+        // 所以读到 redraw 时新代次一定已经确认，不会漏掉这次重画。
+        let redraw = shared.redraw.swap(false, Ordering::SeqCst);
+        let video_ready = shared.video_ready(epoch);
+        let can_redraw = rendered_once || video_ready;
+        let forced = redraw && can_redraw;
         let flags = unsafe { (api.render_context_update)(context) };
         let fresh = flags & ffi::RENDER_UPDATE_FRAME != 0;
-        if !fresh && !forced && !(resized && rendered_once) {
+        if !fresh && !forced && !(resized && can_redraw) {
             continue;
         }
 
@@ -108,15 +113,23 @@ pub(super) fn render_loop(
             continue;
         }
 
-        let image = buffer.to_image(current.rotation);
-        shared.frame_serial.fetch_add(1, Ordering::SeqCst);
-        shared.notify(PlayerEvent::Frame {
-            image: Arc::new(image),
-            epoch,
-        });
+        // 只有新代次确认过有视频轨才送帧。换片瞬间 mpv 的 render context 里
+        // 还是上一部片子的最后一帧，这一轮照常渲染把它消费掉，但不能推给界面：
+        // 它带的是新代次，界面按代次也挡不住。没送帧就没人调用
+        // frame_consumed()，背压得在这里自己放开。
+        if shared.video_ready(epoch) {
+            let image = buffer.to_image(current.rotation);
+            shared.frame_serial.fetch_add(1, Ordering::SeqCst);
+            shared.notify(PlayerEvent::Frame {
+                image: Arc::new(image),
+                epoch,
+            });
+            rendered_once = true;
+        } else {
+            shared.frame_pending.store(false, Ordering::SeqCst);
+        }
         unsafe { (api.render_context_report_swap)(context) };
         resized = false;
-        rendered_once = true;
     }
 
     unsafe {

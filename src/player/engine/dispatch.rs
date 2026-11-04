@@ -2,12 +2,46 @@
 
 use super::*;
 
+/// `Load` 带的起始位置：`loadfile` 是异步的，seek 必须等 `FILE_LOADED`。
+///
+/// 紧跟着 `loadfile` 发 seek，文件还没初始化完时 mpv 会回
+/// "error running command"（新建工程后引擎空转时几乎必现）。那次失败在
+/// `Load` 里是要上报的，界面上于是多出一条假的「播放出错」；更糟的是 `?`
+/// 会提前返回，同一批命令里的「解除暂停」也一起漏发。
+#[derive(Default)]
+pub(super) struct PendingStart(Option<f64>);
+
+impl PendingStart {
+    /// 换片 / 停止：上一次没能落地的起点作废，别带给下一个文件。
+    pub(super) fn reset(&mut self) {
+        self.0 = None;
+    }
+
+    /// `loadfile` 成功后才登记起点，避免载入失败留下脏值。
+    pub(super) fn set(&mut self, start: Option<f64>) {
+        self.0 = start;
+    }
+
+    /// 文件加载完成后补上延时 seek，只执行一次。失败只记日志：文件已经打开，
+    /// 起点差一点不该弹「播放出错」横幅。
+    pub(super) fn seek_loaded(&mut self, api: &MpvApi, handle: *mut ffi::MpvHandle) {
+        let Some(seconds) = self.0.take() else {
+            return;
+        };
+        let target = seconds.max(0.0).to_string();
+        if let Err(error) = api.run_command(handle, &["seek", &target, "absolute"]) {
+            log_warn!("定位起始位置失败: {error:#}");
+        }
+    }
+}
+
 pub(super) fn dispatch(
     api: &Arc<MpvApi>,
     handle: *mut ffi::MpvHandle,
     shared: &Arc<Shared>,
     command: Command,
     quit: &mut bool,
+    pending_start: &mut PendingStart,
 ) {
     // 哪些命令失败该让用户看见：只有「用户明确要求的动作没做成」才算。
     // seek/选轨/设置这类失败在边界状态下很常见（片头片尾、流不可跳转），
@@ -16,6 +50,7 @@ pub(super) fn dispatch(
     let result = (|| -> Result<()> {
         match command {
             Command::Load { url, start } => {
+                pending_start.reset();
                 {
                     let mut state = shared.state();
                     state.error = None;
@@ -26,11 +61,10 @@ pub(super) fn dispatch(
                     state.tracks.clear();
                     state.chapters.clear();
                 }
-                clear_frame(shared);
+                shared.reset_frame();
                 api.run_command(handle, &["loadfile", &url, "replace"])?;
-                if let Some(seconds) = start {
-                    api.run_command(handle, &["seek", &seconds.to_string(), "absolute"])?;
-                }
+                // 起点等 `FILE_LOADED` 再 seek，理由见 [`PendingStart`]。
+                pending_start.set(start);
                 // 必须用命令、不能用 `set_property`：
                 // `--pause` 是「打开文件后暂停」的选项，mpv 每次 loadfile 都会把它
                 // 重新应用一遍；而 `set_property` 是即时的，会抢在排队的 loadfile
@@ -39,6 +73,7 @@ pub(super) fn dispatch(
                 api.run_command(handle, &["set", "pause", "no"])?;
             }
             Command::Stop => {
+                pending_start.reset();
                 {
                     let mut state = shared.state();
                     // path 变成不可用时属性通知会被忽略（见 apply_property），
@@ -47,7 +82,7 @@ pub(super) fn dispatch(
                     state.video_width = 0;
                     state.video_height = 0;
                 }
-                clear_frame(shared);
+                shared.reset_frame();
                 api.run_command(handle, &["stop"])?;
             }
             Command::PlayPause => {
@@ -151,40 +186,22 @@ pub(super) fn dispatch(
     let _ = quit;
 }
 
-/// 换片 / 停止时统一作废旧画面。
-///
-/// 代次先自增再发事件：取帧线程读到新代次就把缓冲里的旧像素清掉，界面收到
-/// 事件就清掉已显示的帧，并按代次丢弃通道里迟到的旧帧。
-fn clear_frame(shared: &Arc<Shared>) {
-    let epoch = shared.frame_epoch.fetch_add(1, Ordering::SeqCst) + 1;
-    shared.notify(PlayerEvent::FrameCleared(epoch));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn 换片代次单调递增并通知界面清帧() {
-        let (events, mut receiver) = futures::channel::mpsc::unbounded();
-        let shared = Arc::new(Shared {
-            state: Mutex::new(Snapshot::default()),
-            events,
-            shutdown: AtomicBool::new(false),
-            target: Mutex::new(RenderTarget::default()),
-            frame_serial: AtomicU64::new(0),
-            needs_frames: AtomicBool::new(false),
-            frame_pending: AtomicBool::new(false),
-            config_serial: AtomicU32::new(0),
-            redraw: AtomicBool::new(false),
-            frame_epoch: AtomicU64::new(0),
-        });
+    fn 起点只在文件加载后消费一次且换片时作废() {
+        let mut pending = PendingStart::default();
+        assert!(pending.0.is_none());
 
-        for expected in 1..=2u64 {
-            clear_frame(&shared);
-            assert_eq!(shared.frame_epoch.load(Ordering::SeqCst), expected);
-            let event = receiver.try_recv().unwrap();
-            assert!(matches!(event, PlayerEvent::FrameCleared(epoch) if epoch == expected));
-        }
+        pending.set(Some(12.5));
+        assert_eq!(pending.0.take(), Some(12.5));
+        assert_eq!(pending.0.take(), None);
+
+        // 上一次 loadfile 可能压根没成功，起点不能留给下一个文件。
+        pending.set(Some(3.0));
+        pending.reset();
+        assert!(pending.0.is_none());
     }
 }

@@ -72,6 +72,14 @@ pub fn is_media(path: &std::path::Path) -> bool {
     }
 }
 
+/// 纯音频文件。
+///
+/// 换片时界面据此直接关掉整个画面代次：mpv 上报轨道表有一小段滞后，
+/// 上一部片子的最后一帧会趁这段时间被重新送到界面上。
+pub fn is_audio(path: &std::path::Path) -> bool {
+    extension(path).is_some_and(|ext| matches(AUDIO, &ext))
+}
+
 pub fn is_subtitle(path: &std::path::Path) -> bool {
     extension(path).is_some_and(|ext| matches(SUBTITLE, &ext))
 }
@@ -150,6 +158,15 @@ mod tests {
         assert!(all.contains(&"mkv"), "媒体格式照旧");
         assert!(!all.contains(&"jpg"), "图片不抢默认程序");
         assert_eq!(count_of(&all, "mkv"), 1, "去重过了");
+    }
+
+    #[test]
+    fn 纯音频扩展名判定() {
+        assert!(is_audio(std::path::Path::new("课/001.MP3")));
+        assert!(is_audio(std::path::Path::new("a.flac")));
+        assert!(!is_audio(std::path::Path::new("a.mkv")));
+        assert!(!is_audio(std::path::Path::new("a.mp4")));
+        assert!(!is_audio(std::path::Path::new("a")));
     }
 
     fn count_of(list: &[&str], item: &str) -> usize {

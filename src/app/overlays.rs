@@ -254,9 +254,30 @@ impl PlayerApp {
                 .gap(px(6.0))
                 .child(
                     div()
-                        .text_size(px(13.0))
-                        .text_color(ui::danger())
-                        .child(title),
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(12.0))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .text_size(px(13.0))
+                                .text_color(ui::danger())
+                                .child(title),
+                        )
+                        .child(icon_button(
+                            "error-close",
+                            IconName::X,
+                            false,
+                            false,
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                // 启动失败那条也挂在这块横幅上，两个一起收掉。
+                                this.error = None;
+                                this.startup_failure = None;
+                                cx.notify();
+                            }),
+                        )),
                 )
                 .child(
                     div()

@@ -1,5 +1,6 @@
 //! 会话入口：窗口状态、事件循环、空闲看门狗。
 
+use super::video_area::frame_accepted;
 use super::*;
 
 impl PlayerApp {
@@ -34,6 +35,7 @@ impl PlayerApp {
             incoming: None,
             retired: VecDeque::new(),
             frame_epoch: 0,
+            loading_audio_only: false,
             playlists: PlaylistSet::load(),
             playing_tab: None,
             selection: BTreeSet::new(),
@@ -286,7 +288,9 @@ impl PlayerApp {
                         }
                         // 换片之前渲染、却晚于 FrameCleared 才送达的旧帧一律丢掉：
                         // 放回去就是「播着音频，画面还是上一个视频」。
-                        if epoch == this.frame_epoch {
+                        // 纯音频再单独挡一道：mpv 在 loadfile 期间会把它手里
+                        // 上一部片子的最后一帧按新代次重新渲染出来，连代次都对得上。
+                        if frame_accepted(epoch, this.frame_epoch, this.loading_audio_only) {
                             this.incoming = Some(image.clone());
                             // 小窗不自己解码，只是同一张帧的第二个窗口，这里转发一份。
                             if let Some(mini) = &this.mini {

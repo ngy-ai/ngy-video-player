@@ -9,6 +9,14 @@ fn show_placeholder(frame: &Option<Arc<RenderImage>>, snapshot: &Snapshot) -> bo
     frame.is_none() && !snapshot.playing_without_video()
 }
 
+/// 这一帧是否属于当前文件、且当前文件确实该有画面。
+///
+/// 纯音频整代次不收帧：mpv 在 loadfile 期间会把上一部片子的最后一帧按
+/// **新代次**重新渲染出来，光比对代次挡不住它。
+pub(super) fn frame_accepted(epoch: u64, current: u64, audio_only: bool) -> bool {
+    epoch == current && !audio_only
+}
+
 impl PlayerApp {
     /// 换片 / 停止：正在显示的和还在排队的帧都属于上一部片子。
     pub(super) fn discard_frame(&mut self) {
@@ -20,9 +28,13 @@ impl PlayerApp {
 
     /// 发 `Command::Load` 之前调用：本地先作废旧画面，并挡住通道里在途的旧帧。
     /// 引擎随后下发的 `FrameCleared` 会把代次换成真正的新值。
-    pub(super) fn begin_load(&mut self) {
+    ///
+    /// 纯音频从这一刻起就整代次不收帧：不等 mpv 上报轨道表，那段滞后正是
+    /// 「切到第一个音频还留着上一个视频画面」的窗口。
+    pub(super) fn begin_load(&mut self, path: &std::path::Path) {
         self.discard_frame();
         self.frame_epoch = FRAME_EPOCH_PENDING;
+        self.loading_audio_only = formats::is_audio(path);
     }
 
     pub(super) fn swap_frame(&mut self) {
@@ -508,6 +520,14 @@ impl PlayerApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 纯音频换片后连新代次的帧也不收() {
+        // mpv 会把旧视频的最后一帧按新代次重画出来，只有代次比对挡不住。
+        assert!(!frame_accepted(1, 1, true));
+        assert!(!frame_accepted(0, 1, false));
+        assert!(frame_accepted(1, 1, false));
+    }
 
     #[test]
     fn 纯音频播放时不显示空状态占位() {

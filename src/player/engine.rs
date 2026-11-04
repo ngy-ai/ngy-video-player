@@ -50,9 +50,12 @@ mod state;
 
 pub use self::state::*;
 
-use self::dispatch::dispatch;
+use self::dispatch::{PendingStart, dispatch};
 use self::event_loop::event_loop;
 use self::render_loop::render_loop;
+
+/// `video_epoch` 的哨兵：当前代次尚未确认有视频轨，取帧线程不许送帧。
+const NO_VIDEO_EPOCH: u64 = u64::MAX;
 
 struct Shared {
     state: Mutex<Snapshot>,
@@ -67,6 +70,9 @@ struct Shared {
     /// 画面代次：每次换片 / 停止自增。取帧线程据此丢弃上一部片子的像素，
     /// 界面据此丢弃通道里还排着队的旧帧。
     frame_epoch: AtomicU64,
+    /// 已确认「有视频轨」的画面代次。只有 `video_epoch == frame_epoch` 时
+    /// 取帧线程才允许把帧推给界面，其余代次一律视为无画面。
+    video_epoch: AtomicU64,
     /// 是否有一帧已经推给界面但还没被取走。
     ///
     /// 界面渲染比视频帧率慢时（窗口被挡住、系统卡顿），如果不做背压，
@@ -101,6 +107,43 @@ impl Shared {
 
     fn notify(&self, event: PlayerEvent) {
         let _ = self.events.unbounded_send(event);
+    }
+
+    /// 换片 / 停止：作废旧画面，返回新的画面代次。
+    ///
+    /// 代次先自增再发事件：取帧线程读到新代次就清掉缓冲里的旧像素，界面收到
+    /// 事件就清掉已显示的帧，并按代次丢弃通道里迟到的旧帧。
+    fn reset_frame(&self) -> u64 {
+        let epoch = self.frame_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+        self.video_epoch.store(NO_VIDEO_EPOCH, Ordering::SeqCst);
+        self.notify(PlayerEvent::FrameCleared(epoch));
+        epoch
+    }
+
+    /// 新文件加载完成、确实带视频轨时才放行取帧线程。
+    ///
+    /// `loadfile` 之后到 `FILE_LOADED` 之前，mpv 的 render context 里仍然是
+    /// 上一部片子的最后一帧；这时若报告了 `RENDER_UPDATE_FRAME`，画出来的还是
+    /// 旧画面，而且已经算在新代次里，界面没法再按代次挡掉它。所以每个代次
+    /// 都要由引擎显式确认一次，纯音频永远不会被确认。
+    fn confirm_video(&self) {
+        let state = self.state();
+        // 光看 width/height 不够：换片瞬间属性可能还带着上一部片子的值，
+        // 必须同时确认轨道表里真有视频轨。
+        let has_video_track = state.tracks.iter().any(|t| t.kind == TrackKind::Video);
+        if !state.has_video() || !has_video_track {
+            return;
+        }
+        drop(state);
+        self.video_epoch
+            .store(self.frame_epoch.load(Ordering::SeqCst), Ordering::SeqCst);
+        // 暂停加载时第一帧可能在确认前就被吃掉，主动要求重画一次。
+        self.redraw.store(true, Ordering::SeqCst);
+    }
+
+    /// 当前代次是否已经确认有画面。
+    fn video_ready(&self, epoch: u64) -> bool {
+        self.video_epoch.load(Ordering::SeqCst) == epoch
     }
 }
 
@@ -138,6 +181,7 @@ impl Engine {
             frame_serial: AtomicU64::new(0),
             needs_frames: AtomicBool::new(false),
             frame_epoch: AtomicU64::new(0),
+            video_epoch: AtomicU64::new(NO_VIDEO_EPOCH),
             frame_pending: AtomicBool::new(false),
             config_serial: AtomicU32::new(0),
             redraw: AtomicBool::new(false),
@@ -487,5 +531,100 @@ impl Engine {
     pub fn open_subtitle(&self, path: impl AsRef<Path>) {
         let path = path.as_ref().to_string_lossy().to_string();
         self.send(Command::AddSubtitle(path));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_shared(events: UnboundedSender<PlayerEvent>) -> Arc<Shared> {
+        Arc::new(Shared {
+            state: Mutex::new(Snapshot::default()),
+            events,
+            shutdown: AtomicBool::new(false),
+            target: Mutex::new(RenderTarget::default()),
+            frame_serial: AtomicU64::new(0),
+            needs_frames: AtomicBool::new(false),
+            frame_epoch: AtomicU64::new(0),
+            video_epoch: AtomicU64::new(NO_VIDEO_EPOCH),
+            frame_pending: AtomicBool::new(false),
+            config_serial: AtomicU32::new(0),
+            redraw: AtomicBool::new(false),
+        })
+    }
+
+    fn loaded_video(shared: &Shared) {
+        let mut state = shared.state();
+        state.tracks.push(Track {
+            id: 1,
+            kind: TrackKind::Video,
+            ..Default::default()
+        });
+        state.video_width = 1920;
+        state.video_height = 1080;
+    }
+
+    fn loaded_audio(shared: &Shared) {
+        let mut state = shared.state();
+        state.tracks.clear();
+        state.video_width = 0;
+        state.video_height = 0;
+    }
+
+    #[test]
+    fn 换片代次单调递增并通知界面清帧() {
+        let (events, mut receiver) = futures::channel::mpsc::unbounded();
+        let shared = test_shared(events);
+
+        for expected in 1..=2u64 {
+            assert_eq!(shared.reset_frame(), expected);
+            assert_eq!(shared.frame_epoch.load(Ordering::SeqCst), expected);
+            let event = receiver.try_recv().unwrap();
+            assert!(matches!(event, PlayerEvent::FrameCleared(epoch) if epoch == expected));
+        }
+    }
+
+    #[test]
+    fn 视频切到第一个音频就不许再送帧() {
+        let (events, _receiver) = futures::channel::mpsc::unbounded();
+        let shared = test_shared(events);
+
+        loaded_video(&shared);
+        shared.confirm_video();
+        assert!(shared.video_ready(shared.frame_epoch.load(Ordering::SeqCst)));
+
+        // 换片瞬间 mpv 仍握着上一部片子的最后一帧，闸门必须先关上。
+        let epoch = shared.reset_frame();
+        assert!(!shared.video_ready(epoch));
+
+        // 纯音频的 FILE_LOADED 不会开闸，那一帧只能被吃掉，不能推给界面。
+        loaded_audio(&shared);
+        shared.confirm_video();
+        assert!(!shared.video_ready(epoch));
+
+        // 切回视频：确认有视频轨后恢复送帧，并主动要求重画一帧。
+        let epoch = shared.reset_frame();
+        loaded_video(&shared);
+        shared.confirm_video();
+        assert!(shared.video_ready(epoch));
+        assert!(shared.redraw.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn 宽高属性滞后也不会误放行() {
+        let (events, _receiver) = futures::channel::mpsc::unbounded();
+        let shared = test_shared(events);
+        let epoch = shared.reset_frame();
+
+        // 换片瞬间 width/height 可能还是上一部片子的，但轨道表已经清空。
+        let mut state = shared.state();
+        state.tracks.clear();
+        state.video_width = 1920;
+        state.video_height = 1080;
+        drop(state);
+
+        shared.confirm_video();
+        assert!(!shared.video_ready(epoch));
     }
 }

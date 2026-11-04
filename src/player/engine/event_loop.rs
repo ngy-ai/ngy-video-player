@@ -47,6 +47,8 @@ pub(super) fn event_loop(
         }
 
         let mut last_position_emit = Instant::now();
+        // `Load` 带的起点：等文件真正加载完（FILE_LOADED）才能 seek。
+        let mut pending_start = PendingStart::default();
 
         loop {
             if shared.shutdown.load(Ordering::SeqCst) {
@@ -59,7 +61,14 @@ pub(super) fn event_loop(
                 if matches!(command, Command::Stop) {
                     // Stop 之后若还有命令要处理，继续走，不做特殊跳出。
                 }
-                dispatch(&api, handle, &shared, command, &mut quit);
+                dispatch(
+                    &api,
+                    handle,
+                    &shared,
+                    command,
+                    &mut quit,
+                    &mut pending_start,
+                );
             }
             if quit {
                 break;
@@ -94,8 +103,13 @@ pub(super) fn event_loop(
                     }
                 }
                 event::FILE_LOADED => {
+                    // 文件起来了才补起点 seek：loadfile 之后立刻 seek 会失败。
+                    pending_start.seek_loaded(&api, handle);
                     refresh_metadata(&api, handle, &shared);
                     shared.notify(PlayerEvent::Dirty);
+                    // 只有确认新文件真带视频轨才放行取帧线程：换片瞬间 mpv
+                    // 还会重画上一部片子的最后一帧，先开闸就会把它贴到音频上。
+                    shared.confirm_video();
                 }
                 event::VIDEO_RECONFIG | event::AUDIO_RECONFIG => {
                     refresh_metadata(&api, handle, &shared);
@@ -104,6 +118,8 @@ pub(super) fn event_loop(
                 event::PLAYBACK_RESTART => {
                     refresh_metadata(&api, handle, &shared);
                     shared.notify(PlayerEvent::Dirty);
+                    // 兜底：有些容器在 FILE_LOADED 时还没报出宽高和轨道表。
+                    shared.confirm_video();
                 }
                 event::END_FILE => {
                     let reason = if event.data.is_null() {

@@ -55,7 +55,7 @@ impl PlayerApp {
         if self.timeline_preview.as_deref() != Some(path.as_path()) {
             self.timeline_preview = Some(path.clone());
             self.timeline_loaded_at = Some(Instant::now());
-            self.begin_load();
+            self.begin_load(&path);
             self.send(Command::Load {
                 url: path.to_string_lossy().into_owned(),
                 start: Some(source),
@@ -204,7 +204,7 @@ impl PlayerApp {
         if self.timeline_preview.as_deref() != Some(path.as_path()) {
             self.timeline_preview = Some(path.clone());
             self.timeline_loaded_at = Some(Instant::now());
-            self.begin_load();
+            self.begin_load(&path);
             self.send(Command::Load {
                 url: path.to_string_lossy().into_owned(),
                 start: Some(source),
