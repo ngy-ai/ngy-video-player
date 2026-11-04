@@ -8,6 +8,7 @@
 //! 禁止用 `f64` 秒做累加、比较或存盘——错一帧的 bug 在时间线上无法调试。
 
 pub mod autosave;
+mod export;
 mod media;
 mod model;
 mod ops;
@@ -16,6 +17,7 @@ mod time;
 mod undo;
 mod view;
 
+pub use export::{ExportError, ExportPlan, plan_sequence};
 pub use media::{AssetState, ColorTags, MediaInfo, MediaStamp};
 pub use model::{
     AssetId, ClipItem, Id, Marker, ModelError, Sequence, Track, TrackKind, Transition,
