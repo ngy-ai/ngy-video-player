@@ -33,7 +33,8 @@ src/main.rs      入口：参数解析、帮助
 src/app.rs       主视图入口：状态类型、PlayerApp 字段、快捷键、run()
 src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  session（初始化/事件循环）、playback、window（迷你窗/置顶）、
-                 picture、playlist_ops、video_area、timeline_view（工程模式时间线）、
+                 picture、playlist_ops、video_area、
+                 timeline_view / timeline_tracks（工程模式时间线：布局、轨道行与拖动）、
                  controls、menus、bar、
                  menu_bar、associations、ab_loop（A-B 循环）、
                  project_file（工程保存/另存为/未保存确认）、

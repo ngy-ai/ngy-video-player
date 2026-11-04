@@ -106,6 +106,7 @@ mod scenes;
 mod scope;
 mod session;
 mod settings_panel;
+mod timeline_tracks;
 mod timeline_view;
 mod video_area;
 mod widgets;
@@ -125,7 +126,7 @@ use self::remux::RemuxDialog;
 use self::scenes::ScenesDialog;
 use self::scope::ScopeDialog;
 use self::settings_panel::SettingsTab;
-use self::timeline_view::TimelineDrop;
+use self::timeline_tracks::TimelineDrop;
 use self::widgets::*;
 
 #[derive(Clone, Debug, Default)]
