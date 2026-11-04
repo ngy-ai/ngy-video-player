@@ -91,6 +91,7 @@ impl PlayerApp {
             timeline_menu: None,
             export_task: None,
             export_progress: None,
+            export_queue: VecDeque::new(),
             dialog_open: false,
             show_stats: false,
             osd: None,

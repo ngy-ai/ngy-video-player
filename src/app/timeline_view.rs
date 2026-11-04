@@ -450,6 +450,8 @@ impl PlayerApp {
                                 this.export_sequence(window, cx);
                             }),
                         ))
+                        // 还在排队的条数：不然连着点几次，看不出后面还压着活。
+                        .when_some(self.export_queue_note(), |this, note| this.child(note))
                         // 导出跑起来之后原地显示进度与取消，不另开一个面板。
                         .when_some(self.export_progress, |this, progress| {
                             this.child(format!("导出 {:.0}%", progress * 100.0)).child(

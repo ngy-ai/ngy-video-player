@@ -11,10 +11,7 @@ use super::*;
 impl PlayerApp {
     /// 标题条上的导出按钮。
     pub(super) fn export_sequence(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.export_task.is_some() {
-            self.flash("已经有一个导出任务在跑，先取消或等它结束");
-            return;
-        }
+        // 任务跑着的时候照样能点：新的一次排到队尾（见 `app/export_queue.rs`）。
         let Some(project) = self.project.as_ref() else {
             return;
         };
@@ -57,7 +54,7 @@ impl PlayerApp {
             let _ = this.update(cx, |this, cx| {
                 this.dialog_open = false;
                 if let Some(path) = picked {
-                    this.start_export(plan, path, total, cx);
+                    this.enqueue_export(plan, path, total, cx);
                 }
                 cx.notify();
             });
@@ -66,17 +63,26 @@ impl PlayerApp {
     }
 
     /// 取消正在跑的导出。任务线程会删掉半成品并回报 `Cancelled`。
+    ///
+    /// 队列里排着的也一并清掉：× 只出现在进度旁边，用户按它的意思是「别导了」，
+    /// 悄悄接着跑后面几条会像是取消没生效。
     pub(super) fn cancel_export(&mut self, cx: &mut Context<Self>) {
         if let Some(task) = self.export_task.as_ref() {
             task.cancel();
         }
+        let queued = self.export_queue.len();
+        self.export_queue.clear();
         self.export_task = None;
         self.export_progress = None;
-        self.flash("正在取消导出…");
+        self.flash(if queued == 0 {
+            "正在取消导出…".to_string()
+        } else {
+            format!("正在取消导出，队列里 {queued} 条也一并清掉")
+        });
         cx.notify();
     }
 
-    fn start_export(
+    pub(super) fn start_export(
         &mut self,
         plan: crate::timeline::ExportPlan,
         path: PathBuf,
@@ -96,7 +102,12 @@ impl PlayerApp {
                 })
                 .detach();
             }
-            Err(error) => self.flash(format!("启动 ffmpeg 失败：{error}")),
+            Err(error) => {
+                // 连 ffmpeg 都起不来，后面几条也一定一样：整队一起停，别让用户
+                // 盯着一个永远不动的「队列 3」。
+                self.export_queue.clear();
+                self.flash(format!("启动 ffmpeg 失败：{error}"));
+            }
         }
     }
 
@@ -107,11 +118,14 @@ impl PlayerApp {
                 self.export_task = None;
                 self.export_progress = None;
                 self.flash(format!("已导出「{}」", file_name(&path)));
+                self.start_next_export(cx);
             }
             ExportEvent::Failed(message) => {
+                // 一条失败不阻塞后面：横幅留着说明原因，队列继续。
                 self.export_task = None;
                 self.export_progress = None;
                 self.error = Some(Banner::new("导出失败", message));
+                self.start_next_export(cx);
             }
             ExportEvent::Cancelled => {
                 self.export_task = None;

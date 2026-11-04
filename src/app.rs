@@ -99,6 +99,7 @@ mod concat;
 mod constants;
 mod controls;
 mod convert;
+mod export_queue;
 mod format;
 mod import;
 mod menu_bar;
@@ -134,6 +135,7 @@ use self::clip::ClipDialog;
 use self::concat::ConcatDialog;
 use self::constants::*;
 use self::convert::ConvertDialog;
+use self::export_queue::QueuedExport;
 use self::format::*;
 use self::metadata::MetadataDialog;
 use self::mini::MiniPlayer;
@@ -392,6 +394,8 @@ pub struct PlayerApp {
     export_task: Option<ExportTask>,
     /// 导出进度 0..=1，仅在 `export_task` 存在时有意义。
     export_progress: Option<f32>,
+    /// 排队等着导出的任务。一次只跑一条，失败不阻塞后面的。
+    export_queue: VecDeque<QueuedExport>,
 
     /// 原生文件选择框是否已经打开。
     ///
