@@ -173,6 +173,13 @@ impl Render for MiniPlayer {
             .on_action(cx.listener(|this, _: &ToggleMute, _window, cx| {
                 this.forward(cx, |app, cx| app.toggle_mute(cx));
             }))
+            // N/P 是全局键位，主窗口接了；小窗不接的话按下去毫无反应。
+            .on_action(cx.listener(|this, _: &NextFile, _window, cx| {
+                this.forward(cx, |app, cx| app.next_file(cx));
+            }))
+            .on_action(cx.listener(|this, _: &PreviousFile, _window, cx| {
+                this.forward(cx, |app, cx| app.previous_file(cx));
+            }))
             .on_action(cx.listener(|this, _: &ToggleStats, _window, cx| {
                 this.forward(cx, |app, cx| {
                     app.show_stats ^= true;
