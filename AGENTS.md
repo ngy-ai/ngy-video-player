@@ -13,8 +13,9 @@ Windows / macOS / Ubuntu 同一套纯 Rust 代码，libmpv 通过 `libloading` �
 ```bash
 cargo build                       # 构建（debug）
 cargo run --release -- video.mkv  # 运行
-cargo test                        # 全部测试
+cargo test                        # 全部测试（不需要 ffmpeg）
 cargo test --test playlist        # 单个测试文件
+cargo test -- --ignored           # 端到端测试：需要本机 ffmpeg，默认忽略
 cargo fmt                         # 格式化
 cargo clippy --all-targets        # 静态检查
 ./scripts/fetch-libmpv.sh         # 拉取 libmpv 到 libs/<平台>/
@@ -37,17 +38,26 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  metadata（章节/元数据编辑，模态）、playlist_ui、
                  playlist_menu（面板上的弹出菜单：添加/排序/全部列表）、
                  playlist_sort（排序 + 拖动重排）、
-                 clip/（裁切面板：状态、绘制、高级导出选项，与播放列表共用右侧通道）、
+                 clip/（裁切面板：状态、绘制、高级导出选项、批处理、预设，
+                 与播放列表共用右侧通道）、
                  convert/（格式转换面板：同一条右侧通道，来源可选当前文件或文件夹，
                  目标格式是可搜索的下拉）、
                  remux（音轨/字幕编辑对话框）、
-                 overlays、mini、render、
+                 concat（拼接对话框）、proxy（代理生成对话框）、
+                 multicam（双机位并排导出对话框）、scope（示波器）、
+                 scenes（镜头分割）、overlays、mini、render、format、constants、
+                 widgets（模态外壳、按钮、互斥 chip 等通用小件）、
                  settings_panel/（统一设置窗口：tabs + 各标签页 + 恢复默认）
 src/ui.rs        配色、图标按钮、时间格式、等比画面
 src/formats.rs   扩展名清单（文件过滤器 + 拖入判断）
 src/clip.rs      裁切片段：时间解析、区间校验、ffmpeg 任务与进度
 src/clip/export.rs  导出参数：无损剪切、编码、滤镜、响度、音频偏移、轨道保留
 src/clip/keyframe.rs  关键帧探测：流复制前把切点吸附到随机访问点
+src/clip/concat.rs    拼接、cutout.rs（删除中间段 / 分割）、loudness.rs（两遍 loudnorm）
+src/clip/batch.rs     批处理：把同一套参数套到整个文件夹
+src/clip/preset.rs    导出预设的存盘与读取（presets.json）
+src/encoder.rs   硬件编码器探测：NVENC / QSV / AMF / VideoToolbox
+src/proxy.rs     代理文件生成：低码率预览副本
 src/metadata.rs  章节与元数据编辑：ffmetadata、流复制任务
 src/multicam.rs  双机位并排导出（sync 子模块：音频互相关自动对齐，依赖 rustfft）
 src/subtitle_codec.rs 字幕编码选择（轨道编辑与元数据编辑共用）
@@ -84,6 +94,11 @@ src/player/engine/    state（对外类型）、event_loop、dispatch、render_l
   `render()` 里把播放列表的显示条件补上它。全屏时这条通道整条让给画面
   （`side_panel_width()` 返回 0，`render()` 里那几个面板都不画），
   新面板同样要放进 `!fullscreen` 的分支里。
+- 模态对话框彼此互斥：新增一个对话框时，在它的 `open_*_dialog` 里把其它对话框
+  都 `close_*_dialog` 一遍，并在 `render()` 里把它的 `render_*_dialog` 挂进模态层；
+  漏掉的话两个模态会叠在一起抢键盘。
+- 需要 ffmpeg 的端到端测试一律标 `#[ignore]`：没装 ffmpeg 的机器上 `cargo test`
+  要能全绿，本地用 `cargo test -- --ignored` 手工跑。
 - 注释用中文，解释「为什么」而不是复述代码；错误信息要给出可执行的解决路径。
 - 新增依赖前先确认必要性；`gpui-kit` 版本与其它 ngy-* 项目保持一致。
 - `.cargo/config.toml` 里的 `+crt-static` 不能删：exe 要能在没装 VC++ 运行库的
@@ -122,8 +137,10 @@ src/player/engine/    state（对外类型）、event_loop、dispatch、render_l
     `#[cfg(test)] mod tests;`。
   - 跨模块的集成测试留在 `tests/` 顶层。
 
-现状：`src/app.rs` 约 5300 行，是已知的超限文件。改动它时先把要动的区域
-抽成子模块再加新逻辑，不要在这个文件里继续堆。
+现状：`src/app.rs` 已经拆到 570 行左右；仍超限的是 `src/app/remux.rs`（约 810 行）、
+`src/app/metadata.rs`（约 790 行）、`src/app/mini.rs`（约 770 行）、
+`src/app/convert/panel.rs`（约 760 行）、`src/clip/export/tests.rs`（约 780 行）。
+改动这些文件时先把要动的区域抽成子模块再加新逻辑，不要继续往上堆。
 
 ## 完成后必须自动提交（强制规则）
 
