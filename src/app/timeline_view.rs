@@ -422,6 +422,25 @@ impl PlayerApp {
                                 this.split_at_playhead(cx);
                             }),
                         ))
+                        // 多轨是导出的能力，得先能建出来。两颗按钮各自加一条同类轨。
+                        .child(ui::icon_toggle_small(
+                            "timeline-add-video",
+                            IconName::Plus,
+                            false,
+                            "加一条视频轨",
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.add_track(crate::timeline::TrackKind::Video, cx);
+                            }),
+                        ))
+                        .child(ui::icon_toggle_small(
+                            "timeline-add-audio",
+                            IconName::Volume2,
+                            false,
+                            "加一条音频轨",
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.add_track(crate::timeline::TrackKind::Audio, cx);
+                            }),
+                        ))
                         .child(ui::icon_toggle_small(
                             "timeline-export",
                             IconName::FileDown,

@@ -2,6 +2,10 @@
 //!
 //! 时间线的空档不能省：concat 只认「首尾相接的一串片段」，中间少一段，后面所有
 //! 画面都会提前。视频空档补黑场（`color`），音频空档补静音（`anullsrc`）。
+//!
+//! 多轨规则与预览一致（M4）：每条启用轨道先各自拼成一条**和序列等长**的流，
+//! 视频自下而上 `overlay`，音频全部丢进 `amix`。等长是硬要求——`overlay` 默认
+//! 按最短的一条截断，轨道没铺满序列的话，成片会莫名少掉尾巴。
 
 use std::path::PathBuf;
 
@@ -19,43 +23,97 @@ pub fn plan_sequence(project: &Project) -> Result<ExportPlan, ExportError> {
         return Err(ExportError::Empty);
     }
 
-    // 第一版只取第一条启用的视频轨与第一条启用的音频轨，多轨叠加在 M3-T03/T04。
-    let video_track = sequence
+    // 轨道顺序就是叠放顺序：列表靠上的画在上面。静音 / 隐藏的轨道整条跳过。
+    let video_tracks: Vec<&Track> = sequence
         .tracks
         .iter()
-        .find(|track| track.kind == TrackKind::Video && !track.muted)
-        .ok_or(ExportError::NoVideoTrack)?;
-
-    let mut inputs = Vec::new();
-    let video = video_stream(project, video_track, sequence, &mut inputs)?;
-    if video.segments.is_empty() {
-        return Err(ExportError::Empty);
+        .filter(|track| track.kind == TrackKind::Video && !track.muted && !track.clips.is_empty())
+        .collect();
+    if video_tracks.is_empty() {
+        return Err(ExportError::NoVideoTrack);
     }
-    let audio = sequence
+    let audio_tracks: Vec<&Track> = sequence
         .tracks
         .iter()
-        .find(|track| track.kind == TrackKind::Audio && !track.muted)
-        .map(|track| audio_stream(project, track, &mut inputs))
-        .transpose()?;
+        .filter(|track| track.kind == TrackKind::Audio && !track.muted && !track.clips.is_empty())
+        .collect();
 
-    // 先算 concat 再取 chains：`chains` 一被移走，`concat` 就借不到 `segments` 了。
-    let video_concat = video.concat("outv", true).expect("视频段非空");
-    let audio_concat = audio
-        .as_ref()
-        .filter(|audio| !audio.segments.is_empty())
-        .and_then(|audio| audio.concat("outa", false));
+    let duration = sequence.duration();
+    let mut inputs = Vec::new();
+    let mut video_layers = Vec::new();
+    for track in &video_tracks {
+        video_layers.push(video_stream(
+            project,
+            track,
+            sequence,
+            duration,
+            &mut inputs,
+        )?);
+    }
+    let mut audio_layers = Vec::new();
+    for track in &audio_tracks {
+        audio_layers.push(audio_stream(project, track, duration, &mut inputs)?);
+    }
 
-    let mut parts = video.chains;
-    parts.push(video_concat);
+    let mut parts: Vec<String> = Vec::new();
     let video_label = Some("[outv]".to_string());
 
-    let audio_label = match audio {
-        Some(audio) if !audio.segments.is_empty() => {
-            parts.extend(audio.chains);
-            parts.push(audio_concat.expect("音频段非空"));
-            Some("[outa]".to_string())
+    // 视频：一层直接出 `[outv]`，多层自下而上叠。
+    let layer_count = video_layers.len();
+    let mut layer_labels = Vec::new();
+    for (index, layer) in video_layers.into_iter().enumerate() {
+        let label = if layer_count == 1 {
+            "outv".to_string()
+        } else {
+            format!("layerv{index}")
+        };
+        // 先算 concat 再移走 `chains`：`concat` 还要读 `segments`。
+        let concat = layer.concat(&label, true).expect("每条轨至少有一段");
+        parts.extend(layer.chains);
+        parts.push(concat);
+        layer_labels.push(format!("[{label}]"));
+    }
+    if layer_count > 1 {
+        // 最底层是列表里的最后一条，往上依次 overlay，最后一次落到 `[outv]`。
+        let mut current = layer_labels.last().cloned().expect("至少两层");
+        for index in (0..layer_labels.len() - 1).rev() {
+            let out = if index == 0 {
+                "[outv]".to_string()
+            } else {
+                format!("[ov{index}]")
+            };
+            parts.push(format!(
+                "{current}{}overlay=0:0:format=auto{out}",
+                layer_labels[index]
+            ));
+            current = out;
         }
-        _ => None,
+    }
+
+    let audio_label = if audio_layers.is_empty() {
+        None
+    } else {
+        let count = audio_layers.len();
+        let mut labels = Vec::new();
+        for (index, layer) in audio_layers.into_iter().enumerate() {
+            let label = if count == 1 {
+                "outa".to_string()
+            } else {
+                format!("layera{index}")
+            };
+            let concat = layer.concat(&label, false).expect("每条轨至少有一段");
+            parts.extend(layer.chains);
+            parts.push(concat);
+            labels.push(format!("[{label}]"));
+        }
+        if count > 1 {
+            // `amix` 默认把总和归一（normalize=1）：两条满音量的轨混在一起也不会削顶。
+            parts.push(format!(
+                "{}amix=inputs={count}:duration=longest:dropout_transition=0[outa]",
+                labels.concat()
+            ));
+        }
+        Some("[outa]".to_string())
     };
 
     let mut output_args: Vec<String> = vec![
@@ -122,6 +180,7 @@ fn video_stream(
     project: &Project,
     track: &Track,
     sequence: &Sequence,
+    duration: Tick,
     inputs: &mut Vec<PathBuf>,
 ) -> Result<Stream, ExportError> {
     let mut stream = Stream::new();
@@ -159,12 +218,25 @@ fn video_stream(
         cursor = clip.end();
     }
 
+    // 这条轨没铺满序列：补齐到整条序列的长度。多层 overlay 要求等长，
+    // 而 `overlay` 默认按最短的一条截断——少这一段的成片会缺尾巴。
+    if cursor < duration {
+        stream.push(
+            format!(
+                "color=c=black:s={color_size}:r={fps}:d={:.6}",
+                (duration - cursor).secs()
+            ),
+            format!("[bgv{gap_index}]"),
+        );
+    }
+
     Ok(stream)
 }
 
 fn audio_stream(
     project: &Project,
     track: &Track,
+    duration: Tick,
     inputs: &mut Vec<PathBuf>,
 ) -> Result<Stream, ExportError> {
     let mut stream = Stream::new();
@@ -197,6 +269,18 @@ fn audio_stream(
             label,
         );
         cursor = clip.end();
+    }
+
+    // 跟视频一样补齐到整条序列：`amix` 的 duration=longest 才不会把别的轨
+    // 提前砍掉，各条轨也都在同一个时间零点上。
+    if cursor < duration {
+        stream.push(
+            format!(
+                "anullsrc=r={AUDIO_RATE}:cl=stereo,atrim=duration={:.6}",
+                (duration - cursor).secs()
+            ),
+            format!("[bga{gap_index}]"),
+        );
     }
 
     Ok(stream)

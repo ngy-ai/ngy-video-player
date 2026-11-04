@@ -375,6 +375,21 @@ impl PlayerApp {
         cx.notify();
     }
 
+    /// 往序列末尾加一条轨道。
+    ///
+    /// 多轨导出（M3-T03/T04）的前提是序列里真的能有多条同类型轨道；模型一直支持，
+    /// 但没有界面入口的话这套能力只是理论上的。新轨道默认开着、没锁。
+    pub(super) fn add_track(&mut self, kind: crate::timeline::TrackKind, cx: &mut Context<Self>) {
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
+        project.sequence.add_track(kind);
+        self.remember_history();
+        self.flash(format!("已添加一条{}轨", kind.label()));
+        self.poke();
+        cx.notify();
+    }
+
     /// 在播放头处切开所有跨过它的片段。锁定的轨道由 `timeline::split_at` 跳过。
     pub(super) fn split_at_playhead(&mut self, cx: &mut Context<Self>) {
         let Some(project) = self.project.as_ref() else {

@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use super::*;
-use crate::timeline::{AssetId, ClipItem, Id, Project, Tick};
+use crate::timeline::{AssetId, ClipItem, Id, Project, Tick, TrackKind};
 
 fn s(n: i64) -> Tick {
     Tick::from_micros(n * 1_000_000)
@@ -212,6 +212,111 @@ fn 参数拼装把输入滤镜与映射按顺序排好() {
         args.iter().filter(|arg| arg.ends_with(".mp4")).count(),
         1,
         "输出文件不该出现在计划里"
+    );
+}
+
+/// 往工程里挂一条新轨道并放一个片段。
+fn add_track_clip(
+    project: &mut Project,
+    kind: TrackKind,
+    asset: AssetId,
+    source_in: Tick,
+    source_out: Tick,
+    start: Tick,
+) -> Id {
+    let track = project.sequence.add_track(kind);
+    let id = project.sequence.alloc_id();
+    project
+        .sequence
+        .track_mut(track)
+        .expect("刚加的轨道")
+        .clips
+        .push(ClipItem::new(id, asset, source_in, source_out, start));
+    id
+}
+
+#[test]
+fn 两条视频轨自下而上叠加() {
+    let scratch = Scratch::new("overlay");
+    let (mut project, _) = project_with(&scratch, &[(s(0), s(2), Tick::ZERO)]);
+    let asset = project.assets[0].id;
+    // 新加的视频轨排在列表后面，也就是更下面的一层。
+    add_track_clip(
+        &mut project,
+        TrackKind::Video,
+        asset,
+        s(0),
+        s(2),
+        Tick::ZERO,
+    );
+
+    let plan = plan_sequence(&project).expect("能导出");
+    assert!(plan.filter.contains("[layerv0]"), "{}", plan.filter);
+    assert!(plan.filter.contains("[layerv1]"), "{}", plan.filter);
+    assert!(
+        plan.filter.contains("overlay=0:0:format=auto[outv]"),
+        "最后一次 overlay 落到 [outv]：{}",
+        plan.filter
+    );
+    assert_eq!(plan.video_label.as_deref(), Some("[outv]"));
+    assert_eq!(plan.inputs.len(), 1, "同一个素材只 -i 一次");
+}
+
+#[test]
+fn 两条音频轨按amix混合() {
+    let scratch = Scratch::new("amix");
+    let (mut project, _) = project_with(&scratch, &[(s(0), s(2), Tick::ZERO)]);
+    let asset = project.assets[0].id;
+
+    let first = project.sequence.tracks[1].id;
+    let id = project.sequence.alloc_id();
+    project
+        .sequence
+        .track_mut(first)
+        .expect("音频轨存在")
+        .clips
+        .push(ClipItem::new(id, asset, s(0), s(2), Tick::ZERO));
+    add_track_clip(
+        &mut project,
+        TrackKind::Audio,
+        asset,
+        s(0),
+        s(2),
+        Tick::ZERO,
+    );
+
+    let plan = plan_sequence(&project).expect("能导出");
+    assert!(plan.filter.contains("[layera0]"), "{}", plan.filter);
+    assert!(plan.filter.contains("[layera1]"), "{}", plan.filter);
+    assert!(
+        plan.filter.contains("amix=inputs=2:duration=longest"),
+        "{}",
+        plan.filter
+    );
+    assert_eq!(plan.audio_label.as_deref(), Some("[outa]"));
+}
+
+#[test]
+fn 视频轨比序列短时补黑对齐() {
+    let scratch = Scratch::new("align");
+    let (mut project, _) = project_with(&scratch, &[(s(0), s(1), Tick::ZERO)]);
+    let asset = project.assets[0].id;
+    // 音频比视频长：序列总长 3 秒，视频轨只有 1 秒，得补 2 秒黑场。
+    let audio = project.sequence.tracks[1].id;
+    let id = project.sequence.alloc_id();
+    project
+        .sequence
+        .track_mut(audio)
+        .expect("音频轨存在")
+        .clips
+        .push(ClipItem::new(id, asset, s(0), s(3), Tick::ZERO));
+
+    let plan = plan_sequence(&project).expect("能导出");
+    assert!(plan.filter.contains("d=2.000000"), "{}", plan.filter);
+    assert!(
+        plan.filter.contains("concat=n=2:v=1:a=0[outv]"),
+        "原片段 + 补的黑场：{}",
+        plan.filter
     );
 }
 
