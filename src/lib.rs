@@ -25,6 +25,7 @@ pub mod screenshot;
 pub mod settings;
 // 字幕编码判断：轨道编辑与元数据编辑共用，不对外暴露。
 mod subtitle_codec;
+pub mod timeline;
 pub mod ui;
 
 pub use player::Engine;
