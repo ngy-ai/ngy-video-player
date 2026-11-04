@@ -23,7 +23,8 @@ impl PlayerApp {
             return;
         }
         // 文件夹和文件走两条路：文件夹开成自己的一页列表，文件才并进默认页。
-        // 拖入、菜单、命令行都从这里过，落点保持一致。
+        // 菜单、命令行和拖到画面上的「打开」都从这里过，落点保持一致；拖到列表面板
+        // 是显式的「添加到这一页」，走 `drop_paths_on_playlist`，不经过这里。
         let mut files = Vec::new();
         for path in paths {
             if path.is_dir() {
@@ -285,6 +286,28 @@ impl PlayerApp {
         cx.notify();
     }
 
+    /// 拖到列表面板上的路径：并进当前显示的那一页，而不是整窗「打开」的固定默认页。
+    ///
+    /// 面板里的落点是显式的——把文件放到「列表 1」上却进「默认」页并自动切页，
+    /// 等于拖放把用户从正在整理的那一页上拽走。工程文件和外挂字幕不是列表条目，
+    /// 仍交给「打开」处理，免得被 `add_paths` 当成「没有可添加的文件」吞掉。
+    pub(in crate::app) fn drop_paths_on_playlist(
+        &mut self,
+        paths: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        if paths.is_empty() {
+            return;
+        }
+        let (addable, opened) = split_playlist_drop(paths);
+        if !addable.is_empty() {
+            self.add_paths(addable, cx);
+        }
+        if !opened.is_empty() {
+            self.open_paths(opened, cx);
+        }
+    }
+
     pub(in crate::app) fn pick_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog_open {
             return;
@@ -379,6 +402,23 @@ fn dialog_dir(path: &std::path::Path) -> Option<PathBuf> {
         .map(std::path::Path::to_path_buf)
 }
 
+/// 把拖入面板的路径分成「添加」和「打开」两拨。
+///
+/// 工程文件优先于整批路径（和整窗拖入一致）；外挂字幕只是挂在当前片子上的附件，
+/// 不是列表条目。剩下的一律按「添加」处理，包括目录——手指落在哪一页，目录就
+/// 展开进哪一页。
+fn split_playlist_drop(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    if paths
+        .iter()
+        .any(|path| !path.is_dir() && formats::is_project(path))
+    {
+        return (Vec::new(), paths);
+    }
+    paths
+        .into_iter()
+        .partition(|path| path.is_dir() || !formats::is_subtitle(path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,5 +444,27 @@ mod tests {
             None,
             "裸文件名没有目录，不要覆盖已经记住的位置"
         );
+    }
+
+    #[test]
+    fn 面板拖入的媒体与清单按添加处理字幕仍按打开处理() {
+        let (addable, opened) = split_playlist_drop(vec![
+            PathBuf::from("A.mp4"),
+            PathBuf::from("queue.m3u"),
+            PathBuf::from("sub.srt"),
+        ]);
+        assert_eq!(
+            addable,
+            vec![PathBuf::from("A.mp4"), PathBuf::from("queue.m3u")]
+        );
+        assert_eq!(opened, vec![PathBuf::from("sub.srt")]);
+    }
+
+    #[test]
+    fn 面板拖入工程文件时整批交给打开() {
+        let paths = vec![PathBuf::from("A.mp4"), PathBuf::from("edit.ngyproj")];
+        let (addable, opened) = split_playlist_drop(paths.clone());
+        assert!(addable.is_empty(), "工程优先，媒体不再并进当前页");
+        assert_eq!(opened, paths);
     }
 }

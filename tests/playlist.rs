@@ -229,6 +229,18 @@ fn 多个列表各有各的内容和位置() {
 }
 
 #[test]
+fn 往当前页追加文件不跳回默认页() {
+    let mut set = PlaylistSet::default();
+    let tab = set.add("列表 1");
+    set.active_playlist_mut()
+        .append_paths(&[PathBuf::from("A.mp4")]);
+
+    assert_eq!(set.active(), tab, "「添加」不该切页");
+    assert!(set.tab(0).unwrap().is_empty(), "默认页保持原样");
+    assert_eq!(set.tab(tab).unwrap().len(), 1, "文件落在正在看的这一页");
+}
+
+#[test]
 fn 关闭列表后页码仍然有效() {
     let mut set = PlaylistSet::default();
     set.add("B");

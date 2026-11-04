@@ -101,6 +101,20 @@ impl PlayerApp {
                                             this.select_tab(index, cx);
                                         },
                                     ))
+                                    // 拖到哪个页签就并进哪一页：先切过去，后面的「添加」
+                                    // 才落在手指指着的这一页上。子层接住 drop 之后整窗的
+                                    // 「打开」处理器不会再收到同一批路径。
+                                    .on_drop(cx.listener(
+                                        move |this, paths: &ExternalPaths, _window, cx| {
+                                            cx.stop_propagation();
+                                            this.select_tab(index, cx);
+                                            let dropped: Vec<PathBuf> =
+                                                paths.0.iter().cloned().collect();
+                                            this.drop_paths_on_playlist(dropped, cx);
+                                            this.poke();
+                                            cx.notify();
+                                        },
+                                    ))
                                     // 右键：重命名 / 删除这一页。左键会冒泡到面板的
                                     // 「点空白处收菜单」，所以右键必须先截断。
                                     .on_mouse_down(
@@ -176,6 +190,16 @@ impl PlayerApp {
                     this.tab_menu = None;
                     cx.notify();
                 }
+            }))
+            // 拖进面板＝往当前这一页「添加」：整窗拖入的「打开」固定回默认页，
+            // 会把正在整理这一页的用户拽走。子层接住 drop 后截断冒泡，root 的
+            // ExternalPaths 处理器不会再把它打开一遍。
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, _window, cx| {
+                cx.stop_propagation();
+                let dropped: Vec<PathBuf> = paths.0.iter().cloned().collect();
+                this.drop_paths_on_playlist(dropped, cx);
+                this.poke();
+                cx.notify();
             }))
             // 跨在面板左边界上的拖动条：往左拖更宽，往右拖更窄。
             .child(
@@ -351,7 +375,7 @@ impl PlayerApp {
                             div()
                                 .text_size(px(11.0))
                                 .text_color(text_faint())
-                                .child("点标题栏的添加按钮，或者拖入文件"),
+                                .child("点标题栏的添加按钮，或者把文件拖进这一页"),
                         ),
                 )
             })
