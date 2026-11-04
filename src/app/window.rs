@@ -383,12 +383,19 @@ impl PlayerApp {
     /// 留出边距（底部多留一段给任务栏 / Dock，否则小窗会压在它上面）。
     fn mini_origin(&self, screen: Bounds<Pixels>, width: f32, height: f32) -> Point<Pixels> {
         if let Some([rx, ry]) = self.settings.mini_pos {
-            // 可移动范围是屏幕减去窗口自身；比例 0 贴起始边，1 贴结束边。
-            let span_x = (f32::from(screen.size.width) - width).max(0.0);
-            let span_y = (f32::from(screen.size.height) - height).max(0.0);
             return point(
-                screen.origin.x + px(span_x * rx.clamp(0.0, 1.0)),
-                screen.origin.y + px(span_y * ry.clamp(0.0, 1.0)),
+                px(mini::origin_for_ratio(
+                    f32::from(screen.origin.x),
+                    f32::from(screen.size.width),
+                    width,
+                    rx,
+                )),
+                px(mini::origin_for_ratio(
+                    f32::from(screen.origin.y),
+                    f32::from(screen.size.height),
+                    height,
+                    ry,
+                )),
             );
         }
         point(

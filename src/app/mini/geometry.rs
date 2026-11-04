@@ -36,6 +36,19 @@ pub(in crate::app) fn axis_ratio(
     ((origin - screen_origin) / travel).clamp(0.0, 1.0)
 }
 
+/// 比例还原成屏幕坐标，是 `axis_ratio` 的逆运算。
+///
+/// 可移动范围是屏幕减去窗口自身；比例 0 贴起始边，1 贴结束边。
+pub(in crate::app) fn origin_for_ratio(
+    screen_origin: f32,
+    screen_span: f32,
+    window_span: f32,
+    ratio: f32,
+) -> f32 {
+    let span = (screen_span - window_span).max(0.0);
+    screen_origin + span * ratio.clamp(0.0, 1.0)
+}
+
 /// 指针横坐标换算成片内秒数。
 pub(super) fn time_for_x(bounds: Bounds<Pixels>, x: Pixels, duration: f64) -> Option<f64> {
     let width = f32::from(bounds.size.width);

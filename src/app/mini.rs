@@ -16,5 +16,5 @@ mod render;
 #[cfg(test)]
 mod tests;
 
-pub(super) use geometry::{mini_aspect, mini_width};
+pub(super) use geometry::{mini_aspect, mini_width, origin_for_ratio};
 pub(super) use player::MiniPlayer;
