@@ -482,10 +482,11 @@ enum CloseAction {
     Wait,
 }
 
-fn close_action(modified: bool, dialog_open: bool) -> CloseAction {
+/// `waiting` 是「已经有一个框在等用户回答」：原生文件选择框，或应用内的未保存确认。
+fn close_action(modified: bool, waiting: bool) -> CloseAction {
     if !modified {
         CloseAction::Allow
-    } else if dialog_open {
+    } else if waiting {
         CloseAction::Wait
     } else {
         CloseAction::Ask
@@ -499,7 +500,7 @@ fn close_action(modified: bool, dialog_open: bool) -> CloseAction {
 /// 然后把菜单「退出」那条确认路径复用一遍（保存 / 不保存 / 取消）。
 ///
 /// 回调里不能阻塞，所以「拦截」和「弹框」分两步：先返回 `false`，再用 `defer`
-/// 把确认流程排到下一轮循环，避免在窗口事件的回调栈里再开一个原生对话框。
+/// 把确认流程排到下一轮循环——此刻 `PlayerApp` 正被 `read` 借着，改不了字段。
 pub(super) fn guard_window_close(player: Entity<PlayerApp>, window: &mut Window, cx: &mut App) {
     let handle = player.downgrade();
     window.on_window_should_close(cx, move |_window, cx| {
@@ -508,14 +509,15 @@ pub(super) fn guard_window_close(player: Entity<PlayerApp>, window: &mut Window,
             return true;
         };
         let app = player.read(cx);
-        match close_action(app.project_modified(), app.dialog_open) {
+        let waiting = app.dialog_open || app.project_confirm.is_some();
+        match close_action(app.project_modified(), waiting) {
             CloseAction::Allow => true,
             CloseAction::Wait => false,
             CloseAction::Ask => {
                 let player = handle.clone();
                 cx.defer(move |cx| {
                     let _ = player.update(cx, |this, cx| {
-                        this.request_project_action(AfterSaveConfirm::Quit, None, cx);
+                        this.request_project_action(AfterSaveConfirm::Quit, cx);
                     });
                 });
                 false

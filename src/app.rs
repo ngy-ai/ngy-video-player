@@ -146,6 +146,7 @@ use self::metadata::MetadataDialog;
 use self::mini::MiniPlayer;
 use self::multicam::MulticamDialog;
 use self::playlist_menu::PanelMenu;
+use self::project_file::ProjectConfirm;
 use self::proxy::ProxyDialog;
 use self::remux::RemuxDialog;
 use self::scenes::ScenesDialog;
@@ -424,7 +425,11 @@ pub struct PlayerApp {
     ///
     /// rfd 的对话框阻塞在后台线程里，主窗口在拿到结果前不会知道自己「正在等对话框」。
     /// 不挡一下的话，连按 O 会叠出多个对话框，所以这里自己记一笔。
+    ///
+    /// 只记原生选择框；应用内模态各自有自己的字段（比如 `project_confirm`）。
     dialog_open: bool,
+    /// 「工程还没有保存」的确认框；`None` 表示没在问。
+    project_confirm: Option<ProjectConfirm>,
 
     /// 播放统计浮层（帧率、丢帧计数）是否打开。按 I 切换。
     show_stats: bool,

@@ -7,13 +7,43 @@
 //! 任何会丢掉当前工程的动作用 [`PlayerApp::request_project_action`] 走一遍，
 //! 有未保存改动就先让用户选「保存 / 不保存 / 取消」。
 //!
-//! 确认框用系统对话框而不是自绘模态：它要挡在一个**还没发生**的动作前面，
-//! 自绘模态得再往 `render()` 的互斥分支里塞一套状态，收益不成比例。
+//! 确认框是自绘模态（[`ProjectConfirm`]），和播放器里别的对话框同一套外观：
+//! 系统消息框只能给出「是 / 否 / 取消」，说不清「继续之后到底会发生什么」；
+//! 而且它盖在时间线、播放列表上面时，跟窗口其他地方本来就是两种皮肤。
 
 use std::path::Path;
 
 use super::*;
 use crate::timeline::PROJECT_EXTENSION;
+
+/// 未保存确认框上的三个回答。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ProjectConfirmChoice {
+    Save,
+    Discard,
+    Cancel,
+}
+
+/// 正在等用户回答的未保存确认。
+///
+/// 回答之后要执行的那个动作也挂在这里：关掉对话框（Esc / × / 取消）就等于把它丢掉，
+/// 省得在 `PlayerApp` 上再留一个「待办」字段，那两处迟早会对不上。
+#[derive(Clone, Debug)]
+pub(super) struct ProjectConfirm {
+    action: AfterSaveConfirm,
+}
+
+impl AfterSaveConfirm {
+    /// 确认框里那句「继续之后会发生什么」。
+    fn describe(&self) -> String {
+        match self {
+            AfterSaveConfirm::NewProject => "继续会新建一个空工程".to_string(),
+            AfterSaveConfirm::CloseProject => "继续会关闭当前工程".to_string(),
+            AfterSaveConfirm::OpenProject(path) => format!("继续会打开「{}」", file_name(path)),
+            AfterSaveConfirm::Quit => "继续会退出播放器".to_string(),
+        }
+    }
+}
 
 impl PlayerApp {
     /// 有没有未保存改动。
@@ -119,54 +149,136 @@ impl PlayerApp {
     pub(super) fn request_project_action(
         &mut self,
         action: AfterSaveConfirm,
-        window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
         if self.project.is_none() || !self.project_modified() {
             self.run_project_action(action, cx);
             return;
         }
-        if self.dialog_open {
+        // 原生文件选择框正在等结果、或者确认框已经开着：不叠第二个。
+        if self.project_confirm.is_some() || self.dialog_open {
             return;
         }
-        self.dialog_open = true;
+        // 悬浮菜单跟着收掉：确认框一出来，菜单栏上那个「点过了」的高亮没必要再留着。
+        self.menu = None;
+        self.menu_bar = None;
+        self.project_confirm = Some(ProjectConfirm { action });
+        self.poke();
+        cx.notify();
+    }
 
-        let mut dialog = rfd::MessageDialog::new()
-            .set_title("工程还没有保存")
-            .set_description("当前工程有未保存的改动。要保存之后再继续吗？")
-            .set_buttons(rfd::MessageButtons::YesNoCancel);
-        if let Some(window) = window {
-            dialog = dialog.set_parent(window);
+    /// 回答确认框。
+    ///
+    /// 「保存」走的还是原来那条路：没落过盘的工程会先转成另存为，用户在文件选择框里
+    /// 取消就等于回答「取消」，后面的动作不再执行。
+    pub(super) fn resolve_project_confirm(
+        &mut self,
+        choice: ProjectConfirmChoice,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(confirm) = self.project_confirm.take() else {
+            return;
+        };
+        let alive = match choice {
+            ProjectConfirmChoice::Save => self.save_project(None, cx, Some(confirm.action)),
+            ProjectConfirmChoice::Discard => {
+                // 用户明确说了不保存：那份 `.autosave` 也不该再被捡回来。
+                // `Drop` 只在「没有未保存改动」时才清理，这里必须补这一刀。
+                self.clear_autosave();
+                self.run_project_action(confirm.action, cx)
+            }
+            ProjectConfirmChoice::Cancel => true,
+        };
+        // 退出这条路最后会 `cx.quit()`，那之后不能再碰 `cx`。
+        if alive {
+            cx.notify();
         }
+    }
 
-        let (tx, rx) = futures::channel::oneshot::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(dialog.show());
-        });
+    /// 确认框打开时独占键盘：Esc 取消，其余按键一律吃掉。
+    ///
+    /// 它盖在画面上，空格、左右这些播放器快捷键不该再传下去切播放或跳转；
+    /// 同时它排在所有别的对话框按键处理之前，Esc 关掉的永远是这一层。
+    pub(super) fn on_project_confirm_key(
+        &mut self,
+        event: &KeyDownEvent,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.project_confirm.is_none() {
+            return false;
+        }
+        if event.keystroke.key == "escape" {
+            self.resolve_project_confirm(ProjectConfirmChoice::Cancel, cx);
+        }
+        true
+    }
 
-        cx.spawn(async move |this, cx| {
-            let choice = rx.await.unwrap_or(rfd::MessageDialogResult::Cancel);
-            let _ = this.update(cx, |this, cx| {
-                this.dialog_open = false;
-                let alive = match choice {
-                    rfd::MessageDialogResult::Yes => {
-                        this.save_project(None, cx, Some(action));
-                        true
-                    }
-                    rfd::MessageDialogResult::No => {
-                        // 用户明确说了不保存：那份 `.autosave` 也不该再被捡回来。
-                        // `Drop` 只在「没有未保存改动」时才清理，这里必须补这一刀。
-                        this.clear_autosave();
-                        this.run_project_action(action, cx)
-                    }
-                    _ => true,
-                };
-                if alive {
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
+    /// 未保存确认的模态卡片。
+    pub(super) fn render_project_confirm(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let confirm = self.project_confirm.as_ref()?;
+        let consequence = confirm.action.describe();
+
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap(px(10.0))
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(text_muted())
+                    .whitespace_normal()
+                    .child("当前工程有未保存的改动。要保存之后再继续吗？"),
+            )
+            // 三个按钮各会带来什么后果，写在按钮上面：这句是用户按下去之前
+            // 唯一能看到的说明。
+            .child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(text_faint())
+                    .whitespace_normal()
+                    .child(format!("选「不保存」，{consequence}。")),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap(px(8.0))
+                    .child(settings_button(
+                        "project-confirm-cancel",
+                        "取消",
+                        true,
+                        cx.listener(|this, _: &ClickEvent, _window, cx| {
+                            this.resolve_project_confirm(ProjectConfirmChoice::Cancel, cx);
+                        }),
+                    ))
+                    .child(settings_button(
+                        "project-confirm-discard",
+                        "不保存",
+                        true,
+                        cx.listener(|this, _: &ClickEvent, _window, cx| {
+                            this.resolve_project_confirm(ProjectConfirmChoice::Discard, cx);
+                        }),
+                    ))
+                    .child(primary_button(
+                        "project-confirm-save",
+                        "保存",
+                        true,
+                        cx.listener(|this, _: &ClickEvent, _window, cx| {
+                            this.resolve_project_confirm(ProjectConfirmChoice::Save, cx);
+                        }),
+                    )),
+            )
+            .into_any_element();
+
+        Some(modal_card(
+            "project-confirm",
+            "工程还没有保存",
+            body,
+            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                this.resolve_project_confirm(ProjectConfirmChoice::Cancel, cx);
+            }),
+        ))
     }
 
     /// 真正执行一个「换工程」的动作。返回 `false` 表示程序正在退出。
@@ -327,5 +439,21 @@ mod tests {
             with_project_extension(PathBuf::from("demo.txt")),
             PathBuf::from("demo.txt.ngyproj")
         );
+    }
+
+    #[test]
+    fn 确认框写清楚继续之后会发生什么() {
+        assert_eq!(
+            AfterSaveConfirm::OpenProject(PathBuf::from("E:/片库/demo.ngyproj")).describe(),
+            "继续会打开「demo.ngyproj」"
+        );
+        // 三条不带参数的路径各有一句话，别退化成空串。
+        for action in [
+            AfterSaveConfirm::NewProject,
+            AfterSaveConfirm::CloseProject,
+            AfterSaveConfirm::Quit,
+        ] {
+            assert!(action.describe().starts_with("继续会"));
+        }
     }
 }

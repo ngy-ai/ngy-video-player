@@ -103,7 +103,7 @@ impl PlayerApp {
                 if let Some(path) = picked {
                     this.remember_dir(&path);
                     // 当前工程可能还有没保存的东西，先过一遍确认。
-                    this.request_project_action(AfterSaveConfirm::OpenProject(path), None, cx);
+                    this.request_project_action(AfterSaveConfirm::OpenProject(path), cx);
                 }
                 cx.notify();
             });

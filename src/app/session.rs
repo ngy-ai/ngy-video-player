@@ -102,6 +102,7 @@ impl PlayerApp {
             export_progress: None,
             export_queue: VecDeque::new(),
             dialog_open: false,
+            project_confirm: None,
             show_stats: false,
             osd: None,
             screenshot_card: None,

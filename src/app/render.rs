@@ -199,10 +199,11 @@ impl Render for PlayerApp {
                 cx.listener(|this, _: &ExitOverlay, window, cx| this.exit_overlay(window, cx)),
             )
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                // 重命名输入框在最上层；裁切面板只在输入框有焦点时接管键盘；
-                // 轨道编辑对话框是模态的。不拦住的话，输入框里的字符会顺带
-                // 触发播放器的快捷键。
-                if this.on_rename_key(event, cx)
+                // 未保存确认压在最上层，先给它；往下依次是重命名输入框、只在
+                // 输入框有焦点时接管键盘的裁切面板，以及各个模态对话框。
+                // 不拦住的话，输入框里的字符会顺带触发播放器的快捷键。
+                if this.on_project_confirm_key(event, cx)
+                    || this.on_rename_key(event, cx)
                     || this.on_clip_key(event, cx)
                     || this.on_remux_key(event, cx)
                     || this.on_metadata_key(event, cx)
@@ -369,6 +370,8 @@ impl Render for PlayerApp {
             .children(self.render_file_info(cx))
             // 重命名是模态的，压在所有东西上面。
             .children(self.render_tab_rename(cx))
+            // 未保存确认比它还靠上一层：它一旦出现，答案决定的是整份工程的去留。
+            .children(self.render_project_confirm(cx))
     }
 }
 

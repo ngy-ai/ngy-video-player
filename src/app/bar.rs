@@ -362,14 +362,12 @@ impl PlayerApp {
             BarAction::Command(command) => self.send(command),
             BarAction::OpenFile => self.pick_file(window, cx),
             BarAction::OpenFolder => self.pick_folder(window, cx),
-            BarAction::NewProject => {
-                self.request_project_action(AfterSaveConfirm::NewProject, Some(window), cx)
-            }
+            BarAction::NewProject => self.request_project_action(AfterSaveConfirm::NewProject, cx),
             BarAction::OpenProject => self.pick_project(window, cx),
             BarAction::OpenRecentProject(path) => {
                 self.remember_dir(&path);
                 // 走同一道未保存确认：直接换掉当前工程和拖入一个工程是一样的。
-                self.request_project_action(AfterSaveConfirm::OpenProject(path), Some(window), cx);
+                self.request_project_action(AfterSaveConfirm::OpenProject(path), cx);
             }
             BarAction::ImportToTimeline => self.import_to_timeline(window, cx),
             BarAction::Save => {
@@ -378,7 +376,7 @@ impl PlayerApp {
             BarAction::SaveAs => self.save_project_as(Some(window), cx, None),
             BarAction::CollectAssets => self.collect_assets(cx),
             BarAction::CloseProject => {
-                self.request_project_action(AfterSaveConfirm::CloseProject, Some(window), cx)
+                self.request_project_action(AfterSaveConfirm::CloseProject, cx)
             }
             BarAction::LoadSubtitle => self.pick_subtitle(window, cx),
             BarAction::Previous => self.previous_file(cx),
@@ -418,7 +416,7 @@ impl PlayerApp {
                     cx.quit();
                     return;
                 }
-                self.request_project_action(AfterSaveConfirm::Quit, Some(window), cx);
+                self.request_project_action(AfterSaveConfirm::Quit, cx);
                 return;
             }
         }
