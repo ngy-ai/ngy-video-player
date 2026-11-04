@@ -125,6 +125,7 @@ use self::remux::RemuxDialog;
 use self::scenes::ScenesDialog;
 use self::scope::ScopeDialog;
 use self::settings_panel::SettingsTab;
+use self::timeline_view::TimelineDrop;
 use self::widgets::*;
 
 #[derive(Clone, Debug, Default)]
@@ -357,6 +358,8 @@ pub struct PlayerApp {
     timeline: ViewState,
     /// 正在拖时间线的播放头。
     timeline_dragging: bool,
+    /// 拖动片段时算出来的落点；`None` 表示没在拖。
+    timeline_drop: Option<TimelineDrop>,
 
     /// 原生文件选择框是否已经打开。
     ///
