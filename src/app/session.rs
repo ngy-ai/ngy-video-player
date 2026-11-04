@@ -90,6 +90,7 @@ impl PlayerApp {
             autosave: AutoSave::new(),
             timeline: ViewState::new(),
             timeline_dragging: false,
+            timeline_snap: false,
             timeline_drop: None,
             timeline_menu: None,
             timeline_preview: None,

@@ -285,6 +285,28 @@ pub fn format_time(seconds: f64) -> String {
     if negative { format!("-{text}") } else { text }
 }
 
+/// `8` → `0:08.00`；`3600.25` → `1:00:00.25`。拖播放头时要读到百分秒。
+///
+/// 先把秒数四舍五入成整数个「百分秒」再拆分，避免 59.999 显示成 `0:59.100`
+/// 这种不进位的结果。
+pub fn format_time_precise(seconds: f64) -> String {
+    if !seconds.is_finite() {
+        return "--:--.--".to_string();
+    }
+    let negative = seconds < 0.0;
+    let centis = (seconds.abs() * 100.0).round() as u64;
+    let hours = centis / 360_000;
+    let minutes = (centis / 6_000) % 60;
+    let secs = (centis / 100) % 60;
+    let fraction = centis % 100;
+    let text = if hours > 0 {
+        format!("{hours}:{minutes:02}:{secs:02}.{fraction:02}")
+    } else {
+        format!("{minutes}:{secs:02}.{fraction:02}")
+    };
+    if negative { format!("-{text}") } else { text }
+}
+
 // ---------------------------------------------------------------------------
 // 视频画面
 // ---------------------------------------------------------------------------

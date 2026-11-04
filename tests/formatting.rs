@@ -1,7 +1,7 @@
 //! 时间格式化与格式清单。
 
 use ngy_video_player::formats;
-use ngy_video_player::ui::format_time;
+use ngy_video_player::ui::{format_time, format_time_precise};
 use std::path::Path;
 
 #[test]
@@ -24,6 +24,22 @@ fn 负数表示剩余时间() {
 fn 非法时长不显示成巨数() {
     assert_eq!(format_time(f64::NAN), "--:--");
     assert_eq!(format_time(f64::INFINITY), "--:--");
+}
+
+#[test]
+fn 精确时间显示到百分秒() {
+    assert_eq!(format_time_precise(0.0), "0:00.00");
+    assert_eq!(format_time_precise(8.0), "0:08.00");
+    assert_eq!(format_time_precise(8.006), "0:08.01");
+    assert_eq!(format_time_precise(59.999), "1:00.00");
+    assert_eq!(format_time_precise(3600.25), "1:00:00.25");
+    assert_eq!(format_time_precise(-1.5), "-0:01.50");
+}
+
+#[test]
+fn 精确时间遇到非法值不显示成巨数() {
+    assert_eq!(format_time_precise(f64::NAN), "--:--.--");
+    assert_eq!(format_time_precise(f64::INFINITY), "--:--.--");
 }
 
 #[test]

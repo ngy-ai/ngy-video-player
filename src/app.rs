@@ -21,11 +21,11 @@ use crate::{
     timeline::{
         Project, Tick, UndoHistory, ViewState,
         autosave::{self, AutoSave},
-        visible_ticks,
+        seek_seconds, visible_ticks,
     },
     ui::{
-        self, bg, format_time, icon, icon_button, icon_button_with_tip, pill_button_with_tip,
-        surface, text, text_faint, text_muted,
+        self, bg, format_time, format_time_precise, icon, icon_button, icon_button_with_tip,
+        pill_button_with_tip, surface, text, text_faint, text_muted,
     },
 };
 use anyhow::Result;
@@ -397,6 +397,8 @@ pub struct PlayerApp {
     timeline: ViewState,
     /// 正在拖时间线的播放头。
     timeline_dragging: bool,
+    /// 拖播放头时按住了 Shift：落点吸附到 0.01 秒。
+    timeline_snap: bool,
     /// 拖动片段时算出来的落点；`None` 表示没在拖。
     timeline_drop: Option<TimelineDrop>,
     /// 时间线片段上的右键菜单；`None` 表示没展开。

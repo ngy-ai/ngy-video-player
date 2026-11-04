@@ -184,7 +184,8 @@ impl PlayerApp {
     /// 把窗口横坐标换成时间线时间，并移动播放头。
     ///
     /// 不调用播放器的 seek：工程模式下时间线是预览，拖动播放头只改工程里的位置。
-    pub(super) fn seek_timeline_to(&mut self, x: Pixels, cx: &mut Context<Self>) {
+    /// `snap` 是按住 Shift：落点对齐到 0.01 秒网格，读数稳定可复现。
+    pub(super) fn seek_timeline_to(&mut self, x: Pixels, snap: bool, cx: &mut Context<Self>) {
         // 拖播放头等于用户自己接管定位：正在放就停下，否则时钟会和手指抢播放头，
         // 松手之后播放头还在往前跑。
         self.stop_timeline_playback(cx);
@@ -192,8 +193,9 @@ impl PlayerApp {
             return;
         };
         let lane_x = f32::from(x) - TIMELINE_GUTTER;
-        let seconds = self.timeline.time_at(lane_x);
-        let seconds = seconds.clamp(0.0, project.sequence.duration().secs().max(0.0));
+        let duration = project.sequence.duration();
+        let seconds = seek_seconds(&self.timeline, lane_x, duration, snap);
+        self.timeline_snap = snap;
         if let Some(project) = self.project.as_mut() {
             project.ui.playhead = Tick::from_secs(seconds);
         }
@@ -317,7 +319,6 @@ impl PlayerApp {
             return div().into_any_element();
         };
         let sequence = &project.sequence;
-        let duration = sequence.duration();
         let view = &self.timeline;
         let window_width = f32::from(window.viewport_size().width);
         let lane_width = (window_width - TIMELINE_GUTTER).max(1.0);
@@ -378,7 +379,7 @@ impl PlayerApp {
                 cx.listener(|this, event: &MouseDownEvent, _window, cx| {
                     cx.stop_propagation();
                     this.timeline_dragging = true;
-                    this.seek_timeline_to(event.position.x, cx);
+                    this.seek_timeline_to(event.position.x, event.modifiers.shift, cx);
                     this.poke();
                     cx.notify();
                 }),
@@ -386,7 +387,7 @@ impl PlayerApp {
 
         let step = view.tick_step();
         let minor_step = step / 5.0;
-        for tick in visible_ticks(view, duration) {
+        for tick in visible_ticks(view) {
             let x = view.x_of(tick);
             if x < -1.0 || x > lane_width {
                 continue;
@@ -530,6 +531,42 @@ impl PlayerApp {
                         .rounded_full()
                         .bg(ui::accent()),
                 );
+
+            // 拖动时把精确时间贴在播放头旁边：标题条在窗口右端，盯着标尺的眼睛
+            // 看不到；只有整秒的读数也没法对准 8.00 秒。
+            if self.timeline_dragging {
+                let bubble_w = 112.0;
+                let left = if playhead_x + 8.0 + bubble_w <= window_width {
+                    playhead_x + 8.0
+                } else {
+                    (playhead_x - 8.0 - bubble_w).max(TIMELINE_GUTTER)
+                };
+                let label = if self.timeline_snap {
+                    format!("{} ⇧0.01s", format_time_precise(playhead))
+                } else {
+                    format_time_precise(playhead)
+                };
+                root = root.child(
+                    div()
+                        .absolute()
+                        .left(px(left))
+                        .top(px(TIMELINE_HEADER + 3.0))
+                        .w(px(bubble_w))
+                        .h(px(18.0))
+                        .px(px(6.0))
+                        .flex()
+                        .items_center()
+                        .rounded(px(3.0))
+                        .bg(if self.timeline_snap {
+                            gpui_kit::rgba(0x5aa9ff33)
+                        } else {
+                            gpui_kit::rgba(0x1b1b24f2)
+                        })
+                        .text_size(px(10.0))
+                        .text_color(ui::accent())
+                        .child(label),
+                );
+            }
         }
 
         root.into_any_element()

@@ -238,8 +238,9 @@ impl PlayerApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        let duration = project.sequence.duration().secs().max(0.0);
-        let at = Tick::from_secs((project.ui.playhead.secs() + delta).clamp(0.0, duration));
+        let duration = project.sequence.duration();
+        let limit = crate::timeline::playhead_limit(&self.timeline, duration);
+        let at = Tick::from_secs((project.ui.playhead.secs() + delta).clamp(0.0, limit));
         if let Some(project) = self.project.as_mut() {
             project.ui.playhead = at;
         }
@@ -257,8 +258,9 @@ impl PlayerApp {
         };
         let fps = project.sequence.fps;
         let duration = project.sequence.duration();
+        let limit = Tick::from_secs(crate::timeline::playhead_limit(&self.timeline, duration));
         let frame = project.ui.playhead.round_frames(fps) + i64::from(steps);
-        let at = Tick::from_frames(frame, fps).clamp(Tick::ZERO, duration);
+        let at = Tick::from_frames(frame, fps).clamp(Tick::ZERO, limit);
         if let Some(project) = self.project.as_mut() {
             project.ui.playhead = at;
         }

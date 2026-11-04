@@ -159,7 +159,7 @@ impl PlayerApp {
                         )
                     })
                     .child(format_time(duration.secs()))
-                    .child(format_time(playhead))
+                    .child(format_time_precise(playhead))
                     .child(format!("{:.1} 像素/秒", self.timeline.zoom())),
             )
             .into_any_element()

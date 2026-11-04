@@ -139,12 +139,15 @@ pub fn tick_step(zoom: f32) -> f64 {
 
 /// 当前视口里要画的主刻度时间点。包含完全滚出左边界前的那一格，标签不会突然
 /// 从边缘冒出来。
-pub fn visible_ticks(view: &ViewState, duration: Tick) -> Vec<f64> {
+///
+/// 右端按视口算而不是按序列时长算：序列只有 6 秒时，右边一整屏空白也该有刻度，
+/// 否则播放头拖到 8 秒时标尺上连参照都没有。
+pub fn visible_ticks(view: &ViewState) -> Vec<f64> {
     let step = view.tick_step();
     if step <= 0.0 {
         return Vec::new();
     }
-    let end = (view.scroll() + view.visible_seconds()).min(duration.secs().max(0.0));
+    let end = view.scroll() + view.visible_seconds();
     let mut ticks = Vec::new();
     let mut at = (view.scroll() / step).floor() * step;
     while at <= end + step * 0.5 {
@@ -154,6 +157,34 @@ pub fn visible_ticks(view: &ViewState, duration: Tick) -> Vec<f64> {
         at += step;
     }
     ticks
+}
+
+/// 播放头能停到的最晚时间：视口可见多远就能走多远，序列末尾之后的空白也算。
+///
+/// 编辑时经常要先把播放头放到 8 秒、再导入下一段做出空档；夹在当前序列时长
+/// （6 秒）上就永远排不出空档。滚动范围仍由 [`ViewState::clamp`] 管。
+pub fn playhead_limit(view: &ViewState, duration: Tick) -> f64 {
+    view.time_at(view.width()).max(duration.secs()).max(0.0)
+}
+
+/// 按住 Shift 拖动时的吸附：对齐到 0.01 秒网格。
+///
+/// 只用在鼠标输入这一个边界上；写回工程仍走 `Tick::from_secs` 的整数微秒。
+pub fn snap_seconds(seconds: f64) -> f64 {
+    if !seconds.is_finite() {
+        return 0.0;
+    }
+    (seconds * 100.0).round() / 100.0
+}
+
+/// 标尺拖动一次的坐标换算：轨道区横坐标 → 序列时间（秒）。
+///
+/// 边界与吸附只在这里算一遍，界面层拿到结果就写 `Tick`。
+pub fn seek_seconds(view: &ViewState, lane_x: f32, duration: Tick, snap: bool) -> f64 {
+    let seconds = view
+        .time_at(lane_x)
+        .clamp(0.0, playhead_limit(view, duration));
+    if snap { snap_seconds(seconds) } else { seconds }
 }
 
 #[cfg(test)]
@@ -238,7 +269,7 @@ mod tests {
     fn 刻度只覆盖可见范围() {
         let mut view = ViewState::new();
         view.set_width(400.0, dur(300.0)); // 50 秒一屏
-        let ticks = visible_ticks(&view, dur(300.0));
+        let ticks = visible_ticks(&view);
         assert_eq!(ticks.first(), Some(&0.0));
         assert!(ticks.iter().all(|tick| *tick <= 50.0 + 1e-9));
         assert_eq!(ticks.len(), 4, "8px/s 下每 15 秒一格：0/15/30/45");
@@ -262,5 +293,39 @@ mod tests {
         view.center_on(300.0, dur(600.0));
         assert!((view.scroll() - (300.0 - 50.0)).abs() < 1e-9);
         assert!((view.time_at(400.0) - 300.0).abs() < 1e-9, "中心点");
+    }
+
+    #[test]
+    fn 短序列的标尺也画到视口右端() {
+        let mut view = ViewState::new();
+        view.set_width(800.0, dur(6.0)); // 8px/s：一屏 100 秒
+        let ticks = visible_ticks(&view);
+        assert_eq!(ticks.first(), Some(&0.0));
+        assert!(
+            ticks.iter().any(|tick| (*tick - 90.0).abs() < 1e-9),
+            "6 秒之后也得有刻度"
+        );
+    }
+
+    #[test]
+    fn 播放头能停在序列末尾之后的空白里() {
+        let mut view = ViewState::new();
+        view.set_width(800.0, dur(6.0));
+        assert!((playhead_limit(&view, dur(6.0)) - 100.0).abs() < 1e-9);
+        let at = seek_seconds(&view, 64.0, dur(6.0), false);
+        assert!((at - 8.0).abs() < 1e-9, "能拖到 8 秒：{at}");
+        let far = seek_seconds(&view, 100_000.0, dur(6.0), false);
+        assert!((far - 100.0).abs() < 1e-9, "但不许跑出视口：{far}");
+    }
+
+    #[test]
+    fn shift_拖动时落点吸附到百分秒() {
+        let view = ViewState::new();
+        // 8px/s：64.03px ≈ 8.00375 秒，吸附后应是 8.00 秒。
+        let raw = seek_seconds(&view, 64.03, dur(6.0), false);
+        assert!((raw - 8.00375).abs() < 1e-6, "未吸附：{raw}");
+        let snapped = seek_seconds(&view, 64.03, dur(6.0), true);
+        assert!((snapped - 8.0).abs() < 1e-9, "吸附后：{snapped}");
+        assert!((snap_seconds(8.006) - 8.01).abs() < 1e-9);
     }
 }

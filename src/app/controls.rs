@@ -128,6 +128,7 @@ impl PlayerApp {
             self.settings.save();
         }
         self.timeline_dragging = false;
+        self.timeline_snap = false;
     }
 
     pub(super) fn render_controls(&self, panel: f32, cx: &mut Context<Self>) -> impl IntoElement {
