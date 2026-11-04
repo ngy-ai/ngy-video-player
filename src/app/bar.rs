@@ -26,6 +26,10 @@ impl PlayerApp {
                 items.push(BarItem::Separator);
                 items.push(BarItem::Entry(BarEntry::new("新建工程", NewProject)));
                 items.push(BarItem::Entry(BarEntry::new("打开工程…", OpenProject)));
+                items.push(BarItem::Entry(
+                    BarEntry::new("导入到时间线…", ImportToTimeline)
+                        .enabled(self.project.is_some()),
+                ));
                 // 有未保存改动时，标题栏会挂一个 `*`；这里把保存入口放在最顺手的位置。
                 let save_hint = if cfg!(target_os = "macos") {
                     "⌘S"
@@ -342,6 +346,7 @@ impl PlayerApp {
                 self.request_project_action(AfterSaveConfirm::NewProject, Some(window), cx)
             }
             BarAction::OpenProject => self.pick_project(window, cx),
+            BarAction::ImportToTimeline => self.import_to_timeline(window, cx),
             BarAction::Save => {
                 self.save_project(Some(window), cx, None);
             }

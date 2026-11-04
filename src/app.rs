@@ -96,6 +96,7 @@ mod constants;
 mod controls;
 mod convert;
 mod format;
+mod import;
 mod menu_bar;
 mod menus;
 mod metadata;
@@ -597,6 +598,8 @@ enum BarAction {
     NewProject,
     /// 打开 `.ngyproj`。
     OpenProject,
+    /// 选媒体文件插进时间线。
+    ImportToTimeline,
     /// 保存到当前路径；没存过时走「另存为」。
     Save,
     /// 换一个路径保存。
