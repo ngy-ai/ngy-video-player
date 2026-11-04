@@ -77,6 +77,9 @@ actions!(
         ToggleMarker,
         SetInPoint,
         SetOutPoint,
+        ZoomTimelineIn,
+        ZoomTimelineOut,
+        FitTimeline,
     ]
 );
 
@@ -755,6 +758,10 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         // 入出点同理：`i` 是统计、`o` 是打开文件，时间线的标注统一放在 Shift 组。
         KeyBinding::new("shift-i", SetInPoint, None),
         KeyBinding::new("shift-o", SetOutPoint, None),
+        // 时间线缩放：`-` / `=` 各一级，`0` 回到「整条序列可见」。
+        KeyBinding::new("-", ZoomTimelineOut, None),
+        KeyBinding::new("=", ZoomTimelineIn, None),
+        KeyBinding::new("0", FitTimeline, None),
         KeyBinding::new("n", NextFile, None),
         KeyBinding::new("p", PreviousFile, None),
         KeyBinding::new("[", SpeedDown, None),

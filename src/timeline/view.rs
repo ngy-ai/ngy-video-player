@@ -94,6 +94,12 @@ impl ViewState {
         self.clamp(duration);
     }
 
+    /// 直接跳到某个时间点；负数与超出范围都会被夹回。
+    pub fn scroll_to(&mut self, seconds: f64, duration: Tick) {
+        self.scroll = seconds;
+        self.clamp(duration);
+    }
+
     /// 以鼠标位置为锚点缩放：缩放前后，锚点下的时间点不动。
     pub fn zoom_around(&mut self, factor: f32, anchor_x: f32, max_zoom: f32, duration: Tick) {
         let anchor_time = self.time_at(anchor_x);
@@ -201,6 +207,20 @@ mod tests {
         view.set_zoom(0.1, 25.0, dur(10_000.0));
         view.scroll_by(1_000.0, dur(10_000.0));
         let expected = 10_000.0 - view.visible_seconds();
+        assert!((view.scroll() - expected).abs() < 1e-9, "停在序列尾部");
+    }
+
+    #[test]
+    fn 直接跳转滚动位置会被夹住() {
+        let mut view = ViewState::new();
+        // 8px/s：一屏 100 秒，序列 600 秒 → 最多滚到 500 秒。
+        view.set_width(800.0, dur(600.0));
+
+        view.scroll_to(-5.0, dur(600.0));
+        assert_eq!(view.scroll(), 0.0, "不能滚到开始之前");
+
+        view.scroll_to(10_000.0, dur(600.0));
+        let expected = 600.0 - view.visible_seconds();
         assert!((view.scroll() - expected).abs() < 1e-9, "停在序列尾部");
     }
 

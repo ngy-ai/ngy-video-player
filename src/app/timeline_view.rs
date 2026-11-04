@@ -149,6 +149,30 @@ impl PlayerApp {
             .zoom_around(factor, anchor_x.max(0.0), max_zoom, duration);
     }
 
+    /// 键盘缩放：锚点是播放头。比鼠标缩放粗一档，`-` / `=` 各按一次就是一级。
+    pub(super) fn zoom_timeline_step(&mut self, zoom_in: bool, cx: &mut Context<Self>) {
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
+        let anchor = self.timeline.x_of(project.ui.playhead.secs());
+        self.zoom_timeline(if zoom_in { 1.25 } else { 0.8 }, anchor);
+        cx.notify();
+    }
+
+    /// 缩放到整条序列刚好可见，右侧留 5% 余量。
+    pub(super) fn fit_timeline(&mut self, cx: &mut Context<Self>) {
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
+        let duration = project.sequence.duration();
+        let seconds = duration.secs().max(1.0) as f32;
+        let zoom = self.timeline.width() / seconds * 0.95;
+        let max_zoom = ViewState::max_zoom(project.sequence.fps);
+        self.timeline.set_zoom(zoom, max_zoom, duration);
+        self.timeline.scroll_to(0.0, duration);
+        cx.notify();
+    }
+
     // -- 渲染 --------------------------------------------------------------
 
     pub(super) fn render_timeline(

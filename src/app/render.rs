@@ -126,6 +126,21 @@ impl Render for PlayerApp {
                     this.set_out_point(cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &ZoomTimelineIn, _window, cx| {
+                if this.project.is_some() {
+                    this.zoom_timeline_step(true, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ZoomTimelineOut, _window, cx| {
+                if this.project.is_some() {
+                    this.zoom_timeline_step(false, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &FitTimeline, _window, cx| {
+                if this.project.is_some() {
+                    this.fit_timeline(cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &NextFile, _window, cx| this.next_file(cx)))
             .on_action(cx.listener(|this, _: &PreviousFile, _window, cx| this.previous_file(cx)))
             .on_action(cx.listener(|this, _: &SpeedUp, _window, cx| {
