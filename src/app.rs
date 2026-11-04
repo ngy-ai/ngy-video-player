@@ -606,6 +606,8 @@ struct MiniState {
     muted: bool,
     /// 播放列表是否为空——空的时候画面区提示「没有正在播放的文件」。
     empty: bool,
+    /// 当前播放页的条目数。小窗的上一集 / 下一集按钮据此决定是否可点。
+    items: usize,
 }
 
 impl MiniState {
@@ -614,6 +616,7 @@ impl MiniState {
     fn same_as(&self, other: &Self) -> bool {
         self.title == other.title
             && self.empty == other.empty
+            && self.items == other.items
             && self.playing == other.playing
             && self.muted == other.muted
             && (self.position - other.position).abs() < 0.005

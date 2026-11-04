@@ -170,8 +170,18 @@ impl MiniPlayer {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
+                    .gap(px(6.0))
                     .px(px(10.0))
+                    .child(icon_button_with_tip(
+                        "mini-prev",
+                        IconName::SkipBack,
+                        false,
+                        self.state.items <= 1,
+                        Some("上一集（P）"),
+                        cx.listener(|this, _: &ClickEvent, _window, cx| {
+                            this.forward(cx, |app, cx| app.previous_file(cx));
+                        }),
+                    ))
                     .child(icon_button_with_tip(
                         "mini-play",
                         if self.state.playing {
@@ -188,6 +198,16 @@ impl MiniPlayer {
                         }),
                         cx.listener(|this, _: &ClickEvent, _window, cx| {
                             this.forward(cx, |app, cx| app.toggle_play(cx));
+                        }),
+                    ))
+                    .child(icon_button_with_tip(
+                        "mini-next",
+                        IconName::SkipForward,
+                        false,
+                        self.state.items <= 1,
+                        Some("下一集（N）"),
+                        cx.listener(|this, _: &ClickEvent, _window, cx| {
+                            this.forward(cx, |app, cx| app.next_file(cx));
                         }),
                     ))
                     .child(

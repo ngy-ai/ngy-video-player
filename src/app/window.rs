@@ -312,6 +312,7 @@ impl PlayerApp {
             volume: self.snapshot.volume,
             muted: self.snapshot.muted,
             empty: self.playlist().is_empty(),
+            items: self.playlist().len(),
         }
     }
 

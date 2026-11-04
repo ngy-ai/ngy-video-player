@@ -188,7 +188,7 @@ impl PlayerApp {
                         IconName::SkipBack,
                         false,
                         self.playlist().len() <= 1,
-                        Some("上一集（N）"),
+                        Some("上一集（P）"),
                         cx.listener(|this, _: &ClickEvent, _window, cx| this.previous_file(cx)),
                     ))
                     .child(icon_button_with_tip(
@@ -212,7 +212,7 @@ impl PlayerApp {
                         IconName::SkipForward,
                         false,
                         self.playlist().len() <= 1,
-                        Some("下一集（P）"),
+                        Some("下一集（N）"),
                         cx.listener(|this, _: &ClickEvent, _window, cx| this.next_file(cx)),
                     ))
                     .child(div().w(px(6.0)))
