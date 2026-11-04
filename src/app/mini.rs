@@ -12,5 +12,8 @@ mod geometry;
 mod player;
 mod render;
 
+#[cfg(test)]
+mod tests;
+
 pub(super) use geometry::{mini_aspect, mini_width};
 pub(super) use player::MiniPlayer;
