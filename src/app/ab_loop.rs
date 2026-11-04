@@ -62,6 +62,11 @@ impl PlayerApp {
 
     /// 播放位置越过 B 点时跳回 A 点。由 `render` 每帧调用。
     pub(super) fn poll_ab_loop(&mut self, cx: &mut Context<Self>) {
+        // 工程模式下播放头归时间线管：A-B 回跳会把预览的素材拽回上一个位置，
+        // 两个循环互相拉扯。标记本身留着，关掉工程后照常生效。
+        if self.project.is_some() {
+            return;
+        }
         let (Some(path), Some(start), Some(end)) = (
             self.ab_loop.path.as_ref(),
             self.ab_loop.start,

@@ -35,6 +35,8 @@ impl PlayerApp {
 
     /// 退出工程模式。未保存改动由调用方先确认（见 `request_project_action`）。
     pub(super) fn close_project(&mut self, cx: &mut Context<Self>) {
+        // 预览播放属于工程：工程关掉了，时钟和 mpv 都不该继续跑。
+        self.stop_timeline_playback(cx);
         if self.project.take().is_some() {
             // 内容已经存过或被用户主动丢弃，`.autosave` 再留着只会下次白问一句。
             self.clear_autosave();
@@ -44,6 +46,7 @@ impl PlayerApp {
             self.timeline_dragging = false;
             self.timeline_menu = None;
             self.timeline_preview = None;
+            self.timeline_loaded_at = None;
             self.flash("已关闭工程");
         }
         self.poke();
@@ -52,6 +55,10 @@ impl PlayerApp {
 
     /// 新建一个空工程：默认 1080p30，自带一条视频轨与一条音频轨。
     pub(super) fn new_project(&mut self, cx: &mut Context<Self>) {
+        // 换工程 = 换播放源：上一个工程的预览时钟和已加载的素材都作废。
+        self.stop_timeline_playback(cx);
+        self.timeline_preview = None;
+        self.timeline_loaded_at = None;
         // 上一个工程已经被保存或丢弃，它的 `.autosave` 不该跟着新工程活下来。
         self.clear_autosave();
         let project = Project::new();
@@ -113,6 +120,10 @@ impl PlayerApp {
     ) {
         let restored = recovery.is_some();
         let source = recovery.unwrap_or_else(|| path.clone());
+        // 换工程 = 换播放源：上一个工程的预览时钟和已加载的素材都作废。
+        self.stop_timeline_playback(cx);
+        self.timeline_preview = None;
+        self.timeline_loaded_at = None;
         // 上一个工程的菜单指向的片段在这个工程里不存在。
         self.timeline_menu = None;
         match Project::open(&source) {
@@ -171,6 +182,9 @@ impl PlayerApp {
     ///
     /// 不调用播放器的 seek：工程模式下时间线是预览，拖动播放头只改工程里的位置。
     pub(super) fn seek_timeline_to(&mut self, x: Pixels, cx: &mut Context<Self>) {
+        // 拖播放头等于用户自己接管定位：正在放就停下，否则时钟会和手指抢播放头，
+        // 松手之后播放头还在往前跑。
+        self.stop_timeline_playback(cx);
         let Some(project) = self.project.as_ref() else {
             return;
         };

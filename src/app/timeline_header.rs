@@ -56,6 +56,25 @@ impl PlayerApp {
                     .gap(px(12.0))
                     .text_size(px(11.0))
                     .text_color(text_muted())
+                    // 控制条在工程模式下整条不画，播放键只能放在这里；不然空格是
+                    // 唯一入口，新用户会以为时间线只能拖着看。
+                    .child(ui::icon_toggle_small(
+                        "timeline-play",
+                        if self.timeline_playing {
+                            IconName::Pause
+                        } else {
+                            IconName::Play
+                        },
+                        self.timeline_playing,
+                        if self.timeline_playing {
+                            "暂停预览（空格）"
+                        } else {
+                            "播放预览（空格）"
+                        },
+                        cx.listener(|this, _: &ClickEvent, _window, cx| {
+                            this.toggle_play(cx);
+                        }),
+                    ))
                     .child(ui::icon_toggle_small(
                         "timeline-undo",
                         IconName::Undo,

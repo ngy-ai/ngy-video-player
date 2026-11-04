@@ -397,6 +397,14 @@ pub struct PlayerApp {
     timeline_menu: Option<TimelineMenu>,
     /// 工程模式预览正在放的那个素材文件。同一个文件只 seek，换文件才重新加载。
     timeline_preview: Option<PathBuf>,
+    /// 预览是不是在连续播放（播放头自己会走）。
+    timeline_playing: bool,
+    /// 上一次推进播放头的时刻。播放时钟按它与现在的差值算这一步走了多久。
+    timeline_last_tick: Instant,
+    /// 向 mpv 发过 `Load` / 纠正过 seek 的时刻。它之后的几百毫秒里位置不可信。
+    timeline_loaded_at: Option<Instant>,
+    /// 播放时钟的代数。每次开始播放加一，旧的那条循环看到代数变了就自己退出。
+    timeline_clock: u64,
     /// 正在跑的导出任务；`None` 表示空闲。
     export_task: Option<ExportTask>,
     /// 导出进度 0..=1，仅在 `export_task` 存在时有意义。

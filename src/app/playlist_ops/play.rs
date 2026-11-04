@@ -13,6 +13,12 @@ impl PlayerApp {
             cx.notify();
             return;
         }
+        // 工程模式下 mpv 放的是时间线的预览素材：素材放到尾不等于序列放完，
+        // 顺着播放列表接下一集会把时间线的画面顶掉。
+        if self.project.is_some() {
+            cx.notify();
+            return;
+        }
         // 自动续播跟着「正在播的那一页」走，不跟当前显示页：否则在列表 B 里
         // 翻看时，A 里的片子放完了会跳到 B 的队列里。
         let Some(tab) = self.playback_tab() else {
@@ -111,6 +117,10 @@ impl PlayerApp {
     }
 
     pub(in crate::app) fn next_file(&mut self, cx: &mut Context<Self>) {
+        // 工程模式的播放源是时间线，换片只会把预览素材顶掉（列表在工程模式下也不画）。
+        if self.project.is_some() {
+            return;
+        }
         let Some(tab) = self.playback_tab() else {
             return;
         };
@@ -127,6 +137,9 @@ impl PlayerApp {
     }
 
     pub(in crate::app) fn previous_file(&mut self, cx: &mut Context<Self>) {
+        if self.project.is_some() {
+            return;
+        }
         let Some(tab) = self.playback_tab() else {
             return;
         };
