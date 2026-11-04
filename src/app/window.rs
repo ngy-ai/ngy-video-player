@@ -335,11 +335,7 @@ impl PlayerApp {
     /// 小窗宽度。用户拖过就按拖过的来，但最多占屏幕宽的 40%——
     /// 换到更小的屏幕上时，别让「小窗」变成半个桌面。
     pub(super) fn mini_width(&self, screen: Bounds<Pixels>) -> f32 {
-        let limit = (f32::from(screen.size.width) * 0.4).max(MINI_MIN_WIDTH);
-        self.settings
-            .mini_width
-            .clamp(MINI_MIN_WIDTH, MINI_MAX_WIDTH)
-            .min(limit)
+        mini::mini_width(self.settings.mini_width, f32::from(screen.size.width))
     }
 
     /// 小窗的高宽比：跟着画面设置走，旋转 90/270 度时长宽互换。
@@ -349,12 +345,7 @@ impl PlayerApp {
             .video_aspect
             .ratio()
             .unwrap_or_else(|| self.snapshot.aspect());
-        let ratio = if self.settings.video_rotate.swaps_axes() {
-            ratio.recip()
-        } else {
-            ratio
-        };
-        ratio.clamp(0.4, 4.0)
+        mini::mini_aspect(ratio, self.settings.video_rotate.swaps_axes())
     }
 
     /// 新窗口该落在哪块屏幕上：跟着主窗口所在的那块，多屏时不会跑到别处。
