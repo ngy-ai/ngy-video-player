@@ -145,6 +145,14 @@ impl Render for PlayerApp {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &DeleteSelected, window, cx| {
+                // 工程模式与播放器模式抢同一个键：时间线里删片段，列表里删文件。
+                if this.project.is_some() {
+                    // 全屏时时间线整条让给画面，选中看不见，不能盲删。
+                    if !window.is_fullscreen() {
+                        this.delete_selected_clips(cx);
+                    }
+                    return;
+                }
                 // 面板关着的时候选择是看不见的，这时候删等于盲删，直接忽略。
                 // 全屏里面板同样不画（见本函数的渲染部分），一个道理。
                 if this.settings.show_playlist && !window.is_fullscreen() {

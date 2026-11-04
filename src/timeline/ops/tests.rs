@@ -53,6 +53,37 @@ fn starts(sequence: &Sequence, track: usize) -> Vec<Tick> {
 }
 
 #[test]
+fn 删除空列表返回空结果() {
+    let sequence = seq();
+    assert_eq!(
+        remove_clips(&sequence, &[]).unwrap(),
+        None,
+        "没选中不算错误"
+    );
+}
+
+#[test]
+fn 一次删除多个片段() {
+    let mut sequence = seq();
+    let track = sequence.tracks[0].id;
+    let first = push(&mut sequence, track, Tick::ZERO, s(2), s(0));
+    let second = push(&mut sequence, track, s(3), s(2), s(0));
+    let keep = push(&mut sequence, track, s(6), s(2), s(0));
+
+    let next = remove_clips(&sequence, &[first, second])
+        .unwrap()
+        .expect("有得删");
+    assert_eq!(next.tracks[0].clips.len(), 1);
+    assert_eq!(next.tracks[0].clips[0].id, keep);
+
+    // 再删一次同一批 id：片段已经不在，要报错而不是静默成功。
+    assert_eq!(
+        remove_clips(&next, &[first]).unwrap_err(),
+        EditError::UnknownClip(first)
+    );
+}
+
+#[test]
 fn 在播放头处切开所有跨过它的片段() {
     let mut sequence = seq();
     let video = sequence.tracks[0].id;

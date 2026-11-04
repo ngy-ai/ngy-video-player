@@ -128,6 +128,20 @@ pub fn apply(sequence: &Sequence, op: &EditOp) -> Result<Sequence, EditError> {
     Ok(next)
 }
 
+/// 删除若干片段。空列表返回 `None`：这不是错误，界面据此提示「没有选中片段」。
+pub fn remove_clips(sequence: &Sequence, clips: &[Id]) -> Result<Option<Sequence>, EditError> {
+    if clips.is_empty() {
+        return Ok(None);
+    }
+    apply(
+        sequence,
+        &EditOp::Remove {
+            clips: clips.to_vec(),
+        },
+    )
+    .map(Some)
+}
+
 /// 在序列时间 `at` 处切开所有未锁轨道上跨过这一点的片段。
 ///
 /// 返回切完的新序列与刀数。播放头停在空白处、或者正压在片段边界上时返回 `None`：

@@ -61,6 +61,7 @@ impl PlayerApp {
         let visible_end = view.scroll() + view.visible_seconds();
         let track_id = track.id;
         let mut lane = div()
+            .id(format!("timeline-lane-{}", track_id.raw()))
             .absolute()
             .left(px(TIMELINE_GUTTER))
             .right_0()
@@ -99,6 +100,10 @@ impl PlayerApp {
             ))
             .on_drop(cx.listener(move |this, drag: &TimelineDrag, _window, cx| {
                 this.drop_timeline_clip(drag.clip, cx);
+            }))
+            // 点轨道空白处取消选中；点片段时片段自己截断了事件。
+            .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                this.clear_selection(cx);
             }));
 
         for clip in &track.clips {
@@ -119,6 +124,7 @@ impl PlayerApp {
                 clip.name.clone()
             };
             let clip_id = clip.id;
+            let selected = project.ui.selected.contains(&clip_id);
             let ghost_name: SharedString = name.clone().into();
             let grab = Rc::new(Cell::new(0.0f32));
             let drag_grab = grab.clone();
@@ -133,6 +139,13 @@ impl PlayerApp {
                     .bottom(px(4.0))
                     .w(px(width))
                     .rounded(px(4.0))
+                    // 选中用白描边。透明边框也占位，选中与否不影响片段尺寸。
+                    .border_1()
+                    .border_color(if selected {
+                        gpui_kit::rgba(0xffffffff)
+                    } else {
+                        gpui_kit::rgba(0x00000000)
+                    })
                     .overflow_hidden()
                     .px(px(5.0))
                     .flex()
@@ -146,6 +159,11 @@ impl PlayerApp {
                             .whitespace_nowrap()
                             .child(name)
                     })
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                        // 片段叠在轨道上，不截断的话点片段也会被当成点空白。
+                        cx.stop_propagation();
+                        this.select_clip(clip_id, cx);
+                    }))
                     // 拖到别的同类型轨道；落回同一条轨道就是改起点。
                     .on_drag(
                         TimelineDrag {
@@ -364,6 +382,51 @@ impl PlayerApp {
             }
             Ok(None) => self.flash("播放头位置没有可切的片段"),
             Err(error) => self.flash(format!("切割失败：{error}")),
+        }
+        self.poke();
+        cx.notify();
+    }
+
+    /// 选中一个片段。目前是单选：时间线还没有需要多选才能做的事。
+    fn select_clip(&mut self, clip: Id, cx: &mut Context<Self>) {
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
+        project.ui.selected = vec![clip];
+        cx.notify();
+    }
+
+    /// 点空白处取消选中。
+    fn clear_selection(&mut self, cx: &mut Context<Self>) {
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
+        if project.ui.selected.is_empty() {
+            return;
+        }
+        project.ui.selected.clear();
+        cx.notify();
+    }
+
+    /// 删除选中的片段。校验（锁定轨道、片段还在不在）都交给 `timeline::remove_clips`。
+    pub(super) fn delete_selected_clips(&mut self, cx: &mut Context<Self>) {
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
+        let clips = project.ui.selected.clone();
+        let outcome = crate::timeline::remove_clips(&project.sequence, &clips);
+
+        match outcome {
+            Ok(Some(sequence)) => {
+                if let Some(project) = self.project.as_mut() {
+                    project.sequence = sequence;
+                    // 删掉的 id 不能留在选中集合里，否则下次操作会报「片段不存在」。
+                    project.ui.selected.clear();
+                }
+                self.flash(format!("已删除 {} 个片段", clips.len()));
+            }
+            Ok(None) => self.flash("没有选中片段"),
+            Err(error) => self.flash(format!("删除失败：{error}")),
         }
         self.poke();
         cx.notify();

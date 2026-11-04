@@ -21,7 +21,7 @@ pub use model::{
     AssetId, ClipItem, Id, Marker, ModelError, Sequence, Track, TrackKind, Transition,
     TransitionKind,
 };
-pub use ops::{ClipSpec, EditError, EditOp, apply, split_at};
+pub use ops::{ClipSpec, EditError, EditOp, apply, remove_clips, split_at};
 pub use project::{Asset, PROJECT_EXTENSION, PROJECT_VERSION, Project, ProjectError, UiState};
 pub use time::{MICROS_PER_SECOND, Rational, Tick};
 pub use undo::{HISTORY_LIMIT, UndoHistory};
