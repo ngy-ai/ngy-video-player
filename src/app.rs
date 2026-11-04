@@ -612,6 +612,10 @@ struct MiniState {
     loop_mode: LoopMode,
     /// 播放速度。`[` / `]` 调完之后小窗要浮一条当前倍速。
     speed: f64,
+    /// 当前有没有选中字幕轨。
+    subtitle: bool,
+    /// 文件里有没有字幕轨；没有时字幕按钮置灰。
+    has_subtitle: bool,
 }
 
 impl MiniState {
@@ -623,6 +627,8 @@ impl MiniState {
             && self.items == other.items
             && self.loop_mode == other.loop_mode
             && (self.speed - other.speed).abs() < 0.001
+            && self.subtitle == other.subtitle
+            && self.has_subtitle == other.has_subtitle
             && self.playing == other.playing
             && self.muted == other.muted
             && (self.position - other.position).abs() < 0.005

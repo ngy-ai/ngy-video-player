@@ -89,6 +89,8 @@ fn 小窗状态只在可见内容变化时重绘() {
         items: 3,
         loop_mode: LoopMode::Off,
         speed: 1.0,
+        subtitle: false,
+        has_subtitle: false,
     };
     assert!(base.same_as(&base.clone()));
 
@@ -121,4 +123,9 @@ fn 小窗状态只在可见内容变化时重绘() {
     assert!(faster.same_as(&base));
     faster.speed = 1.25;
     assert!(!faster.same_as(&base));
+
+    let mut captioned = base.clone();
+    captioned.has_subtitle = true;
+    captioned.subtitle = true;
+    assert!(!captioned.same_as(&base));
 }

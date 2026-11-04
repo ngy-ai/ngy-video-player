@@ -342,6 +342,8 @@ impl PlayerApp {
             items: self.playlist().len(),
             loop_mode: self.settings.loop_mode,
             speed: self.snapshot.speed,
+            subtitle: self.snapshot.selected_track(TrackKind::Subtitle).is_some(),
+            has_subtitle: !self.snapshot.track(TrackKind::Subtitle).is_empty(),
         }
     }
 

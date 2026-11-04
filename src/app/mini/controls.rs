@@ -210,6 +210,33 @@ impl MiniPlayer {
                             this.forward(cx, |app, cx| app.next_file(cx));
                         }),
                     ))
+                    .child(icon_button_with_tip(
+                        "mini-subtitle",
+                        IconName::Captions,
+                        self.state.subtitle,
+                        !self.state.has_subtitle,
+                        Some(if self.state.subtitle {
+                            "关闭字幕"
+                        } else {
+                            "字幕"
+                        }),
+                        cx.listener(|this, _: &ClickEvent, _window, cx| {
+                            this.forward(cx, |app, cx| {
+                                let kind = TrackKind::Subtitle;
+                                // 已经开着就关掉；没开就选第一条字幕轨。
+                                let id = if app.snapshot.selected_track(kind).is_some() {
+                                    -1
+                                } else {
+                                    match app.snapshot.track(kind).first() {
+                                        Some(track) => track.id,
+                                        None => return,
+                                    }
+                                };
+                                app.send(Command::SelectTrack { kind, id });
+                                cx.notify();
+                            });
+                        }),
+                    ))
                     .child(
                         div()
                             .text_size(px(11.0))
