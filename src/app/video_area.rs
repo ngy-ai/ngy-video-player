@@ -5,8 +5,14 @@ use super::*;
 /// 没有帧时是否该显示空状态提示。
 ///
 /// 纯音频正在播放时既不会有画面，也不该一直挂着「正在加载…」：视频区保持黑屏。
-fn show_placeholder(frame: &Option<Arc<RenderImage>>, snapshot: &Snapshot) -> bool {
-    frame.is_none() && !snapshot.playing_without_video()
+/// 工程模式同理：预览由时间线喂帧，空序列本来就该是黑屏，「拖入视频文件」
+/// 是播放器模式的引导，不该盖在预览区上。
+fn show_placeholder(
+    frame: &Option<Arc<RenderImage>>,
+    snapshot: &Snapshot,
+    in_project: bool,
+) -> bool {
+    !in_project && frame.is_none() && !snapshot.playing_without_video()
 }
 
 /// 这一帧是否属于当前文件、且当前文件确实该有画面。
@@ -35,6 +41,26 @@ impl PlayerApp {
         self.discard_frame();
         self.frame_epoch = FRAME_EPOCH_PENDING;
         self.loading_audio_only = formats::is_audio(path);
+    }
+
+    /// 停止播放并把画面清成黑屏（新建空工程时调用）。
+    ///
+    /// `Command::Stop` 要等引擎处理完才下发 `FrameCleared`，这期间 mpv 还在送旧帧；
+    /// 本地先把代次推到「等待新代次」并丢掉已显示 / 排队中的帧，旧画面才不会
+    /// 在这几十毫秒里又被贴回来。小窗共用同一路帧，也要同步清掉。
+    pub(super) fn stop_and_clear_frame(&mut self, cx: &mut Context<Self>) {
+        self.discard_frame();
+        self.frame_epoch = FRAME_EPOCH_PENDING;
+        self.loading_audio_only = false;
+        if let Some(mini) = &self.mini {
+            mini.update(cx, |mini, cx| {
+                mini.discard_frame();
+                cx.notify();
+            });
+        }
+        self.clear_preview();
+        self.send(Command::Stop);
+        cx.notify();
     }
 
     pub(super) fn swap_frame(&mut self) {
@@ -167,6 +193,8 @@ impl PlayerApp {
         bottom: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        // 工程模式的预览靠时间线喂帧，空序列保持黑屏，不套播放器模式的引导语。
+        let placeholder = show_placeholder(&self.frame, &self.snapshot, self.project.is_some());
         div()
             .id("video-area")
             .absolute()
@@ -181,7 +209,7 @@ impl PlayerApp {
             // 空状态只看「有没有帧」，不看 mpv 上报的宽高：width/height 属性在
             // 视频解码前是 0，用它会在一段正常播放的画面上盖一层「正在加载」。
             // 纯音频例外：它永远不会有帧，也不该一直挂着占位文字，黑屏即可。
-            .when(show_placeholder(&self.frame, &self.snapshot), |this| {
+            .when(placeholder, |this| {
                 this.child(
                     div()
                         .absolute()
@@ -527,6 +555,8 @@ mod tests {
         assert!(!frame_accepted(1, 1, true));
         assert!(!frame_accepted(0, 1, false));
         assert!(frame_accepted(1, 1, false));
+        // 停止播放、新建空工程时本地代次先推到 PENDING：通道里在途的旧帧一概不收。
+        assert!(!frame_accepted(1, FRAME_EPOCH_PENDING, false));
     }
 
     #[test]
@@ -534,16 +564,35 @@ mod tests {
         let frame: Option<Arc<RenderImage>> = None;
         let mut snapshot = Snapshot::default();
         // 刚启动、或者停止播放之后，仍要提示用户打开文件。
-        assert!(show_placeholder(&frame, &snapshot));
+        assert!(show_placeholder(&frame, &snapshot, false));
 
         // 换到纯音频：帧已清空，视频区应该是纯黑而不是「正在加载…」。
         snapshot.path = Some(std::path::PathBuf::from("lesson.mp3"));
         snapshot.idle = false;
-        assert!(!show_placeholder(&frame, &snapshot));
+        assert!(!show_placeholder(&frame, &snapshot, false));
 
         // 换成视频后，解码出第一帧之前照常显示加载提示。
         snapshot.video_width = 1920;
         snapshot.video_height = 1080;
-        assert!(show_placeholder(&frame, &snapshot));
+        assert!(show_placeholder(&frame, &snapshot, false));
+    }
+
+    #[test]
+    fn 工程模式没有帧时保持纯黑() {
+        let frame: Option<Arc<RenderImage>> = None;
+        let snapshot = Snapshot::default();
+        assert!(show_placeholder(&frame, &snapshot, false));
+        // 新建的空工程没有任何片段可预览：不显示「拖入视频文件」这类引导语。
+        assert!(!show_placeholder(&frame, &snapshot, true));
+
+        // 就算界面快照还留着上一部片子的状态，工程模式下也不该冒出占位。
+        let stale = Snapshot {
+            path: Some(std::path::PathBuf::from("B.mp4")),
+            idle: false,
+            video_width: 1920,
+            video_height: 1080,
+            ..Default::default()
+        };
+        assert!(!show_placeholder(&frame, &stale, true));
     }
 }

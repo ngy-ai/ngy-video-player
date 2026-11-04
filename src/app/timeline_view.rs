@@ -57,6 +57,9 @@ impl PlayerApp {
     pub(super) fn new_project(&mut self, cx: &mut Context<Self>) {
         // 换工程 = 换播放源：上一个工程的预览时钟和已加载的素材都作废。
         self.stop_timeline_playback(cx);
+        // 普通播放里的上一部片子不属于这个空工程：连画面带播放一起停掉，
+        // 否则它的画面会一直挂在预览区，还会随着 mpv 继续解码不停刷新。
+        self.stop_and_clear_frame(cx);
         self.timeline_preview = None;
         self.timeline_loaded_at = None;
         // 上一个工程已经被保存或丢弃，它的 `.autosave` 不该跟着新工程活下来。
