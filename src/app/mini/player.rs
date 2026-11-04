@@ -290,6 +290,21 @@ impl MiniPlayer {
     /// 与 `remember_width` 同理：回写推到 defer，避免 render 期间二次租借
     /// `PlayerApp`。第一帧只记基准——位置是 `open_mini` 按偏好摆好的，不必回写。
     pub(super) fn remember_position(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // 窗口可能被拖到另一块屏：比例要按它当前所在的那块算，否则会按旧屏的
+        // 尺寸夹取，下次打开会被拉回旧屏边缘。
+        let switched = match window.display(cx) {
+            Some(display) => {
+                let bounds = display.bounds();
+                let switched =
+                    bounds.origin != self.screen.origin || bounds.size != self.screen.size;
+                if switched {
+                    self.screen = bounds;
+                }
+                switched
+            }
+            None => false,
+        };
+
         let bounds = window.bounds();
         let ratio = (
             geometry::axis_ratio(
@@ -305,15 +320,14 @@ impl MiniPlayer {
                 f32::from(bounds.size.height),
             ),
         );
-        match self.last_pos {
-            None => {
-                self.last_pos = Some(ratio);
-                return;
-            }
-            Some(last) if (last.0 - ratio.0).abs() < 0.002 && (last.1 - ratio.1).abs() < 0.002 => {
-                return;
-            }
-            Some(_) => self.last_pos = Some(ratio),
+        let changed = match self.last_pos {
+            Some(last) => (last.0 - ratio.0).abs() >= 0.002 || (last.1 - ratio.1).abs() >= 0.002,
+            None => false,
+        };
+        self.last_pos = Some(ratio);
+        // 换屏时即使比例没变也要回写：同一个比例在新屏上对应的是另一个位置。
+        if !switched && !changed {
+            return;
         }
         let Some(app) = self.app.upgrade() else {
             return;
