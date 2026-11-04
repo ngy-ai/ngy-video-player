@@ -338,6 +338,7 @@ impl PlayerApp {
             (_, true) => "隐藏",
             (_, false) => "显示",
         };
+        self.remember_history();
         self.flash(format!("轨道「{name}」已{action}"));
         cx.notify();
     }
@@ -358,6 +359,7 @@ impl PlayerApp {
         let locked = track.locked;
         let name = track.name.clone();
 
+        self.remember_history();
         self.flash(format!(
             "轨道「{name}」已{}",
             if locked { "锁定" } else { "解锁" }
@@ -375,9 +377,7 @@ impl PlayerApp {
 
         match outcome {
             Ok(Some((sequence, cuts))) => {
-                if let Some(project) = self.project.as_mut() {
-                    project.sequence = sequence;
-                }
+                self.commit_edit(sequence);
                 self.flash(format!("已在播放头处切开 {cuts} 个片段"));
             }
             Ok(None) => self.flash("播放头位置没有可切的片段"),
@@ -418,8 +418,8 @@ impl PlayerApp {
 
         match outcome {
             Ok(Some(sequence)) => {
+                self.commit_edit(sequence);
                 if let Some(project) = self.project.as_mut() {
-                    project.sequence = sequence;
                     // 删掉的 id 不能留在选中集合里，否则下次操作会报「片段不存在」。
                     project.ui.selected.clear();
                 }
@@ -518,9 +518,7 @@ impl PlayerApp {
         };
         match outcome {
             Ok(sequence) => {
-                if let Some(project) = self.project.as_mut() {
-                    project.sequence = sequence;
-                }
+                self.commit_edit(sequence);
                 self.flash("已移动片段");
             }
             Err(error) => self.flash(format!("移动失败：{error}")),

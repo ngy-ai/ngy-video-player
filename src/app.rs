@@ -18,7 +18,7 @@ use crate::{
     },
     playlist::{self, DropSpot, Playlist, PlaylistSet},
     settings::{DecodeMode, OnTop, RenderMode, Rotation, Settings, VideoAspect, normalize_speed},
-    timeline::{Project, Tick, ViewState, visible_ticks},
+    timeline::{Project, Tick, UndoHistory, ViewState, visible_ticks},
     ui::{
         self, bg, format_time, icon, icon_button, icon_button_with_tip, pill_button_with_tip,
         surface, text, text_faint, text_muted,
@@ -81,6 +81,8 @@ actions!(
         ZoomTimelineIn,
         ZoomTimelineOut,
         FitTimeline,
+        UndoEdit,
+        RedoEdit,
     ]
 );
 
@@ -357,6 +359,8 @@ pub struct PlayerApp {
     ///
     /// 工程模式下布局切成「上方预览 + 下方时间线」，右侧面板与控制条都不画。
     project: Option<Project>,
+    /// 编辑撤销栈。只在工程模式下有，新建 / 打开工程时重置。
+    history: Option<UndoHistory>,
     /// 当前工程的落点；`None` 表示新建之后还没存过。
     project_path: Option<PathBuf>,
     /// 上一次保存 / 打开 / 新建时的内容快照，用来判断有没有未保存改动。
@@ -768,6 +772,25 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("-", ZoomTimelineOut, None),
         KeyBinding::new("=", ZoomTimelineIn, None),
         KeyBinding::new("0", FitTimeline, None),
+        // 撤销 / 重做：各平台都用习惯键位。
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "cmd-z"
+            } else {
+                "ctrl-z"
+            },
+            UndoEdit,
+            None,
+        ),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "cmd-shift-z"
+            } else {
+                "ctrl-shift-z"
+            },
+            RedoEdit,
+            None,
+        ),
         KeyBinding::new("n", NextFile, None),
         KeyBinding::new("p", PreviousFile, None),
         KeyBinding::new("[", SpeedDown, None),

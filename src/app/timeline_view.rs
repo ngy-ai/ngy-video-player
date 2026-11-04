@@ -8,6 +8,7 @@
 //! 画面区让出底部这一条（见 `render_video_area` 与 `controls_visible`）。
 
 use super::*;
+use crate::timeline::Id;
 
 impl PlayerApp {
     /// 时间线占多高。窗口高时按比例，窄窗口不低于 170，宽屏不超过 320。
@@ -37,6 +38,7 @@ impl PlayerApp {
         if self.project.take().is_some() {
             self.project_path = None;
             self.project_saved = None;
+            self.history = None;
             self.timeline_dragging = false;
             self.flash("已关闭工程");
         }
@@ -50,6 +52,7 @@ impl PlayerApp {
         // 空工程还没落盘，但也没丢任何东西：把当前状态当基准，关掉时不必再问。
         self.project_saved = Some(project.clone());
         self.project_path = None;
+        self.history = Some(UndoHistory::new(project.sequence.clone()));
         self.project = Some(project);
         self.timeline = ViewState::new();
         self.timeline_dragging = false;
@@ -107,6 +110,7 @@ impl PlayerApp {
                     .unwrap_or_else(|| "工程".to_string());
                 self.project_saved = Some(project.clone());
                 self.project_path = Some(path);
+                self.history = Some(UndoHistory::new(project.sequence.clone()));
                 self.project = Some(project);
                 self.flash(format!("已打开工程「{name}」"));
             }
@@ -147,6 +151,64 @@ impl PlayerApp {
         let duration = project.sequence.duration();
         self.timeline
             .zoom_around(factor, anchor_x.max(0.0), max_zoom, duration);
+    }
+
+    /// 把编辑结果写回工程并记入撤销历史。所有改序列的入口都走这里。
+    pub(super) fn commit_edit(&mut self, sequence: crate::timeline::Sequence) {
+        if let Some(project) = self.project.as_mut() {
+            project.sequence = sequence;
+        }
+        self.remember_history();
+    }
+
+    /// 把当前序列快照进撤销栈。轨道开关这类不经 `ops` 的改动，改完手动调一次。
+    pub(super) fn remember_history(&mut self) {
+        let Some(history) = self.history.as_mut() else {
+            return;
+        };
+        if let Some(project) = self.project.as_ref() {
+            history.push(project.sequence.clone());
+        }
+    }
+
+    /// 撤销一步。
+    pub(super) fn undo_edit(&mut self, cx: &mut Context<Self>) {
+        let previous = self
+            .history
+            .as_mut()
+            .and_then(|history| history.undo().cloned());
+        let Some(sequence) = previous else {
+            self.flash("没有可撤销的操作");
+            return;
+        };
+        self.apply_history(sequence);
+        self.flash("已撤销");
+        cx.notify();
+    }
+
+    /// 重做一步。
+    pub(super) fn redo_edit(&mut self, cx: &mut Context<Self>) {
+        let next = self
+            .history
+            .as_mut()
+            .and_then(|history| history.redo().cloned());
+        let Some(sequence) = next else {
+            self.flash("没有可重做的操作");
+            return;
+        };
+        self.apply_history(sequence);
+        self.flash("已重做");
+        cx.notify();
+    }
+
+    /// 撤销 / 重做共用：换回历史状态，并把指向已消失片段的选中项清掉。
+    fn apply_history(&mut self, sequence: crate::timeline::Sequence) {
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
+        project.sequence = sequence;
+        prune_selection(&mut project.ui.selected, &project.sequence);
+        self.poke();
     }
 
     /// 键盘缩放：锚点是播放头。比鼠标缩放粗一档，`-` / `=` 各按一次就是一级。
@@ -190,6 +252,9 @@ impl PlayerApp {
         let window_width = f32::from(window.viewport_size().width);
         let lane_width = (window_width - TIMELINE_GUTTER).max(1.0);
         let playhead = project.ui.playhead.secs();
+        // 能用才点亮：灰色按钮比点了没反应更容易看懂。
+        let can_undo = self.history.as_ref().is_some_and(UndoHistory::can_undo);
+        let can_redo = self.history.as_ref().is_some_and(UndoHistory::can_redo);
 
         let mut root = div()
             .id("timeline")
@@ -272,6 +337,32 @@ impl PlayerApp {
                         .text_size(px(11.0))
                         .text_color(text_muted())
                         // 切割只有快捷键的话很难被发现，标题条上给一颗明面上的按钮。
+                        .child(ui::icon_toggle_small(
+                            "timeline-undo",
+                            IconName::Undo,
+                            can_undo,
+                            if cfg!(target_os = "macos") {
+                                "撤销（⌘Z）"
+                            } else {
+                                "撤销（Ctrl+Z）"
+                            },
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.undo_edit(cx);
+                            }),
+                        ))
+                        .child(ui::icon_toggle_small(
+                            "timeline-redo",
+                            IconName::Redo,
+                            can_redo,
+                            if cfg!(target_os = "macos") {
+                                "重做（⇧⌘Z）"
+                            } else {
+                                "重做（Ctrl+Shift+Z）"
+                            },
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.redo_edit(cx);
+                            }),
+                        ))
                         .child(ui::icon_toggle_small(
                             "timeline-split",
                             IconName::Scissors,
@@ -481,5 +572,35 @@ impl PlayerApp {
         }
 
         root.into_any_element()
+    }
+}
+
+/// 撤销 / 重做之后，选中集合里指向已消失片段的 id 要清掉，
+/// 否则下一次删除会拿一个不存在的 id 去查表并报错。
+fn prune_selection(selected: &mut Vec<Id>, sequence: &crate::timeline::Sequence) {
+    selected.retain(|id| sequence.clip(*id).is_some());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::timeline::{AssetId, ClipItem, Rational, Sequence};
+
+    #[test]
+    fn 历史回退后清掉指向已删片段的选中() {
+        let mut sequence = Sequence::new("测试", Rational::FPS_25, 1920, 1080);
+        let track = sequence.tracks[0].id;
+        let id = sequence.alloc_id();
+        sequence.track_mut(track).unwrap().clips.push(ClipItem::new(
+            id,
+            AssetId::new(1),
+            Tick::ZERO,
+            Tick::from_secs(1.0),
+            Tick::ZERO,
+        ));
+
+        let mut selected = vec![id, Id::new(999)];
+        prune_selection(&mut selected, &sequence);
+        assert_eq!(selected, vec![id], "只留下还在序列里的");
     }
 }

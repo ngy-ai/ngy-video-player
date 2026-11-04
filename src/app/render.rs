@@ -141,6 +141,16 @@ impl Render for PlayerApp {
                     this.fit_timeline(cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &UndoEdit, _window, cx| {
+                if this.project.is_some() {
+                    this.undo_edit(cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &RedoEdit, _window, cx| {
+                if this.project.is_some() {
+                    this.redo_edit(cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &NextFile, _window, cx| this.next_file(cx)))
             .on_action(cx.listener(|this, _: &PreviousFile, _window, cx| this.previous_file(cx)))
             .on_action(cx.listener(|this, _: &SpeedUp, _window, cx| {
