@@ -93,6 +93,19 @@ impl Render for PlayerApp {
             .on_action(cx.listener(|this, _: &OpenFile, window, cx| {
                 this.pick_file(window, cx);
             }))
+            // 没有工程时按 Ctrl+S 不该弹任何东西：播放器里没有被「保存」的对象。
+            .on_action(cx.listener(|this, _: &SaveProject, window, cx| {
+                if this.project.is_some() {
+                    this.save_project(Some(window), cx, None);
+                }
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &SaveProjectAs, window, cx| {
+                if this.project.is_some() {
+                    this.save_project_as(Some(window), cx, None);
+                }
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &NextFile, _window, cx| this.next_file(cx)))
             .on_action(cx.listener(|this, _: &PreviousFile, _window, cx| this.previous_file(cx)))
             .on_action(cx.listener(|this, _: &SpeedUp, _window, cx| {

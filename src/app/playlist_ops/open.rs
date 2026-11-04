@@ -18,7 +18,8 @@ impl PlayerApp {
             .find(|path| !path.is_dir() && formats::is_project(path))
             .cloned()
         {
-            self.open_project_path(project, cx);
+            // 当前工程的未保存改动同样要拦一下——拖进来的工程会把它换掉。
+            self.request_project_action(AfterSaveConfirm::OpenProject(project), None, cx);
             return;
         }
         // 文件夹和文件走两条路：文件夹开成自己的一页列表，文件才并进默认页。

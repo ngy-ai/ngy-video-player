@@ -119,6 +119,24 @@ impl Project {
         &self.base_dir
     }
 
+    /// 两份工程的内容是否一致。
+    ///
+    /// 只比会落盘的部分，且不含界面状态：拖一下播放头、换个选中片段都不该算改动，
+    /// 否则标题栏的「未保存」标记会一直亮着。素材的 `resolved` / `missing` 由 `path`
+    /// 推出来，也不参与比较——保存之后它们会被重算成另一组值。
+    pub fn same_content(&self, other: &Self) -> bool {
+        self.version == other.version
+            && self.sequence == other.sequence
+            && self.next_asset_id == other.next_asset_id
+            && self.assets.len() == other.assets.len()
+            && self.assets.iter().zip(&other.assets).all(|(left, right)| {
+                left.id == right.id
+                    && left.path == right.path
+                    && left.media == right.media
+                    && left.stamp == right.stamp
+            })
+    }
+
     pub fn asset(&self, id: AssetId) -> Option<&Asset> {
         self.assets.iter().find(|asset| asset.id == id)
     }

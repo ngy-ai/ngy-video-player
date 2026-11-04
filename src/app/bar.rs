@@ -26,6 +26,27 @@ impl PlayerApp {
                 items.push(BarItem::Separator);
                 items.push(BarItem::Entry(BarEntry::new("新建工程", NewProject)));
                 items.push(BarItem::Entry(BarEntry::new("打开工程…", OpenProject)));
+                // 有未保存改动时，标题栏会挂一个 `*`；这里把保存入口放在最顺手的位置。
+                let save_hint = if cfg!(target_os = "macos") {
+                    "⌘S"
+                } else {
+                    "Ctrl+S"
+                };
+                let save_as_hint = if cfg!(target_os = "macos") {
+                    "⇧⌘S"
+                } else {
+                    "Ctrl+Shift+S"
+                };
+                items.push(BarItem::Entry(
+                    BarEntry::new("保存工程", Save)
+                        .hint(save_hint)
+                        .enabled(self.project.is_some()),
+                ));
+                items.push(BarItem::Entry(
+                    BarEntry::new("工程另存为…", SaveAs)
+                        .hint(save_as_hint)
+                        .enabled(self.project.is_some()),
+                ));
                 items.push(BarItem::Entry(
                     BarEntry::new("关闭工程", CloseProject).enabled(self.project.is_some()),
                 ));
@@ -317,9 +338,17 @@ impl PlayerApp {
             BarAction::Command(command) => self.send(command),
             BarAction::OpenFile => self.pick_file(window, cx),
             BarAction::OpenFolder => self.pick_folder(window, cx),
-            BarAction::NewProject => self.new_project(cx),
+            BarAction::NewProject => {
+                self.request_project_action(AfterSaveConfirm::NewProject, Some(window), cx)
+            }
             BarAction::OpenProject => self.pick_project(window, cx),
-            BarAction::CloseProject => self.close_project(cx),
+            BarAction::Save => {
+                self.save_project(Some(window), cx, None);
+            }
+            BarAction::SaveAs => self.save_project_as(Some(window), cx, None),
+            BarAction::CloseProject => {
+                self.request_project_action(AfterSaveConfirm::CloseProject, Some(window), cx)
+            }
             BarAction::LoadSubtitle => self.pick_subtitle(window, cx),
             BarAction::Previous => self.previous_file(cx),
             BarAction::Next => self.next_file(cx),
@@ -352,8 +381,13 @@ impl PlayerApp {
             BarAction::ToggleMaintainAssociations => self.toggle_maintain_associations(),
             // 版本、引擎状态、配置位置这些信息一条提示条装不下，直接开模态窗口。
             BarAction::About => self.open_settings(Some(SettingsTab::About)),
+            // 退出前要是不问一句，未保存的工程就跟着进程一起没了。
             BarAction::Quit => {
-                cx.quit();
+                if self.project.is_none() || !self.project_modified() {
+                    cx.quit();
+                    return;
+                }
+                self.request_project_action(AfterSaveConfirm::Quit, Some(window), cx);
                 return;
             }
         }

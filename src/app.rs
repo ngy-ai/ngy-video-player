@@ -71,6 +71,8 @@ actions!(
         SubtitleEarlier,
         SubtitleLater,
         ToggleStats,
+        SaveProject,
+        SaveProjectAs,
     ]
 );
 
@@ -96,6 +98,7 @@ mod playlist_menu;
 mod playlist_ops;
 mod playlist_sort;
 mod playlist_ui;
+mod project_file;
 mod proxy;
 mod remux;
 mod render;
@@ -343,6 +346,13 @@ pub struct PlayerApp {
     ///
     /// 工程模式下布局切成「上方预览 + 下方时间线」，右侧面板与控制条都不画。
     project: Option<Project>,
+    /// 当前工程的落点；`None` 表示新建之后还没存过。
+    project_path: Option<PathBuf>,
+    /// 上一次保存 / 打开 / 新建时的内容快照，用来判断有没有未保存改动。
+    ///
+    /// 不用 `dirty: bool`：编辑操作分散在后面的任务里，逐个记得置位迟早会漏；
+    /// 拿内容比对一次，不管从哪条路径改的都能反映出来。
+    project_saved: Option<Project>,
     /// 时间线的缩放与滚动。关掉工程也留着，下次打开还在原处。
     timeline: ViewState,
     /// 正在拖时间线的播放头。
@@ -547,6 +557,15 @@ impl EditTarget {
     }
 }
 
+/// 会丢掉当前工程的动作用它排队：有未保存改动时，先确认再执行。
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AfterSaveConfirm {
+    NewProject,
+    CloseProject,
+    OpenProject(PathBuf),
+    Quit,
+}
+
 /// 菜单动作必须是 `Clone`：点击回调是 `Fn`，可能被多次调用，不能把动作 move 走。
 #[derive(Clone)]
 enum BarAction {
@@ -557,6 +576,10 @@ enum BarAction {
     NewProject,
     /// 打开 `.ngyproj`。
     OpenProject,
+    /// 保存到当前路径；没存过时走「另存为」。
+    Save,
+    /// 换一个路径保存。
+    SaveAs,
     /// 退出工程模式，回到纯播放器。
     CloseProject,
     LoadSubtitle,
@@ -690,6 +713,25 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("a", OpenPictureSettings, None),
         KeyBinding::new("l", TogglePlaylist, None),
         KeyBinding::new("o", OpenFile, None),
+        // 保存沿用各平台的习惯键位；macOS 上 Ctrl 是系统修饰键，只能用 ⌘。
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "cmd-s"
+            } else {
+                "ctrl-s"
+            },
+            SaveProject,
+            None,
+        ),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "cmd-shift-s"
+            } else {
+                "ctrl-shift-s"
+            },
+            SaveProjectAs,
+            None,
+        ),
         KeyBinding::new("n", NextFile, None),
         KeyBinding::new("p", PreviousFile, None),
         KeyBinding::new("[", SpeedDown, None),

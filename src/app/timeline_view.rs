@@ -2,7 +2,7 @@
 //!
 //! 只负责「把 `Project` 画出来」与鼠标换算；缩放 / 滚动 / 坐标换算的数字在
 //! `crate::timeline::ViewState` 里，能用单测钉住。这里不做编辑（拖动片段、
-//! 切割都在后面的任务里），所以打开工程到 M2-T09 之前是只读的。
+//! 切割都在后面的任务里），视图仍然是只读的；写盘与未保存确认在 `project_file.rs`。
 //!
 //! 布局固定为「上方预览 + 下方时间线」：进入工程模式后右侧面板与控制条都不画，
 //! 画面区让出底部这一条（见 `render_video_area` 与 `controls_visible`）。
@@ -32,9 +32,11 @@ impl PlayerApp {
         self.timeline.set_width(width, duration);
     }
 
-    /// 退出工程模式。M2-T09 接上保存之后，这里要先确认未保存改动。
+    /// 退出工程模式。未保存改动由调用方先确认（见 `request_project_action`）。
     pub(super) fn close_project(&mut self, cx: &mut Context<Self>) {
         if self.project.take().is_some() {
+            self.project_path = None;
+            self.project_saved = None;
             self.timeline_dragging = false;
             self.flash("已关闭工程");
         }
@@ -44,7 +46,11 @@ impl PlayerApp {
 
     /// 新建一个空工程：默认 1080p30，自带一条视频轨与一条音频轨。
     pub(super) fn new_project(&mut self, cx: &mut Context<Self>) {
-        self.project = Some(Project::new());
+        let project = Project::new();
+        // 空工程还没落盘，但也没丢任何东西：把当前状态当基准，关掉时不必再问。
+        self.project_saved = Some(project.clone());
+        self.project_path = None;
+        self.project = Some(project);
         self.timeline = ViewState::new();
         self.timeline_dragging = false;
         self.flash("已新建工程");
@@ -77,7 +83,8 @@ impl PlayerApp {
                 this.dialog_open = false;
                 if let Some(path) = picked {
                     this.remember_dir(&path);
-                    this.open_project_path(path, cx);
+                    // 当前工程可能还有没保存的东西，先过一遍确认。
+                    this.request_project_action(AfterSaveConfirm::OpenProject(path), None, cx);
                 }
                 cx.notify();
             });
@@ -98,6 +105,8 @@ impl PlayerApp {
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "工程".to_string());
+                self.project_saved = Some(project.clone());
+                self.project_path = Some(path);
                 self.project = Some(project);
                 self.flash(format!("已打开工程「{name}」"));
             }
@@ -220,6 +229,10 @@ impl PlayerApp {
                         .text_size(px(13.0))
                         .text_color(text())
                         .child(sequence.name.clone())
+                        // 未保存标记：整个工程只有这一处提示，别让它太安静。
+                        .when(self.project_modified(), |this| {
+                            this.child(div().text_color(ui::accent()).child("*"))
+                        })
                         .child(
                             div()
                                 .text_size(px(11.0))

@@ -80,6 +80,8 @@ impl PlayerApp {
             preview_request: None,
             preview_retired: VecDeque::new(),
             project: None,
+            project_path: None,
+            project_saved: None,
             timeline: ViewState::new(),
             timeline_dragging: false,
             dialog_open: false,

@@ -82,6 +82,27 @@ fn 保存后能原样打开() {
 }
 
 #[test]
+fn 内容比对忽略播放头但认得序列改动() {
+    let dir = scratch("same-content");
+    let (project, _, _, _) = sample(&dir);
+    let mut other = project.clone();
+    assert!(project.same_content(&other), "刚克隆出来当然一样");
+
+    other.ui.playhead = Tick::from_secs(3.0);
+    other.ui.selected.clear();
+    assert!(project.same_content(&other), "拖播放头、改选中不算改动");
+
+    other.sequence.name = "改名了".to_string();
+    assert!(!project.same_content(&other), "序列名改了要算改动");
+
+    let mut third = project.clone();
+    third.assets[0].path = PathBuf::from("别处/a.mp4");
+    assert!(!project.same_content(&third), "素材路径改了要算改动");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn 素材路径相对工程文件优先() {
     let dir = scratch("relative");
     let path = dir.join("p.ngyproj");
@@ -173,6 +194,25 @@ fn 保存时留下上一版备份() {
 
     let temp = dir.join("p.ngyproj.tmp");
     assert!(!temp.exists(), "临时文件不能留在磁盘上");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn 连续保存两次内容不变() {
+    let dir = scratch("idempotent");
+    let path = dir.join("p.ngyproj");
+    let (mut project, _, _, _) = sample(&dir);
+    project.save(&path).expect("第一次保存");
+    let after_first = project.clone();
+    project.save(&path).expect("第二次保存");
+
+    // 保存会把素材路径重写成相对形式。第二次保存要是又改了内容，
+    // 界面上的「未保存」标记会在每次 Ctrl+S 之后立刻亮回来。
+    assert!(
+        after_first.same_content(&project),
+        "同一份工程再存一次不该变内容"
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }

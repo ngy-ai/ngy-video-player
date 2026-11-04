@@ -36,6 +36,7 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  picture、playlist_ops、video_area、timeline_view（工程模式时间线）、
                  controls、menus、bar、
                  menu_bar、associations、ab_loop（A-B 循环）、
+                 project_file（工程保存/另存为/未保存确认）、
                  metadata（章节/元数据编辑，模态）、playlist_ui、
                  playlist_menu（面板上的弹出菜单：添加/排序/全部列表）、
                  playlist_sort（排序 + 拖动重排）、
