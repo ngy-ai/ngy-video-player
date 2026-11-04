@@ -216,20 +216,28 @@ impl PlayerApp {
     }
 }
 
-/// 另存为对话框里的默认文件名：序列名去掉文件名非法字符，再加上扩展名。
-fn default_project_file_name(sequence_name: &str) -> String {
-    let cleaned: String = sequence_name
+/// 把名字里的文件名非法字符换掉，并清掉结尾的空格与点。
+///
+/// Windows 不允许文件名以空格或点结尾；工程文件与导出文件共用这一套清洗。
+pub(super) fn safe_file_stem(name: &str, fallback: &str) -> String {
+    let cleaned: String = name
         .chars()
         .map(|ch| if r#"\:*?"<>|/"#.contains(ch) { '_' } else { ch })
         .collect();
-    // Windows 不允许文件名以空格或点结尾，尾部一起清掉。
     let cleaned = cleaned.trim().trim_end_matches('.');
-    let base = if cleaned.is_empty() {
-        "工程"
+    if cleaned.is_empty() {
+        fallback.to_string()
     } else {
-        cleaned
-    };
-    format!("{base}.{PROJECT_EXTENSION}")
+        cleaned.to_string()
+    }
+}
+
+/// 另存为对话框里的默认文件名：序列名去掉文件名非法字符，再加上扩展名。
+fn default_project_file_name(sequence_name: &str) -> String {
+    format!(
+        "{}.{PROJECT_EXTENSION}",
+        safe_file_stem(sequence_name, "工程")
+    )
 }
 
 /// 用户在对话框里删掉了扩展名时补回去，别存出一个打不开的工程。
@@ -243,7 +251,7 @@ fn with_project_extension(path: PathBuf) -> PathBuf {
     PathBuf::from(name)
 }
 
-fn file_name(path: &Path) -> String {
+pub(super) fn file_name(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())

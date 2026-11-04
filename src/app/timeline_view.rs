@@ -285,6 +285,29 @@ impl PlayerApp {
                                 this.split_at_playhead(cx);
                             }),
                         ))
+                        .child(ui::icon_toggle_small(
+                            "timeline-export",
+                            IconName::FileDown,
+                            false,
+                            "导出为视频文件",
+                            cx.listener(|this, _: &ClickEvent, window, cx| {
+                                this.export_sequence(window, cx);
+                            }),
+                        ))
+                        // 导出跑起来之后原地显示进度与取消，不另开一个面板。
+                        .when_some(self.export_progress, |this, progress| {
+                            this.child(format!("导出 {:.0}%", progress * 100.0)).child(
+                                ui::icon_toggle_small(
+                                    "timeline-export-cancel",
+                                    IconName::X,
+                                    false,
+                                    "取消导出",
+                                    cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                        this.cancel_export(cx);
+                                    }),
+                                ),
+                            )
+                        })
                         .child(format_time(duration.secs()))
                         .child(format_time(playhead))
                         .child(format!("{:.1} 像素/秒", view.zoom())),

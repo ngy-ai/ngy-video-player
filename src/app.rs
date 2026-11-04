@@ -9,6 +9,7 @@
 //! `PlayerApp` 的多个 `impl` 块分散在各文件里，子模块统一 `use super::*;`
 //! 拿到父模块的导入、类型与 `actions!` 生成的动作。
 
+use crate::export::{ExportEvent, ExportTask};
 use crate::ui::IconName;
 use crate::{
     formats, platform,
@@ -105,6 +106,7 @@ mod playlist_menu;
 mod playlist_ops;
 mod playlist_sort;
 mod playlist_ui;
+mod project_export;
 mod project_file;
 mod proxy;
 mod remux;
@@ -368,6 +370,10 @@ pub struct PlayerApp {
     timeline_dragging: bool,
     /// 拖动片段时算出来的落点；`None` 表示没在拖。
     timeline_drop: Option<TimelineDrop>,
+    /// 正在跑的导出任务；`None` 表示空闲。
+    export_task: Option<ExportTask>,
+    /// 导出进度 0..=1，仅在 `export_task` 存在时有意义。
+    export_progress: Option<f32>,
 
     /// 原生文件选择框是否已经打开。
     ///

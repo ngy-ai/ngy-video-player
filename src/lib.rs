@@ -11,6 +11,7 @@ pub mod convert;
 mod embed;
 // 硬件编码器探测：裁切与格式转换共用，对外没有 API。
 mod encoder;
+pub mod export;
 pub mod formats;
 pub mod media;
 pub mod media_cache;

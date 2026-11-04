@@ -127,7 +127,10 @@ fn video_stream(
     let mut stream = Stream::new();
     let mut cursor = Tick::ZERO;
     let mut gap_index = 0;
-    let size = format!("{}x{}", sequence.width, sequence.height);
+    // `color` 的尺寸必须写成 `WxH`：滤镜参数用 `:` 分隔，`W:H` 会被当成两个参数。
+    // `scale` / `pad` 反过来只能用 `W:H`（它们是位置参数 w/h/x/y）。
+    let color_size = format!("{}x{}", sequence.width, sequence.height);
+    let dims = format!("{}:{}", sequence.width, sequence.height);
     let fps = format!("{}/{}", sequence.fps.num(), sequence.fps.den());
 
     for clip in &track.clips {
@@ -135,7 +138,7 @@ fn video_stream(
         if clip.start > cursor {
             let duration = (clip.start - cursor).secs();
             stream.push(
-                format!("color=c=black:s={size}:r={fps}:d={duration:.6}"),
+                format!("color=c=black:s={color_size}:r={fps}:d={duration:.6}"),
                 format!("[bgv{gap_index}]"),
             );
             gap_index += 1;
@@ -146,8 +149,8 @@ fn video_stream(
         stream.push(
             format!(
                 "[{index}:v]trim=start={:.6}:end={:.6},setpts=PTS-STARTPTS,\
-                 scale={size}:force_original_aspect_ratio=decrease,\
-                 pad={size}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}",
+                 scale={dims}:force_original_aspect_ratio=decrease,\
+                 pad={dims}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}",
                 clip.source_in.secs(),
                 clip.source_out.secs()
             ),
