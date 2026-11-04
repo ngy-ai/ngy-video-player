@@ -13,6 +13,7 @@ mod embed;
 mod encoder;
 pub mod formats;
 pub mod media;
+pub mod media_cache;
 pub mod metadata;
 pub mod multicam;
 pub mod platform;

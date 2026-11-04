@@ -321,6 +321,7 @@ CPU 相关，进度显示在面板里，可随时取消。
 | `NGY_MPV_VERBOSE=1` | 输出 libmpv 详细日志（排查解码问题） |
 | `NGY_VIDEO_LOG_DIR` | 自定义日志目录 |
 | `NGY_VIDEO_CONFIG_DIR` | 自定义配置目录 |
+| `NGY_VIDEO_CACHE_DIR` | 自定义时间线缩略图与波形缓存目录（删掉即清空缓存） |
 
 日志与配置位置：
 

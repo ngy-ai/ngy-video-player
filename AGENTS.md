@@ -60,6 +60,8 @@ src/encoder.rs   硬件编码器探测：NVENC / QSV / AMF / VideoToolbox
 src/proxy.rs     代理文件生成：低码率预览副本
 src/metadata.rs  章节与元数据编辑：ffmetadata、流复制任务
 src/media.rs     素材探测：`ffmpeg -i` 解析时长/帧率/分辨率/色彩/声道并登记进工程
+src/media_cache.rs  时间线媒体缓存入口：缓存根目录（`NGY_VIDEO_CACHE_DIR`）
+src/media_cache/    key（路径哈希 + 大小 + mtime）、lru、thumbnail（100 秒一块）、waveform（流式峰值）
 src/multicam.rs  双机位并排导出（sync 子模块：音频互相关自动对齐，依赖 rustfft）
 src/subtitle_codec.rs 字幕编码选择（轨道编辑与元数据编辑共用）
 src/convert.rs   格式转换：把当前文件或整个文件夹转成指定格式

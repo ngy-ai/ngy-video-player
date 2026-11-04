@@ -55,7 +55,8 @@ fn print_help() {
           NGY_FFMPEG         指定裁切片段用的 ffmpeg 可执行文件\n\
           NGY_MPV_VERBOSE=1  输出 libmpv 详细日志（排查解码问题）\n\
           NGY_VIDEO_LOG_DIR  自定义日志目录\n\
-          NGY_VIDEO_CONFIG_DIR 自定义配置目录",
+          NGY_VIDEO_CONFIG_DIR 自定义配置目录\n\
+          NGY_VIDEO_CACHE_DIR 自定义缩略图与波形缓存目录",
         env!("CARGO_PKG_VERSION")
     );
 }
