@@ -272,9 +272,24 @@ impl PlayerApp {
     /// 所以这里直接移除窗口，只把「等到下一轮」留给租借：当前 `PlayerApp`
     /// 还借着自己，`on_window_closed` 回调里的 `this.update` 会二次租借而 panic。
     pub(super) fn dismiss_mini(&mut self, cx: &mut Context<Self>) {
-        let Some(mini) = &self.mini else {
+        let Some(mini) = self.mini.clone() else {
             return;
         };
+        // 关闭前把最后量到的宽度与位置收进偏好：`mini_closed` 里不再回头读小窗，
+        // 那时它可能正被这次窗口更新租借着。
+        let (width, pos) = {
+            let mini = mini.read(cx);
+            (mini.last_width, mini.last_pos)
+        };
+        if width >= MINI_MIN_WIDTH && (width - self.settings.mini_width).abs() >= 1.0 {
+            self.settings.mini_width = width;
+        }
+        if let Some(pos) = pos {
+            let pos = [pos.0, pos.1];
+            if self.settings.mini_pos != Some(pos) {
+                self.settings.mini_pos = Some(pos);
+            }
+        }
         mini.update(cx, |mini, cx| {
             if mini.dismissed {
                 return;
@@ -294,23 +309,9 @@ impl PlayerApp {
 
     /// 小窗关掉之后的收尾。窗口已经销毁，这里清界面侧的引用，并把主窗口放回来。
     pub(super) fn mini_closed(&mut self, cx: &mut Context<Self>) {
-        // `remember_width` 的回写挂在窗口的 defer 上，窗口销毁时可能还没轮到它跑。
-        // 这里用小窗最后记下的宽度兜一次底：拖完宽度立刻按 Esc / T 收回时，
-        // 下面这次 `save` 才不会把旧宽度写进偏好。
-        if let Some(mini) = self.mini.as_ref() {
-            let mini = mini.read(cx);
-            let width = mini.last_width;
-            if width >= MINI_MIN_WIDTH && (width - self.settings.mini_width).abs() >= 1.0 {
-                self.settings.mini_width = width;
-            }
-            // 位置同理：`remember_position` 的回写也挂在 defer 上。
-            if let Some(pos) = mini.last_pos {
-                let pos = [pos.0, pos.1];
-                if self.settings.mini_pos != Some(pos) {
-                    self.settings.mini_pos = Some(pos);
-                }
-            }
-        }
+        // 宽度与位置在两条主动关闭路径（`dismiss_mini` / `restore_to_main`）里
+        // 已经先交给偏好；被系统关掉的窗口也有 `remember_*` 的 defer 写过。
+        // 这里不再回头读小窗：关闭是同步的，此刻它可能正被窗口更新租借着。
         self.mini = None;
         self.mini_window = None;
         // 小窗没了，主窗口的可见性重新回到「用户说了算」，下一次变可见照常处理。

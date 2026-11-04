@@ -237,9 +237,22 @@ impl MiniPlayer {
     /// 回到主窗口。先拉回主窗口再关自己：反过来的话中间那几帧屏幕上什么都没有。
     ///
     /// 悬浮条的还原按钮、T、Esc 与右键菜单都走这里，免得四份实现慢慢分叉。
+    ///
+    /// 宽度与位置在这里一并交给主窗口，而不是等 `mini_closed` 回头读小窗：
+    /// 关闭是同步的，回调里小窗可能正被这次窗口更新租借着，再 `read` 会 panic。
     pub(super) fn restore_to_main(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dismissed = true;
-        self.forward(cx, |app, cx| app.reactivate_main(cx));
+        let width = self.last_width;
+        let pos = self.last_pos.map(|(x, y)| [x, y]);
+        self.forward(cx, move |app, cx| {
+            if width >= MINI_MIN_WIDTH {
+                app.settings.mini_width = width;
+            }
+            if let Some(pos) = pos {
+                app.settings.mini_pos = Some(pos);
+            }
+            app.reactivate_main(cx);
+        });
         window.remove_window();
         cx.notify();
     }
