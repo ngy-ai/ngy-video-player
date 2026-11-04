@@ -126,9 +126,33 @@ pub fn supported_extension_count() -> usize {
 /// 和虚拟光驱，注册 `.srt` 更是毫无意义。清单格式要算进来：`.m3u` 自身不含媒体，
 /// 它的唯一用途就是交给播放器解释，让它跳到别的软件手里说不过去。
 pub fn associable_extensions() -> Vec<&'static str> {
-    let mut all: Vec<&'static str> = VIDEO.iter().chain(PLAYLIST).copied().collect();
+    // 工程文件也算：双击 `.ngyproj` 的期待是直接进工程模式，而不是「先开播放器再拖」。
+    let mut all: Vec<&'static str> = VIDEO
+        .iter()
+        .chain(PLAYLIST)
+        .chain(PROJECT)
+        .copied()
+        .collect();
     // 排序只为让注册表写入顺序稳定、便于比对；顺带把将来可能出现的重复项去掉。
     all.sort_unstable();
     all.dedup();
     all
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 工程文件也要能被系统关联() {
+        let all = associable_extensions();
+        assert!(all.contains(&"ngyproj"), "双击工程文件应该能打开本程序");
+        assert!(all.contains(&"mkv"), "媒体格式照旧");
+        assert!(!all.contains(&"jpg"), "图片不抢默认程序");
+        assert_eq!(count_of(&all, "mkv"), 1, "去重过了");
+    }
+
+    fn count_of(list: &[&str], item: &str) -> usize {
+        list.iter().filter(|entry| **entry == item).count()
+    }
 }

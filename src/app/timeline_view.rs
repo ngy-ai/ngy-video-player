@@ -145,6 +145,7 @@ impl PlayerApp {
                 } else {
                     Some(project.clone())
                 };
+                self.remember_project(&path);
                 self.project_path = Some(path);
                 self.history = Some(UndoHistory::new(project.sequence.clone()));
                 self.project = Some(project);

@@ -203,6 +203,7 @@ impl PlayerApp {
         match outcome {
             Ok(()) => {
                 self.project_path = Some(path.to_path_buf());
+                self.remember_project(path);
                 // `save` 会把素材路径改写成相对形式，基准必须在这之后取。
                 self.project_saved = self.project.clone();
                 // 刚写过盘，`.autosave` 就是旧的了：删掉并在下次编辑前不再写。
@@ -233,6 +234,13 @@ impl PlayerApp {
             project.ui.zoom = Some(zoom);
             project.ui.scroll = scroll;
         }
+    }
+
+    /// 记一笔「最近打开的工程」。
+    ///
+    /// 同一个路径只留一条并移到最前：反复打开同一个工程不该把整张表刷满。
+    pub(super) fn remember_project(&mut self, path: &Path) {
+        crate::settings::push_recent(&mut self.settings.recent_projects, path);
     }
 
     /// 离开当前工程时清掉它的 `.autosave`。

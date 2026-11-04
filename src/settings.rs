@@ -267,6 +267,20 @@ impl DecodeMode {
     }
 }
 
+/// 「最近打开的工程」最多记几条。菜单里只显示前 5 条，多留的作为缓冲：
+/// 连着开几个之后，旧的那个还不至于立刻被挤掉。
+pub const RECENT_PROJECTS_LIMIT: usize = 8;
+
+/// 把 `path` 放到最近列表最前面：去重、截断。
+///
+/// 抽成纯函数是因为「同一个工程开两次会不会占两条」这类问题只有单测盯得住，
+/// 而 `PlayerApp` 本身要 GPUI 才建得出来。
+pub fn push_recent(list: &mut Vec<PathBuf>, path: &std::path::Path) {
+    list.retain(|existing| existing.as_path() != path);
+    list.insert(0, path.to_path_buf());
+    list.truncate(RECENT_PROJECTS_LIMIT);
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -280,6 +294,11 @@ pub struct Settings {
     #[serde(default, alias = "always_on_top")]
     pub on_top: OnTop,
     pub last_dir: Option<PathBuf>,
+    /// 最近打开的工程，最新的排在最前面（最多 [`RECENT_PROJECTS_LIMIT`] 条）。
+    ///
+    /// 存绝对路径：工程挪了位置就找不到，那正是「最近」该失效的时候。
+    #[serde(default)]
+    pub recent_projects: Vec<PathBuf>,
     pub window_width: f32,
     pub window_height: f32,
     /// 播放列表面板的宽度。用户拖过一次之后按这个值还原。
@@ -337,6 +356,7 @@ impl Default for Settings {
             show_playlist: false,
             on_top: OnTop::Never,
             last_dir: None,
+            recent_projects: Vec::new(),
             window_width: 1120.0,
             window_height: 680.0,
             playlist_width: 300.0,
@@ -612,5 +632,41 @@ impl<'de> Deserialize<'de> for DecodeMode {
             // 认不出来就退回软解：它对任何片子都放得出画面。
             _ => DecodeMode::default(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 最近工程去重且最新在前() {
+        let mut list: Vec<PathBuf> = Vec::new();
+        push_recent(&mut list, std::path::Path::new("/a.ngyproj"));
+        push_recent(&mut list, std::path::Path::new("/b.ngyproj"));
+        push_recent(&mut list, std::path::Path::new("/a.ngyproj"));
+
+        assert_eq!(
+            list,
+            vec![PathBuf::from("/a.ngyproj"), PathBuf::from("/b.ngyproj")],
+            "再开一次已有的工程只把它提到最前，不添新条"
+        );
+    }
+
+    #[test]
+    fn 最近工程只留固定条数() {
+        let mut list: Vec<PathBuf> = Vec::new();
+        for index in 0..(RECENT_PROJECTS_LIMIT + 3) {
+            push_recent(
+                &mut list,
+                std::path::Path::new(&format!("/{index}.ngyproj")),
+            );
+        }
+        assert_eq!(list.len(), RECENT_PROJECTS_LIMIT);
+        assert_eq!(
+            list[0],
+            PathBuf::from(format!("/{}.ngyproj", RECENT_PROJECTS_LIMIT + 2)),
+            "最新的在最前"
+        );
     }
 }

@@ -15,6 +15,8 @@ pub(super) enum BarAction {
     NewProject,
     /// 打开 `.ngyproj`。
     OpenProject,
+    /// 直接打开最近用过的某个工程。
+    OpenRecentProject(PathBuf),
     /// 选媒体文件插进时间线。
     ImportToTimeline,
     /// 保存到当前路径；没存过时走「另存为」。

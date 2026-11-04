@@ -26,6 +26,21 @@ impl PlayerApp {
                 items.push(BarItem::Separator);
                 items.push(BarItem::Entry(BarEntry::new("新建工程", NewProject)));
                 items.push(BarItem::Entry(BarEntry::new("打开工程…", OpenProject)));
+                // 最近用过的工程：省掉一次文件对话框。菜单里只放前 5 条。
+                if !self.settings.recent_projects.is_empty() {
+                    items.push(BarItem::Separator);
+                    for path in self.settings.recent_projects.iter().take(5) {
+                        let name = path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| path.display().to_string());
+                        items.push(BarItem::Entry(BarEntry::new(
+                            format!("最近：{name}"),
+                            OpenRecentProject(path.clone()),
+                        )));
+                    }
+                    items.push(BarItem::Separator);
+                }
                 items.push(BarItem::Entry(
                     BarEntry::new("导入到时间线…", ImportToTimeline)
                         .enabled(self.project.is_some()),
@@ -346,6 +361,11 @@ impl PlayerApp {
                 self.request_project_action(AfterSaveConfirm::NewProject, Some(window), cx)
             }
             BarAction::OpenProject => self.pick_project(window, cx),
+            BarAction::OpenRecentProject(path) => {
+                self.remember_dir(&path);
+                // 走同一道未保存确认：直接换掉当前工程和拖入一个工程是一样的。
+                self.request_project_action(AfterSaveConfirm::OpenProject(path), Some(window), cx);
+            }
             BarAction::ImportToTimeline => self.import_to_timeline(window, cx),
             BarAction::Save => {
                 self.save_project(Some(window), cx, None);

@@ -55,13 +55,13 @@ fn 字幕与播放列表判定() {
 }
 
 #[test]
-fn 可关联格式只含视频与清单() {
+fn 可关联格式只含视频清单与工程() {
     let extensions = formats::associable_extensions();
 
-    // 视频 54 个 + 清单 6 个，两组互不重叠。
+    // 视频 54 个 + 清单 6 个 + 工程 1 个，三组互不重叠。
     assert_eq!(
         extensions.len(),
-        formats::VIDEO.len() + formats::PLAYLIST.len()
+        formats::VIDEO.len() + formats::PLAYLIST.len() + formats::PROJECT.len()
     );
 
     for extension in &extensions {
@@ -70,13 +70,19 @@ fn 可关联格式只含视频与清单() {
             "注册用的扩展名必须是裸的：{extension}"
         );
         assert!(
-            formats::VIDEO.contains(extension) || formats::PLAYLIST.contains(extension),
+            formats::VIDEO.contains(extension)
+                || formats::PLAYLIST.contains(extension)
+                || formats::PROJECT.contains(extension),
             "不该混进非视频格式：{extension}"
         );
     }
 
     assert!(extensions.contains(&"mp4"));
     assert!(extensions.contains(&"m3u"));
+    assert!(
+        extensions.contains(&"ngyproj"),
+        "双击工程文件要能打开本程序"
+    );
     // 抢图片查看器、虚拟光驱和字幕的默认地位不属于播放器的职责。
     assert!(!extensions.contains(&"jpg"));
     assert!(!extensions.contains(&"iso"));
