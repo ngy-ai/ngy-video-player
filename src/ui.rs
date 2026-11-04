@@ -132,6 +132,40 @@ pub fn icon_button(
     )
 }
 
+/// 小号图标开关：时间线的轨道行这类密集布局用，放不下 34 像素的常规按钮。
+///
+/// 语义与 [`icon_button`] 一致：`active` 画成强调色表示「这个开关开着」。
+pub fn icon_toggle_small(
+    id: impl Into<ElementId>,
+    icon_name: IconName,
+    active: bool,
+    tip: impl Into<SharedString>,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    let color = if active { accent() } else { text_faint() };
+    let tip = tip.into();
+
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(px(18.0))
+        .rounded(px(4.0))
+        .cursor(CursorStyle::PointingHand)
+        .hover(|style| style.bg(surface_hover()).rounded(px(4.0)))
+        .tooltip(tip_builder(tip))
+        .child(icon(icon_name, 12.0, color))
+        .on_click(
+            move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
+                // 时间线整块也接点击（拖动播放头），不截断会连带把播放头挪走。
+                cx.stop_propagation();
+                on_click(event, window, cx);
+            },
+        )
+        .into_any_element()
+}
+
 /// 带悬停文字说明的图标按钮。
 ///
 /// 控制条右侧是一排纯图标开关，光看图分不清「字幕」还是「音轨」，更认不出

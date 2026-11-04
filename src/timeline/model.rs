@@ -206,6 +206,13 @@ pub struct Track {
     pub name: String,
     pub clips: Vec<ClipItem>,
     pub transitions: Vec<Transition>,
+    /// 这一轨不参与预览与导出：视频 / 字幕轨隐藏，音频轨静音。
+    ///
+    /// 用一个字段而不是 `hidden` + `muted`：轨道的 `kind` 已经说明它是画面还是声音，
+    /// 两个字段只会让每个调用方多记一条「视频轨别看 muted」。
+    pub muted: bool,
+    /// 锁定：不影响输出，只拒绝一切编辑操作。
+    pub locked: bool,
 }
 
 impl Track {
@@ -216,6 +223,8 @@ impl Track {
             name: name.into(),
             clips: Vec::new(),
             transitions: Vec::new(),
+            muted: false,
+            locked: false,
         }
     }
 

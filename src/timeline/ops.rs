@@ -84,6 +84,8 @@ pub enum EditError {
     NotAdjacent,
     /// 切点不在片段内部。
     SplitOutside(Id),
+    /// 轨道被锁定，不接受编辑。
+    TrackLocked(Id),
 }
 
 impl fmt::Display for EditError {
@@ -97,6 +99,7 @@ impl fmt::Display for EditError {
             EditError::WrongTrackKind => write!(f, "片段不能放到不同类型的轨道上"),
             EditError::NotAdjacent => write!(f, "片段两侧没有紧挨着的邻居，无法滑动"),
             EditError::SplitOutside(id) => write!(f, "切点必须落在片段 {id} 内部"),
+            EditError::TrackLocked(id) => write!(f, "轨道 {id} 已锁定，先解锁再编辑"),
         }
     }
 }
@@ -126,8 +129,10 @@ pub fn apply(sequence: &Sequence, op: &EditOp) -> Result<Sequence, EditError> {
 }
 
 /// 找到片段所在的（轨道下标，片段下标）。
+///
+/// 锁定轨道的片段在这里就拒绝：所有按片段定位的操作都走这个入口，锁定一处生效一片。
 fn locate(sequence: &Sequence, clip: Id) -> Result<(usize, usize), EditError> {
-    sequence
+    let (track_index, clip_index) = sequence
         .tracks
         .iter()
         .enumerate()
@@ -136,7 +141,11 @@ fn locate(sequence: &Sequence, clip: Id) -> Result<(usize, usize), EditError> {
                 .clip_index(clip)
                 .map(|clip_index| (track_index, clip_index))
         })
-        .ok_or(EditError::UnknownClip(clip))
+        .ok_or(EditError::UnknownClip(clip))?;
+    if sequence.tracks[track_index].locked {
+        return Err(EditError::TrackLocked(sequence.tracks[track_index].id));
+    }
+    Ok((track_index, clip_index))
 }
 
 fn insert(
@@ -154,6 +163,9 @@ fn insert(
     let track_index = sequence
         .track_index(track_id)
         .ok_or(EditError::UnknownTrack(track_id))?;
+    if sequence.tracks[track_index].locked {
+        return Err(EditError::TrackLocked(track_id));
+    }
     let duration = spec.source_out - spec.source_in;
     if sequence.tracks[track_index]
         .overlap(at, at + duration, None)
@@ -187,6 +199,9 @@ fn move_clip(
 
     if sequence.tracks[target].kind != sequence.tracks[from_track].kind {
         return Err(EditError::WrongTrackKind);
+    }
+    if sequence.tracks[target].locked {
+        return Err(EditError::TrackLocked(to_track));
     }
 
     // 先摘下来再检查落点：片段自己不应该被算成「前面的障碍」。
@@ -414,9 +429,8 @@ fn roll(sequence: &mut Sequence, clip_id: Id, by: Tick) -> Result<(), EditError>
 fn checked_ids(sequence: &Sequence, clips: &[Id]) -> Result<HashSet<Id>, EditError> {
     let mut ids = HashSet::new();
     for id in clips {
-        if sequence.clip(*id).is_none() {
-            return Err(EditError::UnknownClip(*id));
-        }
+        // `locate` 负责「在不在」与「所在轨道锁没锁」两件事，不另写一套。
+        locate(sequence, *id)?;
         ids.insert(*id);
     }
     Ok(ids)

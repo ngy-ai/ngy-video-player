@@ -53,6 +53,52 @@ fn starts(sequence: &Sequence, track: usize) -> Vec<Tick> {
 }
 
 #[test]
+fn 锁定轨道拒绝编辑且原序列不动() {
+    let mut sequence = seq();
+    let track = sequence.tracks[0].id;
+    let clip = push(&mut sequence, track, Tick::ZERO, s(4), s(0));
+    sequence.track_mut(track).unwrap().locked = true;
+
+    assert_eq!(
+        insert(&sequence, track, s(5), s(1)).unwrap_err(),
+        EditError::TrackLocked(track),
+        "锁定轨道上不能插入"
+    );
+    assert_eq!(
+        apply(&sequence, &EditOp::TrimEnd { clip, to: s(3) }).unwrap_err(),
+        EditError::TrackLocked(track),
+        "锁定轨道上不能修剪"
+    );
+    assert_eq!(
+        apply(&sequence, &EditOp::Remove { clips: vec![clip] }).unwrap_err(),
+        EditError::TrackLocked(track),
+        "锁定轨道上不能删除"
+    );
+    assert_eq!(sequence.tracks[0].clips.len(), 1, "失败的操作不留痕迹");
+}
+
+#[test]
+fn 目标轨道锁定时拒绝换轨() {
+    let mut sequence = seq();
+    let video = sequence.tracks[0].id;
+    // 必须和源轨道同类型：类型不符会先被 `WrongTrackKind` 拦下，测不到锁定。
+    let second_video = sequence.add_track(TrackKind::Video);
+    let clip = push(&mut sequence, video, Tick::ZERO, s(2), s(0));
+    sequence.track_mut(second_video).unwrap().locked = true;
+
+    let error = apply(
+        &sequence,
+        &EditOp::Move {
+            clip,
+            to_track: second_video,
+            start: s(0),
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error, EditError::TrackLocked(second_video));
+}
+
+#[test]
 fn 插入按起点排序() {
     let sequence = seq();
     let track = sequence.tracks[0].id;

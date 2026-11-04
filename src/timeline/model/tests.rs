@@ -84,6 +84,27 @@ fn 序列往返保留轨道片段转场与标记() {
 }
 
 #[test]
+fn 轨道状态随序列往返且老工程默认正常() {
+    let mut sequence = sample();
+    sequence.tracks[0].muted = true;
+    sequence.tracks[1].locked = true;
+
+    let text = serde_json::to_string(&sequence).expect("序列化");
+    let back: Sequence = serde_json::from_str(&text).expect("反序列化");
+    assert!(back.tracks[0].muted, "静音状态要存下来");
+    assert!(back.tracks[1].locked, "锁定状态要存下来");
+    assert!(!back.tracks[0].locked);
+
+    // 老工程里没有这两个字段：读出来必须是「正常可编辑」，
+    // 不能因为 `bool` 的默认值变成「静音 + 锁定」。
+    let legacy =
+        r#"{"name":"旧工程","fps":"25/1","tracks":[{"id":1,"kind":"video","name":"视频"}]}"#;
+    let back: Sequence = serde_json::from_str(legacy).expect("老工程");
+    assert!(!back.tracks[0].muted);
+    assert!(!back.tracks[0].locked);
+}
+
+#[test]
 fn 一千个片段往返不丢数据() {
     let mut sequence = Sequence::new("长片", Rational::FPS_25, 1920, 1080);
     let video = sequence.tracks[0].id;
