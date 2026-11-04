@@ -99,6 +99,24 @@ impl Render for MiniPlayer {
                 this.child(self.render_bar(cx))
                     .child(self.render_controls(cx))
             })
+            // 菜单层画在最上面：一层透明遮罩负责「点空白关菜单」，菜单本体在遮罩之上。
+            .when(self.menu.is_some(), |this| {
+                let backdrop = div()
+                    .id("mini-menu-backdrop")
+                    .absolute()
+                    .inset_0()
+                    // 几乎透明的底色：没有它这块区域不参与命中，点击会漏到画面上。
+                    .bg(gpui_kit::rgba(0x00000001))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseDownEvent, _window, cx| {
+                            cx.stop_propagation();
+                            this.menu = None;
+                            cx.notify();
+                        }),
+                    );
+                this.child(backdrop).child(self.render_menu(window, cx))
+            })
             .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
                 this.set_hovered(*hovered, cx);
             }))
@@ -108,6 +126,15 @@ impl Render for MiniPlayer {
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, window, _cx| {
                     this.raise_to_top(window);
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                    // 右键弹菜单。坐标是窗口坐标，越界由 `render_menu` 收回去。
+                    cx.stop_propagation();
+                    this.menu = Some(event.position);
+                    cx.notify();
                 }),
             )
             .on_click(cx.listener(|this, event: &ClickEvent, _window, cx| {
@@ -180,17 +207,11 @@ impl Render for MiniPlayer {
             }))
             .on_action(cx.listener(|this, _: &ToggleMini, window, cx| {
                 // T 在小窗里的含义与主窗口一致——切换小窗模式，也就是还原。
-                this.dismissed = true;
-                this.forward(cx, |app, cx| app.reactivate_main(cx));
-                window.remove_window();
-                cx.notify();
+                this.restore_to_main(window, cx);
             }))
             .on_action(cx.listener(|this, _: &ExitOverlay, window, cx| {
                 // 小窗里没有别的浮层可关，Esc 就是退出小窗模式。
-                this.dismissed = true;
-                this.forward(cx, |app, cx| app.reactivate_main(cx));
-                window.remove_window();
-                cx.notify();
+                this.restore_to_main(window, cx);
             }))
             .into_any_element()
     }

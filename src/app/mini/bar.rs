@@ -75,11 +75,7 @@ impl MiniPlayer {
                 false,
                 Some("回到主窗口"),
                 cx.listener(|this, _: &ClickEvent, window, cx| {
-                    // 先把主窗口拉回来再关自己：反过来的话中间那几帧屏幕上什么都没有。
-                    this.dismissed = true;
-                    this.forward(cx, |app, cx| app.reactivate_main(cx));
-                    window.remove_window();
-                    cx.notify();
+                    this.restore_to_main(window, cx);
                 }),
             ))
             .child(icon_button_with_tip(

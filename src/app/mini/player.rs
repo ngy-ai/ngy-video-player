@@ -50,6 +50,8 @@ pub(in crate::app) struct MiniPlayer {
     pub(in crate::app) dismissed: bool,
     /// 主窗口已经被释放，跟着退出。
     pub(in crate::app) app_gone: bool,
+    /// 右键菜单的弹出位置（窗口坐标）；`None` 表示没开。
+    pub(in crate::app) menu: Option<Point<Pixels>>,
     /// 已经下发给窗口的标题。任务栏按钮显示的就是它，变了才重设。
     pub(in crate::app) window_title: String,
     /// 切集后临时显示的标题浮层；`true` 表示正在显示，2 秒后自动收回。
@@ -89,6 +91,7 @@ impl MiniPlayer {
             last_pos: None,
             dismissed: false,
             app_gone: false,
+            menu: None,
             window_title: String::new(),
             title_flash: false,
             title_flash_seq: 0,
@@ -229,6 +232,16 @@ impl MiniPlayer {
         if let Some(app) = self.app.upgrade() {
             app.update(cx, f);
         }
+    }
+
+    /// 回到主窗口。先拉回主窗口再关自己：反过来的话中间那几帧屏幕上什么都没有。
+    ///
+    /// 悬浮条的还原按钮、T、Esc 与右键菜单都走这里，免得四份实现慢慢分叉。
+    pub(super) fn restore_to_main(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.dismissed = true;
+        self.forward(cx, |app, cx| app.reactivate_main(cx));
+        window.remove_window();
+        cx.notify();
     }
 
     /// 尺寸变了就记进偏好，下次开小窗按用户拖过的宽度还原。

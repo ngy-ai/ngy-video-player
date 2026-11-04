@@ -9,6 +9,7 @@ use super::*;
 mod bar;
 mod controls;
 mod geometry;
+mod menu;
 mod player;
 mod render;
 
