@@ -194,9 +194,9 @@ impl MiniPlayer {
         if self.state.same_as(&state) {
             return;
         }
-        // 标题变了就是切了集。悬浮条在指针移开后 500ms 就收，用户看不到换了什么，
-        // 这里单独浮一条标题出来。
-        if self.state.title != state.title && !state.title.is_empty() {
+        // 标题变了就是切了集。悬浮条在指针移开后 500ms 就收，用户看不到换了什么。
+        // 不能判标题是否为空：`mini_state` 在空标题时填的是「小窗」，条件会恒真。
+        if !state.empty && self.state.title != state.title {
             self.flash_text(state.title.clone(), cx);
         }
         // 循环模式在右键菜单里切，小窗没有别的反馈，也浮一条模式名。
