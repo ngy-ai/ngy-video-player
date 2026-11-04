@@ -116,6 +116,16 @@ impl Render for PlayerApp {
                     this.toggle_marker_at_playhead(cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &SetInPoint, _window, cx| {
+                if this.project.is_some() {
+                    this.set_in_point(cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &SetOutPoint, _window, cx| {
+                if this.project.is_some() {
+                    this.set_out_point(cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &NextFile, _window, cx| this.next_file(cx)))
             .on_action(cx.listener(|this, _: &PreviousFile, _window, cx| this.previous_file(cx)))
             .on_action(cx.listener(|this, _: &SpeedUp, _window, cx| {

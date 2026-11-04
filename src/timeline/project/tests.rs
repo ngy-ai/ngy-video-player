@@ -82,6 +82,31 @@ fn 保存后能原样打开() {
 }
 
 #[test]
+fn 入出点成对才有效且顺序不对会清掉另一端() {
+    let mut ui = UiState::default();
+    assert_eq!(ui.range(), None);
+
+    ui.set_in(Tick::from_secs(1.0));
+    assert_eq!(ui.range(), None, "只有入点不算区间");
+    ui.set_out(Tick::from_secs(3.0));
+    assert_eq!(
+        ui.range(),
+        Some((Tick::from_secs(1.0), Tick::from_secs(3.0)))
+    );
+
+    // 同一时刻再按一次出点：清掉。
+    ui.set_out(Tick::from_secs(3.0));
+    assert_eq!(ui.out_point, None);
+    assert_eq!(ui.range(), None);
+
+    // 出点早于入点：保留出点，入点被清掉，不留反向区间。
+    ui.set_in(Tick::from_secs(4.0));
+    ui.set_out(Tick::from_secs(2.0));
+    assert_eq!(ui.in_point, None);
+    assert_eq!(ui.out_point, Some(Tick::from_secs(2.0)));
+}
+
+#[test]
 fn 内容比对忽略播放头但认得序列改动() {
     let dir = scratch("same-content");
     let (project, _, _, _) = sample(&dir);

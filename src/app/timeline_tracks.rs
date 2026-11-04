@@ -432,6 +432,44 @@ impl PlayerApp {
         cx.notify();
     }
 
+    /// 把播放头设成工作区入点。
+    pub(super) fn set_in_point(&mut self, cx: &mut Context<Self>) {
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
+        let at = project.ui.playhead;
+        project.ui.set_in(at);
+        let message = match project.ui.range() {
+            Some((start, end)) => format!(
+                "工作区 {} – {}",
+                format_time(start.secs()),
+                format_time(end.secs())
+            ),
+            None => "已设入点，等待出点".to_string(),
+        };
+        self.flash(message);
+        cx.notify();
+    }
+
+    /// 把播放头设成工作区出点。
+    pub(super) fn set_out_point(&mut self, cx: &mut Context<Self>) {
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
+        let at = project.ui.playhead;
+        project.ui.set_out(at);
+        let message = match project.ui.range() {
+            Some((start, end)) => format!(
+                "工作区 {} – {}",
+                format_time(start.secs()),
+                format_time(end.secs())
+            ),
+            None => "已设出点，等待入点".to_string(),
+        };
+        self.flash(message);
+        cx.notify();
+    }
+
     /// 在播放头处加一个标记；同一位置再按一次就删掉它。
     pub(super) fn toggle_marker_at_playhead(&mut self, cx: &mut Context<Self>) {
         let Some(project) = self.project.as_mut() else {

@@ -75,6 +75,8 @@ actions!(
         SaveProjectAs,
         SplitPlayhead,
         ToggleMarker,
+        SetInPoint,
+        SetOutPoint,
     ]
 );
 
@@ -750,6 +752,9 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         ),
         // `m` 已经是静音，标记只能用带 Shift 的那个。
         KeyBinding::new("shift-m", ToggleMarker, None),
+        // 入出点同理：`i` 是统计、`o` 是打开文件，时间线的标注统一放在 Shift 组。
+        KeyBinding::new("shift-i", SetInPoint, None),
+        KeyBinding::new("shift-o", SetOutPoint, None),
         KeyBinding::new("n", NextFile, None),
         KeyBinding::new("p", PreviousFile, None),
         KeyBinding::new("[", SpeedDown, None),

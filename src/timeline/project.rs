@@ -79,6 +79,49 @@ pub struct UiState {
     pub playhead: Tick,
     /// 选中的片段。加载时会剔除已经不存在的 id。
     pub selected: Vec<Id>,
+    /// 工作区入点。和出点成对出现才有效，见 [`UiState::range`]。
+    pub in_point: Option<Tick>,
+    /// 工作区出点。
+    pub out_point: Option<Tick>,
+}
+
+impl UiState {
+    /// 设入点。已经停在同一时刻就清掉——和标记一样的开关手感。
+    pub fn set_in(&mut self, at: Tick) {
+        self.in_point = if self.in_point == Some(at) {
+            None
+        } else {
+            Some(at)
+        };
+        // 出点必须晚于入点。留一个反向区间比清掉更让人困惑，所以直接舍掉另一端。
+        if let (Some(start), Some(end)) = (self.in_point, self.out_point)
+            && end <= start
+        {
+            self.out_point = None;
+        }
+    }
+
+    /// 设出点，规则与 [`UiState::set_in`] 对称。
+    pub fn set_out(&mut self, at: Tick) {
+        self.out_point = if self.out_point == Some(at) {
+            None
+        } else {
+            Some(at)
+        };
+        if let (Some(start), Some(end)) = (self.in_point, self.out_point)
+            && end <= start
+        {
+            self.in_point = None;
+        }
+    }
+
+    /// 完整的工作区间；缺一个点或顺序不对都不算。
+    pub fn range(&self) -> Option<(Tick, Tick)> {
+        match (self.in_point, self.out_point) {
+            (Some(start), Some(end)) if start < end => Some((start, end)),
+            _ => None,
+        }
+    }
 }
 
 /// 一个工程 = 一条序列 + 素材表 + 界面状态。

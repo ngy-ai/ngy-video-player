@@ -328,6 +328,24 @@ impl PlayerApp {
                 );
             }
         }
+        // 工作区：标尺下沿一条色带。标记竖线盖在它上面，两者互不遮挡。
+        if let Some((start, end)) = project.ui.range() {
+            let left = view.x_of(start.secs()).max(0.0);
+            let right = view.x_of(end.secs()).min(lane_width);
+            if right > left {
+                ruler = ruler.child(
+                    div()
+                        .absolute()
+                        .left(px(left))
+                        .top(px(18.0))
+                        .h(px(6.0))
+                        .w(px(right - left))
+                        .rounded(px(2.0))
+                        .bg(gpui_kit::rgba(0x5aa9e6aa)),
+                );
+            }
+        }
+
         // 标记：贯穿标尺的竖线加顶上一颗小方块。名字不上标尺——刻度文字已经够挤了。
         for marker in &sequence.markers {
             let x = view.x_of(marker.at.secs());
