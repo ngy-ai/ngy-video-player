@@ -68,6 +68,7 @@ impl PlayerApp {
             on_top_applied: false,
             focus,
             last_activity: Instant::now(),
+            started: Instant::now(),
             controls_forced: true,
             dragging: None,
             progress_bounds: Rc::new(Cell::new(Bounds::default())),
@@ -83,6 +84,7 @@ impl PlayerApp {
             history: None,
             project_path: None,
             project_saved: None,
+            autosave: AutoSave::new(),
             timeline: ViewState::new(),
             timeline_dragging: false,
             timeline_drop: None,
@@ -123,6 +125,7 @@ impl PlayerApp {
 
         app.consume_events(event_rx, cx);
         app.start_idle_watchdog(cx);
+        app.start_autosave_watch(cx);
         app.auto_maintain_associations();
 
         // 小窗模式的不变式：同一时刻只有主窗口或小窗之一可见。

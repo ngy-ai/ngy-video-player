@@ -372,6 +372,9 @@ impl Drop for PlayerApp {
         if let Some(engine) = &self.engine {
             engine.shutdown();
         }
+        // 正常退出不必留崩溃恢复：那份 `.autosave` 只会在下次打开时白问一句。
+        // 真正的崩溃走不到这里，那才是它该存在的时候。
+        self.clear_autosave();
         self.settings.save();
         // 列表本来就随改动落过盘，这里再存一次是兜住「拖入后一次都没点过」的情形。
         self.playlists.save();

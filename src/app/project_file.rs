@@ -1,5 +1,8 @@
 //! 工程文件的写盘那一半：保存、另存为、未保存确认。
 //!
+//! 自动保存（`.autosave`）的计时与崩溃恢复在 `app/project_autosave.rs`；这里只管
+//! 「用户按下保存」这条路径，并在存完之后顺手把那份自动保存删掉。
+//!
 //! 工程入口（新建 / 打开 / 关闭）在 `timeline_view.rs`，这里只补上写盘与拦截：
 //! 任何会丢掉当前工程的动作用 [`PlayerApp::request_project_action`] 走一遍，
 //! 有未保存改动就先让用户选「保存 / 不保存 / 取消」。
@@ -173,7 +176,7 @@ impl PlayerApp {
                 true
             }
             AfterSaveConfirm::OpenProject(path) => {
-                self.open_project_path(path, cx);
+                self.open_project_with_recovery(path, cx);
                 true
             }
             AfterSaveConfirm::Quit => {
@@ -192,15 +195,9 @@ impl PlayerApp {
 
     /// 落盘并刷新基准。返回是否成功。
     fn write_project(&mut self, path: &Path) -> bool {
-        // 视图状态跟着工程走：下次打开还停在最后一次看的位置。
-        let zoom = self.timeline.zoom();
-        let scroll = self.timeline.scroll();
+        self.stamp_view_state();
         let outcome = match self.project.as_mut() {
-            Some(project) => {
-                project.ui.zoom = Some(zoom);
-                project.ui.scroll = scroll;
-                project.save(path)
-            }
+            Some(project) => project.save(path),
             None => return false,
         };
         match outcome {
@@ -208,6 +205,9 @@ impl PlayerApp {
                 self.project_path = Some(path.to_path_buf());
                 // `save` 会把素材路径改写成相对形式，基准必须在这之后取。
                 self.project_saved = self.project.clone();
+                // 刚写过盘，`.autosave` 就是旧的了：删掉并在下次编辑前不再写。
+                self.autosave.mark_saved();
+                autosave::clear(path);
                 self.flash(format!("已保存工程「{}」", file_name(path)));
                 true
             }
@@ -220,6 +220,29 @@ impl PlayerApp {
                 false
             }
         }
+    }
+
+    /// 把当前的缩放与滚动写进工程。
+    ///
+    /// 正常保存和自动保存都要带上：从自动保存恢复之后，用户看到的还是崩溃前
+    /// 那个位置。视图状态不在 `same_content` 的比较范围里，写进去不会伪造「未保存」。
+    pub(super) fn stamp_view_state(&mut self) {
+        let zoom = self.timeline.zoom();
+        let scroll = self.timeline.scroll();
+        if let Some(project) = self.project.as_mut() {
+            project.ui.zoom = Some(zoom);
+            project.ui.scroll = scroll;
+        }
+    }
+
+    /// 离开当前工程时清掉它的 `.autosave`。
+    ///
+    /// 内容要么刚被保存、要么被用户主动丢弃，留着那份只会在下次打开时白问一句。
+    pub(super) fn clear_autosave(&mut self) {
+        if let Some(path) = &self.project_path {
+            autosave::clear(path);
+        }
+        self.autosave.mark_saved();
     }
 }
 

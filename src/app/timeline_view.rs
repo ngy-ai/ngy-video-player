@@ -36,6 +36,8 @@ impl PlayerApp {
     /// 退出工程模式。未保存改动由调用方先确认（见 `request_project_action`）。
     pub(super) fn close_project(&mut self, cx: &mut Context<Self>) {
         if self.project.take().is_some() {
+            // 内容已经存过或被用户主动丢弃，`.autosave` 再留着只会下次白问一句。
+            self.clear_autosave();
             self.project_path = None;
             self.project_saved = None;
             self.history = None;
@@ -48,6 +50,8 @@ impl PlayerApp {
 
     /// 新建一个空工程：默认 1080p30，自带一条视频轨与一条音频轨。
     pub(super) fn new_project(&mut self, cx: &mut Context<Self>) {
+        // 上一个工程已经被保存或丢弃，它的 `.autosave` 不该跟着新工程活下来。
+        self.clear_autosave();
         let project = Project::new();
         // 空工程还没落盘，但也没丢任何东西：把当前状态当基准，关掉时不必再问。
         self.project_saved = Some(project.clone());
@@ -95,9 +99,19 @@ impl PlayerApp {
         .detach();
     }
 
-    /// 打开一个 `.ngyproj`。拖入、命令行、菜单都走这里。
-    pub(super) fn open_project_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        match Project::open(&path) {
+    /// 真正读一份 `.ngyproj` 进内存。
+    ///
+    /// `recovery` 是用户同意恢复时读的那份自动保存。入口在
+    /// [`PlayerApp::open_project_with_recovery`]：那边先问一句，这里只管装载。
+    pub(super) fn load_project(
+        &mut self,
+        path: PathBuf,
+        recovery: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        let restored = recovery.is_some();
+        let source = recovery.unwrap_or_else(|| path.clone());
+        match Project::open(&source) {
             Ok(project) => {
                 let duration = project.sequence.duration();
                 let playhead = project.ui.playhead.secs();
@@ -119,11 +133,25 @@ impl PlayerApp {
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "工程".to_string());
-                self.project_saved = Some(project.clone());
+                // 从自动保存恢复的内容还没落进工程文件：基准取盘上那份，否则
+                // 「未保存」标记会消失，用户以为已经存过了。盘上那份读不出来时
+                // 基准留空，同样按「有未保存改动」对待。
+                self.project_saved = if restored {
+                    Project::open(&path).ok()
+                } else {
+                    Some(project.clone())
+                };
                 self.project_path = Some(path);
                 self.history = Some(UndoHistory::new(project.sequence.clone()));
                 self.project = Some(project);
-                self.flash(format!("已打开工程「{name}」"));
+                if restored {
+                    // 恢复出来的改动也怕再崩一次：重新排上自动保存。
+                    self.note_edit();
+                    self.flash("已从自动保存恢复，记得保存工程");
+                } else {
+                    self.autosave.mark_saved();
+                    self.flash(format!("已打开工程「{name}」"));
+                }
             }
             Err(error) => self.flash(format!("打开工程失败：{error}")),
         }
@@ -180,6 +208,8 @@ impl PlayerApp {
         if let Some(project) = self.project.as_ref() {
             history.push(project.sequence.clone());
         }
+        // 编辑路径最后都收敛到这里，自动保存的 30 秒计时也就挂在这一处。
+        self.note_edit();
     }
 
     /// 撤销一步。
@@ -219,6 +249,8 @@ impl PlayerApp {
         };
         project.sequence = sequence;
         prune_selection(&mut project.ui.selected, &project.sequence);
+        // 撤销 / 重做同样是「内容改了」，要重新计时。
+        self.note_edit();
         self.poke();
     }
 

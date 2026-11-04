@@ -79,6 +79,23 @@ fn 自动保存能被打开且不留备份() {
 }
 
 #[test]
+fn 自动保存带着视图状态和人一起回来() {
+    let dir = scratch("view");
+    let project_path = dir.join("p.ngyproj");
+    let mut project = Project::new();
+    project.ui.zoom = Some(12.5);
+    project.ui.scroll = 3.25;
+
+    let path = write(&project, &project_path).expect("写自动保存");
+    let back = Project::open(&path).expect("自动保存也是合法工程");
+    // 崩溃前看到哪儿，恢复到哪儿。
+    assert_eq!(back.ui.zoom, Some(12.5));
+    assert!((back.ui.scroll - 3.25).abs() < 1e-9);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn 更晚的自动保存才提示恢复() {
     let dir = scratch("pending");
     let project_path = dir.join("p.ngyproj");

@@ -18,7 +18,11 @@ use crate::{
     },
     playlist::{self, DropSpot, Playlist, PlaylistSet},
     settings::{DecodeMode, OnTop, RenderMode, Rotation, Settings, VideoAspect, normalize_speed},
-    timeline::{Project, Tick, UndoHistory, ViewState, visible_ticks},
+    timeline::{
+        Project, Tick, UndoHistory, ViewState,
+        autosave::{self, AutoSave},
+        visible_ticks,
+    },
     ui::{
         self, bg, format_time, icon, icon_button, icon_button_with_tip, pill_button_with_tip,
         surface, text, text_faint, text_muted,
@@ -109,6 +113,7 @@ mod playlist_menu;
 mod playlist_ops;
 mod playlist_sort;
 mod playlist_ui;
+mod project_autosave;
 mod project_export;
 mod project_file;
 mod proxy;
@@ -334,6 +339,8 @@ pub struct PlayerApp {
 
     /// 鼠标最后一次活动的时间，用来决定控制条什么时候淡出。
     last_activity: Instant,
+    /// 程序启动时刻。自动保存的计时接口收的是「启动以来的时长」，单测里能直接快进。
+    started: Instant,
     controls_forced: bool,
     /// 进度条拖动中的临时位置（秒）；`None` 表示没在拖。
     dragging: Option<f64>,
@@ -369,6 +376,8 @@ pub struct PlayerApp {
     /// 不用 `dirty: bool`：编辑操作分散在后面的任务里，逐个记得置位迟早会漏；
     /// 拿内容比对一次，不管从哪条路径改的都能反映出来。
     project_saved: Option<Project>,
+    /// 自动保存的计时器：编辑后 30 秒没有新操作就落一份 `.autosave`。
+    autosave: AutoSave,
     /// 时间线的缩放与滚动。关掉工程也留着，下次打开还在原处。
     timeline: ViewState,
     /// 正在拖时间线的播放头。
