@@ -153,6 +153,46 @@ fn 一千个片段往返不丢数据() {
 }
 
 #[test]
+fn 万级片段只取视口里那几段() {
+    let mut sequence = Sequence::new("长片", Rational::FPS_25, 1920, 1080);
+    let video = sequence.tracks[0].id;
+    // 每条 1 秒、首尾相接：第 i 条占 [i, i+1)。
+    for index in 0..10_000i64 {
+        let id = sequence.alloc_id();
+        sequence.track_mut(video).unwrap().clips.push(ClipItem::new(
+            id,
+            AssetId::new(1),
+            Tick::ZERO,
+            Tick::from_secs(1.0),
+            Tick::from_micros(index * 1_000_000),
+        ));
+    }
+
+    let track = &sequence.tracks[0];
+    let window: Vec<_> = track
+        .visible_clips(Tick::from_secs(5000.5), Tick::from_secs(5002.5))
+        .map(|clip| clip.start)
+        .collect();
+    assert_eq!(
+        window,
+        vec![
+            Tick::from_secs(5000.0),
+            Tick::from_secs(5001.0),
+            Tick::from_secs(5002.0)
+        ],
+        "跨进视口的那段也算，正好在右边界的不算"
+    );
+
+    // 边界：视口落在最后一条之后，什么都不给。
+    assert_eq!(
+        track
+            .visible_clips(Tick::from_secs(20_000.0), Tick::from_secs(20_010.0))
+            .count(),
+        0
+    );
+}
+
+#[test]
 fn 片段在素材时间与序列时间之间换算() {
     let clip = ClipItem::new(
         Id::new(1),

@@ -263,6 +263,17 @@ impl Track {
         self.clips.sort_by_key(|clip| (clip.start, clip.id));
     }
 
+    /// 与 `[from, to)` 有交集的片段。
+    ///
+    /// `clips` 按起点有序是模型的不变量（`sort_clips`），所以先用二分跳过整段都在
+    /// 视口左边的那一截：万级片段的工程每帧都从头线性扫一遍，滚动就会掉帧。
+    pub fn visible_clips(&self, from: Tick, to: Tick) -> impl Iterator<Item = &ClipItem> {
+        let first = self.clips.partition_point(|clip| clip.end() <= from);
+        self.clips[first..]
+            .iter()
+            .take_while(move |clip| clip.start < to)
+    }
+
     pub fn sort_transitions(&mut self) {
         self.transitions.sort_by_key(|transition| transition.id);
     }

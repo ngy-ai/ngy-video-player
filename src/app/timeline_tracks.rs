@@ -106,12 +106,12 @@ impl PlayerApp {
                 this.clear_selection(cx);
             }));
 
-        for clip in &track.clips {
+        // 只取视口里的片段：万级片段的工程每帧从头扫一遍，滚动就会掉帧。
+        for clip in
+            track.visible_clips(Tick::from_secs(view.scroll()), Tick::from_secs(visible_end))
+        {
             let start = clip.start.secs();
             let end = clip.end().secs();
-            if end <= view.scroll() || start >= visible_end {
-                continue;
-            }
             let left = view.x_of(start).max(0.0);
             let right = view.x_of(end).min(lane_width);
             let width = (right - left).max(2.0);
