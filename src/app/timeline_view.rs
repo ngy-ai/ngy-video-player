@@ -102,7 +102,18 @@ impl PlayerApp {
                 let duration = project.sequence.duration();
                 let playhead = project.ui.playhead.secs();
                 self.timeline = ViewState::new();
-                self.timeline.center_on(playhead, duration);
+                match project.ui.zoom {
+                    // 老工程没存过视图状态，按播放头居中打开。
+                    Some(zoom) => {
+                        self.timeline.set_zoom(
+                            zoom,
+                            ViewState::max_zoom(project.sequence.fps),
+                            duration,
+                        );
+                        self.timeline.scroll_to(project.ui.scroll, duration);
+                    }
+                    None => self.timeline.center_on(playhead, duration),
+                }
                 self.timeline_dragging = false;
                 let name = path
                     .file_name()

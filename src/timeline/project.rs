@@ -83,6 +83,10 @@ pub struct UiState {
     pub in_point: Option<Tick>,
     /// 工作区出点。
     pub out_point: Option<Tick>,
+    /// 时间线缩放（像素/秒）。`None` 表示老工程没存过，按播放头居中打开。
+    pub zoom: Option<f32>,
+    /// 时间线左边界对应的时间（秒）。
+    pub scroll: f64,
 }
 
 impl UiState {

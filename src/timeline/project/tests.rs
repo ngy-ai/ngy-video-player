@@ -107,6 +107,25 @@ fn 入出点成对才有效且顺序不对会清掉另一端() {
 }
 
 #[test]
+fn 视图缩放随工程往返且老工程用默认() {
+    let ui = UiState {
+        zoom: Some(12.5),
+        scroll: 3.25,
+        ..UiState::default()
+    };
+
+    let text = serde_json::to_string(&ui).expect("序列化");
+    let back: UiState = serde_json::from_str(&text).expect("反序列化");
+    assert_eq!(back.zoom, Some(12.5));
+    assert!((back.scroll - 3.25).abs() < 1e-9);
+
+    // 老工程里没有这两个字段：读出来要能落到「按播放头居中」的分支。
+    let legacy: UiState = serde_json::from_str("{}").expect("老工程");
+    assert_eq!(legacy.zoom, None);
+    assert_eq!(legacy.scroll, 0.0);
+}
+
+#[test]
 fn 内容比对忽略播放头但认得序列改动() {
     let dir = scratch("same-content");
     let (project, _, _, _) = sample(&dir);

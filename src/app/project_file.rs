@@ -192,8 +192,15 @@ impl PlayerApp {
 
     /// 落盘并刷新基准。返回是否成功。
     fn write_project(&mut self, path: &Path) -> bool {
+        // 视图状态跟着工程走：下次打开还停在最后一次看的位置。
+        let zoom = self.timeline.zoom();
+        let scroll = self.timeline.scroll();
         let outcome = match self.project.as_mut() {
-            Some(project) => project.save(path),
+            Some(project) => {
+                project.ui.zoom = Some(zoom);
+                project.ui.scroll = scroll;
+                project.save(path)
+            }
             None => return false,
         };
         match outcome {
