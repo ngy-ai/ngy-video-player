@@ -128,6 +128,31 @@ pub fn apply(sequence: &Sequence, op: &EditOp) -> Result<Sequence, EditError> {
     Ok(next)
 }
 
+/// 在序列时间 `at` 处切开所有未锁轨道上跨过这一点的片段。
+///
+/// 返回切完的新序列与刀数。播放头停在空白处、或者正压在片段边界上时返回 `None`：
+/// 这不是错误，界面据此提示「这里没有可切的内容」，而不是弹一条错误。
+pub fn split_at(sequence: &Sequence, at: Tick) -> Result<Option<(Sequence, usize)>, EditError> {
+    let targets: Vec<Id> = sequence
+        .tracks
+        .iter()
+        // 锁定的轨道整条跳过：用户锁它就是不想让它被动。
+        .filter(|track| !track.locked)
+        .flat_map(|track| track.clips.iter())
+        .filter(|clip| clip.start < at && at < clip.end())
+        .map(|clip| clip.id)
+        .collect();
+    if targets.is_empty() {
+        return Ok(None);
+    }
+
+    let mut next = sequence.clone();
+    for clip in &targets {
+        next = apply(&next, &EditOp::Split { clip: *clip, at })?;
+    }
+    Ok(Some((next, targets.len())))
+}
+
 /// 找到片段所在的（轨道下标，片段下标）。
 ///
 /// 锁定轨道的片段在这里就拒绝：所有按片段定位的操作都走这个入口，锁定一处生效一片。

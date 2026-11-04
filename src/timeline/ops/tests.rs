@@ -53,6 +53,54 @@ fn starts(sequence: &Sequence, track: usize) -> Vec<Tick> {
 }
 
 #[test]
+fn 在播放头处切开所有跨过它的片段() {
+    let mut sequence = seq();
+    let video = sequence.tracks[0].id;
+    let audio = sequence.tracks[1].id;
+    push(&mut sequence, video, Tick::ZERO, s(4), s(0));
+    push(&mut sequence, audio, Tick::ZERO, s(4), s(0));
+
+    let (next, cuts) = split_at(&sequence, s(2))
+        .unwrap()
+        .expect("两条轨道各切一刀");
+    assert_eq!(cuts, 2);
+    assert_eq!(next.tracks[0].clips.len(), 2);
+    assert_eq!(next.tracks[1].clips.len(), 2);
+
+    // 左半段出点就是右半段入点，时间严丝合缝。
+    let left = &next.tracks[0].clips[0];
+    let right = &next.tracks[0].clips[1];
+    assert_eq!(left.end(), right.start);
+    assert_eq!(left.source_out, right.source_in);
+    next.validate().expect("切完仍然合法");
+
+    assert_eq!(
+        split_at(&next, s(2)).unwrap(),
+        None,
+        "同一点再切一次已经没有内容"
+    );
+}
+
+#[test]
+fn 切割跳过锁定轨道与片段边界() {
+    let mut sequence = seq();
+    let video = sequence.tracks[0].id;
+    let audio = sequence.tracks[1].id;
+    push(&mut sequence, video, Tick::ZERO, s(4), s(0));
+    push(&mut sequence, audio, Tick::ZERO, s(4), s(0));
+    sequence.track_mut(video).unwrap().locked = true;
+
+    let (next, cuts) = split_at(&sequence, s(2)).unwrap().expect("音频轨还能切");
+    assert_eq!(cuts, 1);
+    assert_eq!(next.tracks[0].clips.len(), 1, "锁定轨道不动");
+    assert_eq!(next.tracks[1].clips.len(), 2);
+
+    // 正压在边界上不算「跨过」：切下去只会得到一个 0 长的片段。
+    assert_eq!(split_at(&sequence, s(4)).unwrap(), None);
+    assert_eq!(split_at(&sequence, Tick::ZERO).unwrap(), None);
+}
+
+#[test]
 fn 锁定轨道拒绝编辑且原序列不动() {
     let mut sequence = seq();
     let track = sequence.tracks[0].id;

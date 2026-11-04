@@ -73,6 +73,7 @@ actions!(
         ToggleStats,
         SaveProject,
         SaveProjectAs,
+        SplitPlayhead,
     ]
 );
 
@@ -734,6 +735,16 @@ pub fn key_bindings() -> Vec<KeyBinding> {
                 "ctrl-shift-s"
             },
             SaveProjectAs,
+            None,
+        ),
+        // 与 Premiere 一致：Ctrl/⌘ + K 在播放头处切开。
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "cmd-k"
+            } else {
+                "ctrl-k"
+            },
+            SplitPlayhead,
             None,
         ),
         KeyBinding::new("n", NextFile, None),

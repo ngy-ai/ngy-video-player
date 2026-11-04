@@ -347,6 +347,28 @@ impl PlayerApp {
         cx.notify();
     }
 
+    /// 在播放头处切开所有跨过它的片段。锁定的轨道由 `timeline::split_at` 跳过。
+    pub(super) fn split_at_playhead(&mut self, cx: &mut Context<Self>) {
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
+        let at = project.ui.playhead;
+        let outcome = crate::timeline::split_at(&project.sequence, at);
+
+        match outcome {
+            Ok(Some((sequence, cuts))) => {
+                if let Some(project) = self.project.as_mut() {
+                    project.sequence = sequence;
+                }
+                self.flash(format!("已在播放头处切开 {cuts} 个片段"));
+            }
+            Ok(None) => self.flash("播放头位置没有可切的片段"),
+            Err(error) => self.flash(format!("切割失败：{error}")),
+        }
+        self.poke();
+        cx.notify();
+    }
+
     /// 记下落点。相同落点直接返回，拖动时指针每移动一个像素都重绘整窗太浪费。
     fn set_timeline_drop(&mut self, drop: TimelineDrop, cx: &mut Context<Self>) {
         if self.timeline_drop == Some(drop) {

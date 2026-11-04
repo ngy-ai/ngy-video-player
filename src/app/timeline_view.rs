@@ -247,6 +247,20 @@ impl PlayerApp {
                         .gap(px(12.0))
                         .text_size(px(11.0))
                         .text_color(text_muted())
+                        // 切割只有快捷键的话很难被发现，标题条上给一颗明面上的按钮。
+                        .child(ui::icon_toggle_small(
+                            "timeline-split",
+                            IconName::Scissors,
+                            false,
+                            if cfg!(target_os = "macos") {
+                                "在播放头处切割（⌘K）"
+                            } else {
+                                "在播放头处切割（Ctrl+K）"
+                            },
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.split_at_playhead(cx);
+                            }),
+                        ))
                         .child(format_time(duration.secs()))
                         .child(format_time(playhead))
                         .child(format!("{:.1} 像素/秒", view.zoom())),

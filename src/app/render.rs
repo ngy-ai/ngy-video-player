@@ -106,6 +106,11 @@ impl Render for PlayerApp {
                 }
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &SplitPlayhead, _window, cx| {
+                if this.project.is_some() {
+                    this.split_at_playhead(cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &NextFile, _window, cx| this.next_file(cx)))
             .on_action(cx.listener(|this, _: &PreviousFile, _window, cx| this.previous_file(cx)))
             .on_action(cx.listener(|this, _: &SpeedUp, _window, cx| {
