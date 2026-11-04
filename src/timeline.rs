@@ -11,6 +11,7 @@ mod model;
 mod ops;
 mod project;
 mod time;
+mod undo;
 
 pub use model::{
     AssetId, ClipItem, Id, Marker, ModelError, Sequence, Track, TrackKind, Transition,
@@ -19,3 +20,4 @@ pub use model::{
 pub use ops::{ClipSpec, EditError, EditOp, apply};
 pub use project::{Asset, PROJECT_EXTENSION, PROJECT_VERSION, Project, ProjectError, UiState};
 pub use time::{MICROS_PER_SECOND, Rational, Tick};
+pub use undo::{HISTORY_LIMIT, UndoHistory};
