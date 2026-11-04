@@ -75,11 +75,11 @@ impl PlayerApp {
                 let navigable = self.playlist().len() > 1;
                 items.push(BarItem::Entry(
                     BarEntry::new("上一集", Previous)
-                        .hint("N")
+                        .hint("P")
                         .enabled(navigable),
                 ));
                 items.push(BarItem::Entry(
-                    BarEntry::new("下一集", Next).hint("P").enabled(navigable),
+                    BarEntry::new("下一集", Next).hint("N").enabled(navigable),
                 ));
                 items.push(BarItem::Separator);
                 items.push(BarItem::Entry(
