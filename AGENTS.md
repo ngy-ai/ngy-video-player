@@ -85,6 +85,7 @@ src/timeline.rs  剪辑时间线：入口只放文档、模块声明与 `pub use
 src/timeline/time.rs  Tick（i64 微秒）与 Rational 帧率：全项目唯一的帧↔时间换算入口
 src/timeline/model.rs  序列 → 轨道 → 片段、转场与标记；纯数据，不持有文件路径
 src/timeline/ops.rs    编辑操作纯函数：旧序列进、新序列出，非法操作返回错误
+src/timeline/project.rs  .ngyproj 工程文件：版本迁移、相对素材路径、原子写 + .bak
 ```
 
 ## 约定

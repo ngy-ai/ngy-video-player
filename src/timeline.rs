@@ -9,6 +9,7 @@
 
 mod model;
 mod ops;
+mod project;
 mod time;
 
 pub use model::{
@@ -16,4 +17,5 @@ pub use model::{
     TransitionKind,
 };
 pub use ops::{ClipSpec, EditError, EditOp, apply};
+pub use project::{Asset, PROJECT_EXTENSION, PROJECT_VERSION, Project, ProjectError, UiState};
 pub use time::{MICROS_PER_SECOND, Rational, Tick};
