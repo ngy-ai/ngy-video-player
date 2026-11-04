@@ -83,6 +83,7 @@ src/player/engine.rs  引擎入口：Engine 句柄、Shared 共享状态、命�
 src/player/engine/    state（对外类型）、event_loop、dispatch、render_loop
 src/timeline.rs  剪辑时间线：入口只放文档、模块声明与 `pub use`
 src/timeline/time.rs  Tick（i64 微秒）与 Rational 帧率：全项目唯一的帧↔时间换算入口
+src/timeline/model.rs  序列 → 轨道 → 片段、转场与标记；纯数据，不持有文件路径
 ```
 
 ## 约定
