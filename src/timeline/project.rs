@@ -178,6 +178,33 @@ impl Project {
     /// 工程里不该还留着旧目录的绝对路径。
     pub fn save(&mut self, path: &Path) -> Result<(), ProjectError> {
         let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let text = self.to_json_at(path)?;
+        write_atomic(path, &text, true).map_err(|error| ProjectError::Io {
+            path: path.to_path_buf(),
+            error,
+        })?;
+
+        // 内存里的状态跟着落盘结果更新：保存之后立刻再存一次，不该写回旧路径。
+        self.version = PROJECT_VERSION;
+        self.base_dir = dir;
+        for asset in &mut self.assets {
+            let absolute = if asset.resolved.as_os_str().is_empty() {
+                absolute_path(&asset.path)
+            } else {
+                asset.resolved.clone()
+            };
+            asset.path = relative_to(&absolute, &self.base_dir).unwrap_or(absolute);
+            resolve_asset(asset, &self.base_dir);
+        }
+        Ok(())
+    }
+
+    /// 按 `path` 所在目录重算素材相对路径后的 JSON。不写盘、不改内存状态。
+    ///
+    /// 自动保存（`timeline::autosave`）用它：写一份 `.autosave` 不该改变工程
+    /// 当前的位置，也不该顺手多出一份 `.bak`。
+    pub fn to_json_at(&self, path: &Path) -> Result<String, ProjectError> {
+        let dir = path.parent().unwrap_or(Path::new("."));
         let mut snapshot = self.clone();
         snapshot.version = PROJECT_VERSION;
         snapshot.base_dir.clear();
@@ -188,26 +215,11 @@ impl Project {
             } else {
                 asset.resolved.clone()
             };
-            asset.path = relative_to(&absolute, &dir).unwrap_or(absolute);
+            asset.path = relative_to(&absolute, dir).unwrap_or(absolute);
             asset.resolved.clear();
             asset.missing = false;
         }
-
-        let text = serde_json::to_string_pretty(&snapshot).map_err(ProjectError::Json)?;
-        write_atomic(path, &text).map_err(|error| ProjectError::Io {
-            path: path.to_path_buf(),
-            error,
-        })?;
-
-        // 内存里的状态跟着落盘结果更新：保存之后立刻再存一次，不该写回旧路径。
-        self.version = PROJECT_VERSION;
-        self.base_dir = dir;
-        self.assets = snapshot.assets;
-        let base_dir = self.base_dir.clone();
-        for asset in &mut self.assets {
-            resolve_asset(asset, &base_dir);
-        }
-        Ok(())
+        serde_json::to_string_pretty(&snapshot).map_err(ProjectError::Json)
     }
 
     /// 解析工程文本。不碰磁盘，测试与导入用。
@@ -378,8 +390,8 @@ fn relative_to(path: &Path, base: &Path) -> Option<PathBuf> {
     path.strip_prefix(base).ok().map(Path::to_path_buf)
 }
 
-/// 原子写：临时文件落盘后再改名，旧文件先挪成 `.bak`。
-fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
+/// 原子写：临时文件落盘后再改名。`keep_backup` 为真时旧文件先挪成 `.bak`。
+fn write_atomic(path: &Path, text: &str, keep_backup: bool) -> io::Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -391,13 +403,22 @@ fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
     let temp = PathBuf::from(temp_name);
     fs::write(&temp, text)?;
 
-    let backup = backup_path(path);
     if path.exists() {
-        // Windows 上 rename 不能覆盖已有文件，先删掉上一份备份。
-        let _ = fs::remove_file(&backup);
-        fs::rename(path, &backup)?;
+        if keep_backup {
+            let backup = backup_path(path);
+            // Windows 上 rename 不能覆盖已有文件，先删掉上一份备份。
+            let _ = fs::remove_file(&backup);
+            fs::rename(path, &backup)?;
+        } else {
+            fs::remove_file(path)?;
+        }
     }
     fs::rename(&temp, path)
+}
+
+/// 自动保存用：原子写但不留 `.bak`，避免每 30 秒多出一份备份。
+pub(crate) fn write_plain(path: &Path, text: &str) -> io::Result<()> {
+    write_atomic(path, text, false)
 }
 
 /// `a.ngyproj` 的备份叫 `a.ngyproj.bak`，和原文件并排存放。

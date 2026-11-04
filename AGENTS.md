@@ -89,6 +89,7 @@ src/timeline/model.rs  序列 → 轨道 → 片段、转场与标记；纯数�
 src/timeline/ops.rs    编辑操作纯函数：旧序列进、新序列出，非法操作返回错误
 src/timeline/project.rs  .ngyproj 工程文件：版本迁移、相对素材路径、原子写 + .bak
 src/timeline/undo.rs    撤销 / 重做：状态快照栈，一次操作一步，上限 200 步
+src/timeline/autosave.rs  自动保存（30 秒无操作）与 `.autosave` 崩溃恢复
 ```
 
 ## 约定

@@ -7,6 +7,7 @@
 //! 时间单位唯一：时间点与时长一律 [`Tick`]（`i64` 微秒），帧率一律 [`Rational`]。
 //! 禁止用 `f64` 秒做累加、比较或存盘——错一帧的 bug 在时间线上无法调试。
 
+pub mod autosave;
 mod media;
 mod model;
 mod ops;
