@@ -126,6 +126,7 @@ mod scenes;
 mod scope;
 mod session;
 mod settings_panel;
+mod timeline_header;
 mod timeline_menu;
 mod timeline_preview;
 mod timeline_tracks;
