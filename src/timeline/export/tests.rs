@@ -376,6 +376,30 @@ fn 相邻片段之间插交叉溶解() {
 }
 
 #[test]
+fn 只有hdr素材才插tonemap链() {
+    let scratch = Scratch::new("hdr");
+    let (mut project, _) = project_with(&scratch, &[(s(0), s(1), Tick::ZERO)]);
+
+    let sdr = plan_sequence(&project).expect("能导出");
+    assert!(
+        !sdr.filter.contains("tonemap="),
+        "SDR 素材不该多一道浮点转换：{}",
+        sdr.filter
+    );
+
+    project.assets[0].media = Some(crate::timeline::MediaInfo {
+        color: crate::timeline::ColorTags {
+            range: "tv".to_string(),
+            tags: "bt2020nc/bt2020/smpte2084".to_string(),
+        },
+        ..crate::timeline::MediaInfo::default()
+    });
+    let hdr = plan_sequence(&project).expect("能导出");
+    assert!(hdr.filter.contains("tonemap=hable"), "{}", hdr.filter);
+    assert!(hdr.filter.contains("zscale=t=bt709"), "{}", hdr.filter);
+}
+
+#[test]
 fn 素材路径是绝对路径() {
     let scratch = Scratch::new("absolute");
     let (project, _) = project_with(&scratch, &[(s(0), s(1), Tick::ZERO)]);

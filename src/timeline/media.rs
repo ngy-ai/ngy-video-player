@@ -65,6 +65,16 @@ pub struct ColorTags {
     pub tags: String,
 }
 
+impl ColorTags {
+    /// 是不是 HDR 素材。
+    ///
+    /// 只认 PQ / HLG 两条传递曲线：`bt2020` 矩阵本身也可能出现在 SDR 素材上（有人
+    /// 转码时没改标签），单看矩阵会把普通片子也丢进 tonemap 链，白白慢一倍。
+    pub fn is_hdr(&self) -> bool {
+        self.tags.contains("smpte2084") || self.tags.contains("arib-std-b67")
+    }
+}
+
 /// 文件指纹：大小 + 修改时间（Unix 秒）。
 ///
 /// 不用哈希：几百 MB 的素材每次打开工程都算一遍哈希，代价远大于收益；大小与

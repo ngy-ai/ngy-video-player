@@ -124,6 +124,12 @@ impl PlayerApp {
             app.send(Command::SetSpeed(speed));
             // 解码方式与显卡已经在 `Engine::spawn` 里作为选项下发过了。
             app.apply_picture();
+            // HDR 素材在预览里也走 hable（ADR 0007）：和导出的 tonemap 曲线对上，
+            // 预览里调好的曝光导出后不会变样。
+            app.send(Command::SetOption {
+                name: "tone-mapping".to_string(),
+                value: "hable".to_string(),
+            });
         }
 
         app.consume_events(event_rx, cx);

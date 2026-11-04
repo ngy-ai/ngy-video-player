@@ -16,6 +16,14 @@ use super::{ExportError, ExportPlan};
 /// 音频统一到 48kHz 立体声。导出链里混采样率是最常见的「声音变调」来源。
 const AUDIO_RATE: u32 = 48_000;
 
+/// HDR → SDR 的转换链：线性化成浮点、换到 bt709 原色、再按 bt709 编码。
+///
+/// `tonemap=hable` 与预览侧下发的 `tone-mapping=hable` 是同一条曲线（ADR 0007）：
+/// 两边曲线不一致的话，预览里调好的曝光导出来会变一个样。
+const HDR_TO_SDR: &str = "zscale=t=linear:npl=100,format=gbrpf32le,\
+zscale=p=bt709,tonemap=hable:desat=0,\
+zscale=t=bt709:m=bt709:r=tv,format=yuv420p";
+
 /// 生成整条序列的导出计划。
 pub fn plan_sequence(project: &Project) -> Result<ExportPlan, ExportError> {
     let sequence = &project.sequence;
@@ -245,10 +253,17 @@ fn video_stream(
             }
         }
 
+        // HDR 素材先转成 SDR 再缩放：成片的色彩空间固定是 bt709（见 ADR 0007），
+        // 混进一段没做 tonemap 的 HLG 画面，整条片子都会发灰。
+        let tonemap = if asset_is_hdr(project, clip.asset_id) {
+            format!(",{HDR_TO_SDR}")
+        } else {
+            String::new()
+        };
         let chain = format!(
             "[{index}:v]atrim=start={:.6}:end={:.6},setpts=PTS-STARTPTS,\
              scale={dims}:force_original_aspect_ratio=decrease,\
-             pad={dims}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}",
+             pad={dims}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}{tonemap}",
             (clip.source_in - head).secs(),
             clip.source_out.secs()
         );
@@ -375,6 +390,15 @@ fn audio_stream(
     }
 
     Ok(stream)
+}
+
+/// 这段素材是不是 HDR。没探测过（老工程、音频文件）按 SDR 处理：
+/// 多插一条 tonemap 链要多一道浮点转换，猜错比漏做更贵。
+fn asset_is_hdr(project: &Project, asset_id: AssetId) -> bool {
+    project
+        .asset(asset_id)
+        .and_then(|asset| asset.media.as_ref())
+        .is_some_and(|media| media.color.is_hdr())
 }
 
 /// 素材文件在 ffmpeg 输入里的下标；同一个文件只加一次 `-i`。
