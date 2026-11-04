@@ -1,5 +1,6 @@
 //! 导出计划的字符串形状：片段裁剪、空档补黑、输入去重、缺素材。
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use super::*;
@@ -7,6 +8,44 @@ use crate::timeline::{AssetId, ClipItem, Id, Project, Tick, TrackKind};
 
 fn s(n: i64) -> Tick {
     Tick::from_micros(n * 1_000_000)
+}
+
+/// 钉住 `-filter_complex` 的连通性：每条链都要以输出标签结尾，链里引用的
+/// 内部标签都得有另一条链产出，且不能重复定义。
+///
+/// 少一个标签时 ffmpeg 只会说 "Stream specifier 'v3' ... matches no streams"，
+/// 这类错误只有真调 ffmpeg 才看得见；放到纯字符串单测里，改滤镜链时就能当场发现。
+fn assert_connected(filter: &str) {
+    let mut produced = HashSet::new();
+    let mut consumed = HashSet::new();
+
+    for chain in filter.split(';').map(str::trim).filter(|c| !c.is_empty()) {
+        assert!(chain.ends_with(']'), "链没有输出标签：{chain}");
+        // 标签本身带方括号，拼链时不能再套一层：`[[v4]]xfade` 会让 ffmpeg
+        // 把 `]xfade` 当滤镜名。合法的多输入链是 `[a][b]concat`，只有 `][`。
+        assert!(!chain.contains("[["), "链里有重复的左括号：{chain}");
+        assert!(!chain.contains("]]"), "链里有重复的右括号：{chain}");
+        // `[0:v]` / `[0:a]` 是输入流说明符，不算内部标签。
+        let labels: Vec<String> = chain
+            .split('[')
+            .skip(1)
+            .filter_map(|tail| tail.split_once(']').map(|(name, _)| name))
+            .filter(|name| !name.contains(':'))
+            .map(str::to_string)
+            .collect();
+        let (output, inputs) = labels.split_last().expect("至少有一个输出标签");
+        assert!(
+            produced.insert(output.clone()),
+            "标签 {output} 被重复定义：{chain}"
+        );
+        consumed.extend(inputs.iter().cloned());
+    }
+
+    let missing: Vec<_> = consumed.difference(&produced).collect();
+    assert!(
+        missing.is_empty(),
+        "滤镜图引用了没有出处的标签 {missing:?}：{filter}"
+    );
 }
 
 /// 临时目录：`add_asset` 会判断文件在不在，所以测试得真的造一个文件。
@@ -78,10 +117,13 @@ fn 单片段导出包含裁剪与拼接() {
     let scratch = Scratch::new("single");
     let (project, _) = project_with(&scratch, &[(s(1), s(3), Tick::ZERO)]);
     let plan = plan_sequence(&project).expect("能导出");
+    assert_connected(&plan.filter);
 
     assert_eq!(plan.inputs.len(), 1);
+    // 带输入 pad 一起钉：`atrim=` 也含 "trim="，只查后者会把音频滤镜放过去。
     assert!(
-        plan.filter.contains("trim=start=1.000000:end=3.000000"),
+        plan.filter
+            .contains("[0:v]trim=start=1.000000:end=3.000000,setpts=PTS-STARTPTS"),
         "{}",
         plan.filter
     );
@@ -100,6 +142,7 @@ fn 同一素材的两个片段只算一个输入() {
     let scratch = Scratch::new("dedupe");
     let (project, _) = project_with(&scratch, &[(s(0), s(2), Tick::ZERO), (s(0), s(2), s(2))]);
     let plan = plan_sequence(&project).expect("能导出");
+    assert_connected(&plan.filter);
 
     assert_eq!(plan.inputs.len(), 1, "同一个文件只 -i 一次");
     assert!(plan.filter.contains("concat=n=2"), "{}", plan.filter);
@@ -115,6 +158,7 @@ fn 片段之间的空档补黑场() {
     let scratch = Scratch::new("gap");
     let (project, _) = project_with(&scratch, &[(s(0), s(1), Tick::ZERO), (s(0), s(1), s(3))]);
     let plan = plan_sequence(&project).expect("能导出");
+    assert_connected(&plan.filter);
 
     assert!(plan.filter.contains("color=c=black"), "{}", plan.filter);
     assert!(
@@ -144,6 +188,7 @@ fn 音频轨参与导出并统一到四十八千赫() {
         .push(ClipItem::new(id, asset, s(0), s(2), Tick::ZERO));
 
     let plan = plan_sequence(&project).expect("能导出");
+    assert_connected(&plan.filter);
     assert!(plan.filter.contains("aresample=48000"), "{}", plan.filter);
     assert!(
         plan.filter.contains("concat=n=1:v=0:a=1[outa]"),
@@ -157,11 +202,55 @@ fn 音频轨参与导出并统一到四十八千赫() {
     );
 }
 
+/// ffmpeg 的 filter_complex 是强类型的：`atrim` 输出音频 pad，接不上 `setpts`
+/// 的视频输入；反过来的 `trim` → `asetpts` 一样连不起来。单看 "trim=" 分不出
+/// 这两个词（`atrim` 里也有），所以按输入 pad 分别钉死。
+#[test]
+fn 视频与音频各用各的裁剪滤镜() {
+    let scratch = Scratch::new("pads");
+    let (mut project, _) = project_with(&scratch, &[(s(0), s(2), Tick::ZERO)]);
+    let asset = project.assets[0].id;
+    let audio = project.sequence.tracks[1].id;
+    let id = project.sequence.alloc_id();
+    project
+        .sequence
+        .track_mut(audio)
+        .expect("音频轨存在")
+        .clips
+        .push(ClipItem::new(id, asset, s(0), s(2), Tick::ZERO));
+
+    let plan = plan_sequence(&project).expect("能导出");
+    assert_connected(&plan.filter);
+    assert!(
+        plan.filter
+            .contains("[0:v]trim=start=0.000000:end=2.000000,setpts="),
+        "{}",
+        plan.filter
+    );
+    assert!(
+        plan.filter
+            .contains("[0:a]atrim=start=0.000000:end=2.000000,asetpts="),
+        "{}",
+        plan.filter
+    );
+    assert!(
+        !plan.filter.contains("[0:v]atrim="),
+        "视频链不能接音频滤镜：{}",
+        plan.filter
+    );
+    assert!(
+        !plan.filter.contains("[0:a]trim="),
+        "音频链不能接视频滤镜：{}",
+        plan.filter
+    );
+}
+
 #[test]
 fn 没有音频时显式关掉音频() {
     let scratch = Scratch::new("silent");
     let (project, _) = project_with(&scratch, &[(s(0), s(2), Tick::ZERO)]);
     let plan = plan_sequence(&project).expect("能导出");
+    assert_connected(&plan.filter);
     assert!(plan.output_args.contains(&"-an".to_string()));
     assert!(!plan.output_args.contains(&"aac".to_string()));
 }
@@ -201,6 +290,7 @@ fn 参数拼装把输入滤镜与映射按顺序排好() {
     let scratch = Scratch::new("args");
     let (project, _) = project_with(&scratch, &[(s(0), s(1), Tick::ZERO)]);
     let plan = plan_sequence(&project).expect("能导出");
+    assert_connected(&plan.filter);
     let args = plan.args();
 
     assert_eq!(args[0], "-i");
@@ -251,6 +341,7 @@ fn 两条视频轨自下而上叠加() {
     );
 
     let plan = plan_sequence(&project).expect("能导出");
+    assert_connected(&plan.filter);
     assert!(plan.filter.contains("[layerv0]"), "{}", plan.filter);
     assert!(plan.filter.contains("[layerv1]"), "{}", plan.filter);
     assert!(
@@ -286,6 +377,7 @@ fn 两条音频轨按amix混合() {
     );
 
     let plan = plan_sequence(&project).expect("能导出");
+    assert_connected(&plan.filter);
     assert!(plan.filter.contains("[layera0]"), "{}", plan.filter);
     assert!(plan.filter.contains("[layera1]"), "{}", plan.filter);
     assert!(
@@ -312,6 +404,7 @@ fn 视频轨比序列短时补黑对齐() {
         .push(ClipItem::new(id, asset, s(0), s(3), Tick::ZERO));
 
     let plan = plan_sequence(&project).expect("能导出");
+    assert_connected(&plan.filter);
     assert!(plan.filter.contains("d=2.000000"), "{}", plan.filter);
     assert!(
         plan.filter.contains("concat=n=2:v=1:a=0[outv]"),
@@ -351,6 +444,7 @@ fn 相邻片段之间插交叉溶解() {
         .push(transition);
 
     let plan = plan_sequence(&project).expect("能导出");
+    assert_connected(&plan.filter);
     assert!(
         plan.filter
             .contains("xfade=transition=dissolve:duration=0.500000"),
@@ -363,7 +457,8 @@ fn 相邻片段之间插交叉溶解() {
         plan.filter
     );
     assert!(
-        plan.filter.contains("atrim=start=1.500000:end=4.000000"),
+        plan.filter
+            .contains("[0:v]trim=start=1.500000:end=4.000000"),
         "第二段往前多取 0.5 秒：{}",
         plan.filter
     );
@@ -404,8 +499,35 @@ fn 素材路径是绝对路径() {
     let scratch = Scratch::new("absolute");
     let (project, _) = project_with(&scratch, &[(s(0), s(1), Tick::ZERO)]);
     let plan = plan_sequence(&project).expect("能导出");
+    assert_connected(&plan.filter);
     assert!(
         Path::new(&plan.inputs[0]).is_absolute(),
         "ffmpeg 子进程的工作目录不一定和工程一致"
     );
+}
+
+/// 每条轨的空档计数都从 0 开始：不带轨道 id 的话，两条轨会产出同名标签，
+/// filter_complex 里同名输出标签是非法图。多轨 + 空档正好把这个撞车逼出来。
+#[test]
+fn 多条轨道都有空档时标签不撞车() {
+    let scratch = Scratch::new("labels");
+    let (mut project, _) = project_with(&scratch, &[(s(0), s(1), s(1))]);
+    let asset = project.assets[0].id;
+
+    // 序列总长 4 秒：两条视频轨都要补开头与末尾的黑场，两条音频轨都要补静音。
+    let audio = project.sequence.tracks[1].id;
+    let id = project.sequence.alloc_id();
+    project
+        .sequence
+        .track_mut(audio)
+        .expect("音频轨存在")
+        .clips
+        .push(ClipItem::new(id, asset, s(0), s(1), s(3)));
+    add_track_clip(&mut project, TrackKind::Video, asset, s(0), s(1), s(2));
+    add_track_clip(&mut project, TrackKind::Audio, asset, s(0), s(1), s(3));
+
+    let plan = plan_sequence(&project).expect("能导出");
+    assert_connected(&plan.filter);
+    assert!(plan.filter.contains("overlay="), "{}", plan.filter);
+    assert!(plan.filter.contains("amix="), "{}", plan.filter);
 }

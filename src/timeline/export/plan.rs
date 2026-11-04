@@ -184,7 +184,8 @@ impl Stream {
 
 /// 一道要拼进 concat 的画面：一条或几条滤镜链，加上最终输出标签。
 struct Piece {
-    /// 按顺序发出去的链。合并了转场时，前面几段的链也在这里面。
+    /// 按顺序发出去的链，**每条链尾都带着自己的输出标签**。合并了转场时，
+    /// 前面几段的链也在这里面；最后一条链（xfade）的标签就是 [`Piece::label`]。
     chains: Vec<String>,
     /// 最终输出标签，进 concat 的就是它。
     label: String,
@@ -219,12 +220,15 @@ fn video_stream(
     for clip in &track.clips {
         // 空档补黑：不补的话 concat 会把后面的画面整体提前。
         if clip.start > cursor {
+            // 带上轨道 id：多条轨都有空档时，各轨的 gap_index 都从 0 开始，
+            // 不带轨道会产出两个同名 `[bgv0]`，ffmpeg 会拒绝重复的标签。
+            let label = format!("[bgv{}_{gap_index}]", track.id.raw());
             pieces.push(Piece {
                 chains: vec![format!(
-                    "color=c=black:s={color_size}:r={fps}:d={:.6}",
+                    "color=c=black:s={color_size}:r={fps}:d={:.6}{label}",
                     (clip.start - cursor).secs()
                 )],
-                label: format!("[bgv{gap_index}]"),
+                label,
                 start: cursor,
                 end: clip.start,
                 clip: None,
@@ -260,22 +264,28 @@ fn video_stream(
         } else {
             String::new()
         };
+        // 视频必须用 `trim` + `setpts`：`atrim` 是音频滤镜，它的输出 pad 是 audio，
+        // 接到 `setpts` 的 video 输入上会让整张 filter_complex 图连不起来。
+        let label = format!("[v{}]", clip.id.raw());
+        // 输出标签必须拼在链尾：concat 与 xfade 只认标签，链上没有标签时
+        // ffmpeg 会报 "Stream specifier 'v3' ... matches no streams"。
         let chain = format!(
-            "[{index}:v]atrim=start={:.6}:end={:.6},setpts=PTS-STARTPTS,\
+            "[{index}:v]trim=start={:.6}:end={:.6},setpts=PTS-STARTPTS,\
              scale={dims}:force_original_aspect_ratio=decrease,\
-             pad={dims}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}{tonemap}",
+             pad={dims}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}{tonemap}{label}",
             (clip.source_in - head).secs(),
             clip.source_out.secs()
         );
-        let label = format!("[v{}]", clip.id.raw());
 
         match kind {
             Some(kind) => {
                 let previous = pieces.pop().expect("有转场就一定有前一段");
                 // `xfade` 从 `offset` 开始溶到本片段：offset 落在前一段的尾巴上，
                 // 也就是「前一段总长 - 溶接时长」。两段加起来仍等于原时长。
+                // 两个 label 都自带方括号，直接相连：`[[v4]]` 会被 ffmpeg 当成
+                // 一个不存在的滤镜名（报 "No such filter: ']xfade'"）。
                 let xfade = format!(
-                    "{}[{label}]xfade=transition={}:duration={:.6}:offset={:.6}[xf{}]",
+                    "{}{label}xfade=transition={}:duration={:.6}:offset={:.6}[xf{}]",
                     previous.label,
                     xfade_name(kind),
                     head.secs(),
@@ -307,12 +317,13 @@ fn video_stream(
     // 这条轨没铺满序列：补齐到整条序列的长度。多层 overlay 要求等长，
     // 而 `overlay` 默认按最短的一条截断——少这一段的成片会缺尾巴。
     if cursor < duration {
+        let label = format!("[bgv{}_{gap_index}]", track.id.raw());
         pieces.push(Piece {
             chains: vec![format!(
-                "color=c=black:s={color_size}:r={fps}:d={:.6}",
+                "color=c=black:s={color_size}:r={fps}:d={:.6}{label}",
                 (duration - cursor).secs()
             )],
-            label: format!("[bgv{gap_index}]"),
+            label,
             start: cursor,
             end: duration,
             clip: None,
@@ -321,9 +332,9 @@ fn video_stream(
 
     let mut stream = Stream::new();
     for piece in pieces {
-        for chain in piece.chains {
-            stream.chains.push(chain);
-        }
+        // 黑场、片段、xfade 的链都自带输出标签，和 audio_stream 的 push 一样；
+        // 这里只收集，不能再拼一次，否则转场那条链会多出一个标签。
+        stream.chains.extend(piece.chains);
         stream.segments.push(piece.label);
     }
     Ok(stream)
@@ -357,7 +368,8 @@ fn audio_stream(
                     "anullsrc=r={AUDIO_RATE}:cl=stereo,\
                      atrim=duration={duration:.6}"
                 ),
-                format!("[bga{gap_index}]"),
+                // 同理：静音段标签也要带轨道 id，避免多轨同名。
+                format!("[bga{}_{gap_index}]", track.id.raw()),
             );
             gap_index += 1;
         }
@@ -385,7 +397,7 @@ fn audio_stream(
                 "anullsrc=r={AUDIO_RATE}:cl=stereo,atrim=duration={:.6}",
                 (duration - cursor).secs()
             ),
-            format!("[bga{gap_index}]"),
+            format!("[bga{}_{gap_index}]", track.id.raw()),
         );
     }
 
