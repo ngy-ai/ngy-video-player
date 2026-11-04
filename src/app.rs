@@ -270,6 +270,9 @@ pub struct PlayerApp {
     /// 保留两帧再释放：`drop_image` 会立刻回收 atlas 里的区域，而上上帧可能还在
     /// GPU 队列里被采样，留一点余量可以彻底避免「偶尔闪一下」。
     retired: VecDeque<Arc<RenderImage>>,
+    /// 当前画面的代次。换片 / 停止后只接受同代次的帧，否则上一部片子渲染好、
+    /// 却晚于清空事件才送达的帧会把旧画面贴回来。
+    frame_epoch: u64,
 
     /// 面板上的全部列表。播放、删除、清空都只作用于当前页。
     playlists: PlaylistSet,
@@ -651,6 +654,8 @@ struct MiniState {
     subtitle: bool,
     /// 文件里有没有字幕轨；没有时字幕按钮置灰。
     has_subtitle: bool,
+    /// 正在播纯音频：没有画面时不显示「正在加载…」占位。
+    audio_only: bool,
 }
 
 impl MiniState {
@@ -664,6 +669,7 @@ impl MiniState {
             && (self.speed - other.speed).abs() < 0.001
             && self.subtitle == other.subtitle
             && self.has_subtitle == other.has_subtitle
+            && self.audio_only == other.audio_only
             && self.playing == other.playing
             && self.muted == other.muted
             && (self.position - other.position).abs() < 0.005

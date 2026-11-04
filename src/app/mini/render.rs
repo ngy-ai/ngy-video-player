@@ -13,7 +13,8 @@ impl Render for MiniPlayer {
             return div().size_full().bg(bg()).into_any_element();
         }
 
-        self.swap_frame(window);
+        self.swap_frame();
+        self.drop_retired_frames(window);
         self.sync_on_top(window, cx);
         self.remember_width(window, cx);
         self.remember_position(window, cx);
@@ -47,7 +48,8 @@ impl Render for MiniPlayer {
             .text_color(text())
             .track_focus(&self.focus)
             .child(ui::video_surface(self.frame.clone()))
-            .when(self.frame.is_none(), |this| {
+            // 纯音频没有画面也不显示「正在加载…」，和主窗口一样保持黑屏。
+            .when(self.frame.is_none() && !self.state.audio_only, |this| {
                 this.child(
                     div()
                         .absolute()

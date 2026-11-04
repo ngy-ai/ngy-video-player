@@ -101,9 +101,13 @@ impl PlayerApp {
         self.snapshot.position = 0.0;
         self.snapshot.duration = 0.0;
         self.snapshot.tracks.clear();
+        self.snapshot.video_width = 0;
+        self.snapshot.video_height = 0;
         self.error = None;
-        // 换片：上一部的预览图和时间点全部作废，预览实例里那个文件也卸掉，
-        // 否则它会一直占着文件和一路解码器。
+        // 换片：上一部的画面、预览图和时间点全部作废，预览实例里那个文件也卸掉，
+        // 否则它会一直占着文件和一路解码器。引擎随后发来的 FrameCleared
+        // 会同步清掉小窗的画面，并挡住通道里迟到的旧帧。
+        self.begin_load();
         self.clear_preview();
         self.send(Command::Load { url, start: None });
         // 字幕延迟是逐文件选项：换片后 mpv 会把它归零，界面这一份也得跟着清，

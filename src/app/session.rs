@@ -33,6 +33,7 @@ impl PlayerApp {
             frame: None,
             incoming: None,
             retired: VecDeque::new(),
+            frame_epoch: 0,
             playlists: PlaylistSet::load(),
             playing_tab: None,
             selection: BTreeSet::new(),
@@ -278,18 +279,38 @@ impl PlayerApp {
                         }
                         cx.notify();
                     }
-                    PlayerEvent::Frame(image) => {
+                    PlayerEvent::Frame { image, epoch } => {
                         if let Some(engine) = &this.engine {
                             // 告诉取帧线程「这一帧已被取走」，否则它会主动丢帧。
                             engine.frame_consumed();
                         }
-                        this.incoming = Some(image.clone());
-                        // 小窗不自己解码，只是同一张帧的第二个窗口，这里转发一份。
+                        // 换片之前渲染、却晚于 FrameCleared 才送达的旧帧一律丢掉：
+                        // 放回去就是「播着音频，画面还是上一个视频」。
+                        if epoch == this.frame_epoch {
+                            this.incoming = Some(image.clone());
+                            // 小窗不自己解码，只是同一张帧的第二个窗口，这里转发一份。
+                            if let Some(mini) = &this.mini {
+                                mini.update(cx, |mini, cx| {
+                                    mini.incoming = Some(image);
+                                    cx.notify();
+                                });
+                            }
+                            cx.notify();
+                        }
+                    }
+                    PlayerEvent::FrameCleared(epoch) => {
+                        this.frame_epoch = epoch;
+                        this.discard_frame();
                         if let Some(mini) = &this.mini {
                             mini.update(cx, |mini, cx| {
-                                mini.incoming = Some(image);
+                                mini.discard_frame();
                                 cx.notify();
                             });
+                        }
+                        // 引擎已经把分辨率归零，界面这份跟着对齐，
+                        // 纯音频立刻按「无画面」处理，不等下一次 Dirty。
+                        if let Some(engine) = &this.engine {
+                            this.snapshot = engine.snapshot();
                         }
                         cx.notify();
                     }

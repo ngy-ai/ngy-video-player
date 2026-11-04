@@ -178,6 +178,14 @@ impl Snapshot {
         self.video_width > 0 && self.video_height > 0
     }
 
+    /// 有文件在播、却没有任何画面（纯音频）。
+    ///
+    /// 界面用它区分「还没有画面」和「永远不会有画面」：后者不该一直挂着
+    /// 「正在加载…」占位，视频区保持黑屏即可。
+    pub fn playing_without_video(&self) -> bool {
+        self.path.is_some() && !self.idle && !self.has_video()
+    }
+
     pub fn aspect(&self) -> f32 {
         if self.has_video() {
             self.video_width as f32 / self.video_height as f32
@@ -200,8 +208,13 @@ impl Snapshot {
 pub enum PlayerEvent {
     /// 状态有变化（进度、暂停、轨道……），重新读一次快照即可。
     Dirty,
-    /// 新的一帧画面。
-    Frame(Arc<RenderImage>),
+    /// 新的一帧画面。`epoch` 是产出它的画面代次，界面只接受当前代次的帧。
+    Frame { image: Arc<RenderImage>, epoch: u64 },
+    /// 换片 / 停止：旧画面作废，参数是从此生效的新画面代次。
+    ///
+    /// 取帧线程和界面之间还排着上一部片子的帧，光在界面上清一次不够：
+    /// 那些帧随后到达又会把旧画面贴回来，所以每一帧都带代次由界面过滤。
+    FrameCleared(u64),
     /// 进度条预览图。`time` 是当初请求的时间点（不是实际画面时间，
     /// 因为实际帧会落在关键帧附近）。
     Thumbnail { time: f64, image: Arc<RenderImage> },
@@ -265,5 +278,26 @@ impl Default for EngineOptions {
             hwdec: "no".to_string(),
             d3d11_adapter: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 纯音频播放时判定为没有画面() {
+        let mut snapshot = Snapshot::default();
+        // 刚启动：没有文件，空状态照常显示。
+        assert!(!snapshot.playing_without_video());
+
+        snapshot.path = Some(PathBuf::from("lesson.mp3"));
+        snapshot.idle = false;
+        assert!(snapshot.playing_without_video());
+
+        // 换成视频后，「没有画面」不再成立，加载中仍要有提示。
+        snapshot.video_width = 1920;
+        snapshot.video_height = 1080;
+        assert!(!snapshot.playing_without_video());
     }
 }

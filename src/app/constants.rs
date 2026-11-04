@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// 已经发出换片命令、但引擎还没下发新画面代次时的哨兵。
+/// 这期间到达的帧都属于上一部片子，界面一概不认。
+pub(super) const FRAME_EPOCH_PENDING: u64 = u64::MAX;
 pub(super) const SEEK_STEP: f64 = 5.0;
 pub(super) const VOLUME_STEP: f64 = 5.0;
 /// 倍速菜单里的固定档位。自定义滑块的量程比它宽，两边共用同一套显示格式。

@@ -21,9 +21,12 @@ pub(super) fn dispatch(
                     state.error = None;
                     state.position = 0.0;
                     state.duration = 0.0;
+                    state.video_width = 0;
+                    state.video_height = 0;
                     state.tracks.clear();
                     state.chapters.clear();
                 }
+                clear_frame(shared);
                 api.run_command(handle, &["loadfile", &url, "replace"])?;
                 if let Some(seconds) = start {
                     api.run_command(handle, &["seek", &seconds.to_string(), "absolute"])?;
@@ -36,6 +39,15 @@ pub(super) fn dispatch(
                 api.run_command(handle, &["set", "pause", "no"])?;
             }
             Command::Stop => {
+                {
+                    let mut state = shared.state();
+                    // path 变成不可用时属性通知会被忽略（见 apply_property），
+                    // 这里主动清掉，否则界面会一直以为还有文件在播。
+                    state.path = None;
+                    state.video_width = 0;
+                    state.video_height = 0;
+                }
+                clear_frame(shared);
                 api.run_command(handle, &["stop"])?;
             }
             Command::PlayPause => {
@@ -137,4 +149,42 @@ pub(super) fn dispatch(
         }
     }
     let _ = quit;
+}
+
+/// 换片 / 停止时统一作废旧画面。
+///
+/// 代次先自增再发事件：取帧线程读到新代次就把缓冲里的旧像素清掉，界面收到
+/// 事件就清掉已显示的帧，并按代次丢弃通道里迟到的旧帧。
+fn clear_frame(shared: &Arc<Shared>) {
+    let epoch = shared.frame_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+    shared.notify(PlayerEvent::FrameCleared(epoch));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 换片代次单调递增并通知界面清帧() {
+        let (events, mut receiver) = futures::channel::mpsc::unbounded();
+        let shared = Arc::new(Shared {
+            state: Mutex::new(Snapshot::default()),
+            events,
+            shutdown: AtomicBool::new(false),
+            target: Mutex::new(RenderTarget::default()),
+            frame_serial: AtomicU64::new(0),
+            needs_frames: AtomicBool::new(false),
+            frame_pending: AtomicBool::new(false),
+            config_serial: AtomicU32::new(0),
+            redraw: AtomicBool::new(false),
+            frame_epoch: AtomicU64::new(0),
+        });
+
+        for expected in 1..=2u64 {
+            clear_frame(&shared);
+            assert_eq!(shared.frame_epoch.load(Ordering::SeqCst), expected);
+            let event = receiver.try_recv().unwrap();
+            assert!(matches!(event, PlayerEvent::FrameCleared(epoch) if epoch == expected));
+        }
+    }
 }

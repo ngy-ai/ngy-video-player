@@ -2,17 +2,47 @@
 
 use super::*;
 
+/// 没有帧时是否该显示空状态提示。
+///
+/// 纯音频正在播放时既不会有画面，也不该一直挂着「正在加载…」：视频区保持黑屏。
+fn show_placeholder(frame: &Option<Arc<RenderImage>>, snapshot: &Snapshot) -> bool {
+    frame.is_none() && !snapshot.playing_without_video()
+}
+
 impl PlayerApp {
-    pub(super) fn swap_frame(&mut self, window: &mut Window) {
+    /// 换片 / 停止：正在显示的和还在排队的帧都属于上一部片子。
+    pub(super) fn discard_frame(&mut self) {
+        self.incoming = None;
+        if let Some(previous) = self.frame.take() {
+            self.retired.push_back(previous);
+        }
+    }
+
+    /// 发 `Command::Load` 之前调用：本地先作废旧画面，并挡住通道里在途的旧帧。
+    /// 引擎随后下发的 `FrameCleared` 会把代次换成真正的新值。
+    pub(super) fn begin_load(&mut self) {
+        self.discard_frame();
+        self.frame_epoch = FRAME_EPOCH_PENDING;
+    }
+
+    pub(super) fn swap_frame(&mut self) {
         let Some(incoming) = self.incoming.take() else {
             return;
         };
         if let Some(previous) = self.frame.replace(incoming) {
             self.retired.push_back(previous);
-            while self.retired.len() > 2 {
-                if let Some(stale) = self.retired.pop_front() {
-                    let _ = window.drop_image(stale);
-                }
+        }
+    }
+
+    /// 把不再显示的帧还给 atlas。
+    ///
+    /// `drop_image` 只应该在没有元素再画它的时候调，所以放在渲染路径上，
+    /// 并留两帧余量（刚换下来的那张可能还在 GPU 队列里被采样）。
+    /// 没有新帧送来时也要跑一遍，否则换片清掉的旧帧会一直占着 atlas。
+    pub(super) fn drop_retired_frames(&mut self, window: &mut Window) {
+        while self.retired.len() > 2 {
+            if let Some(stale) = self.retired.pop_front() {
+                let _ = window.drop_image(stale);
             }
         }
     }
@@ -138,7 +168,8 @@ impl PlayerApp {
             .child(ui::video_surface(self.frame.clone()))
             // 空状态只看「有没有帧」，不看 mpv 上报的宽高：width/height 属性在
             // 视频解码前是 0，用它会在一段正常播放的画面上盖一层「正在加载」。
-            .when(self.frame.is_none(), |this| {
+            // 纯音频例外：它永远不会有帧，也不该一直挂着占位文字，黑屏即可。
+            .when(show_placeholder(&self.frame, &self.snapshot), |this| {
                 this.child(
                     div()
                         .absolute()
@@ -471,5 +502,28 @@ impl PlayerApp {
         if let Some(engine) = &self.engine {
             engine.stop_preview();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 纯音频播放时不显示空状态占位() {
+        let frame: Option<Arc<RenderImage>> = None;
+        let mut snapshot = Snapshot::default();
+        // 刚启动、或者停止播放之后，仍要提示用户打开文件。
+        assert!(show_placeholder(&frame, &snapshot));
+
+        // 换到纯音频：帧已清空，视频区应该是纯黑而不是「正在加载…」。
+        snapshot.path = Some(std::path::PathBuf::from("lesson.mp3"));
+        snapshot.idle = false;
+        assert!(!show_placeholder(&frame, &snapshot));
+
+        // 换成视频后，解码出第一帧之前照常显示加载提示。
+        snapshot.video_width = 1920;
+        snapshot.video_height = 1080;
+        assert!(show_placeholder(&frame, &snapshot));
     }
 }

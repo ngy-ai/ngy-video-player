@@ -64,6 +64,9 @@ struct Shared {
     frame_serial: AtomicU64,
     /// 是否有界面在等待新帧（没有就跳过渲染，省电）。
     needs_frames: AtomicBool,
+    /// 画面代次：每次换片 / 停止自增。取帧线程据此丢弃上一部片子的像素，
+    /// 界面据此丢弃通道里还排着队的旧帧。
+    frame_epoch: AtomicU64,
     /// 是否有一帧已经推给界面但还没被取走。
     ///
     /// 界面渲染比视频帧率慢时（窗口被挡住、系统卡顿），如果不做背压，
@@ -134,6 +137,7 @@ impl Engine {
             target: Mutex::new(RenderTarget::default()),
             frame_serial: AtomicU64::new(0),
             needs_frames: AtomicBool::new(false),
+            frame_epoch: AtomicU64::new(0),
             frame_pending: AtomicBool::new(false),
             config_serial: AtomicU32::new(0),
             redraw: AtomicBool::new(false),
@@ -246,6 +250,11 @@ impl Engine {
             }
             // 不建自己的窗口。
             opt(api, handle, "force-window", "no");
+            // 纯音频不带画面：mpv 默认会把内嵌封面（甚至同目录的 cover.jpg）
+            // 当成视频轨输出，播 mp3 时界面就还挂着一张图，width/height 也变成
+            // 封面尺寸，把「有没有画面」的判断全带偏。
+            opt(api, handle, "cover-art-auto", "no");
+            opt(api, handle, "audio-display", "no");
             // 起播就绪即可，不要一上来缓冲一大段（本地文件场景纯属拖慢）。
             opt(api, handle, "cache", "auto");
             opt(api, handle, "demuxer-max-bytes", "128MiB");

@@ -49,6 +49,7 @@ pub(super) fn render_loop(
     // 还没有任何画面（刚启动、纯音频）时不重画：那会送出一张纯黑图，
     // 把界面上的「拖入文件」空状态盖掉。
     let mut rendered_once = false;
+    let mut rendered_epoch = shared.frame_epoch.load(Ordering::SeqCst);
 
     loop {
         if shared.shutdown.load(Ordering::SeqCst) {
@@ -60,6 +61,17 @@ pub(super) fn render_loop(
 
         if shared.shutdown.load(Ordering::SeqCst) {
             break;
+        }
+
+        let epoch = shared.frame_epoch.load(Ordering::SeqCst);
+        if epoch != rendered_epoch {
+            // 换片 / 停止：缓冲里还是上一部片子的像素，而 rendered_once 仍为真时
+            // 尺寸变化会把它重画成一帧。清零并回到「本次还没送出过画面」的状态，
+            // 之后只有 mpv 真正报告新帧才允许送帧。
+            buffer.clear();
+            rendered_once = false;
+            resized = false;
+            rendered_epoch = epoch;
         }
 
         let target = *shared.target.lock().unwrap_or_else(|e| e.into_inner());
@@ -98,7 +110,10 @@ pub(super) fn render_loop(
 
         let image = buffer.to_image(current.rotation);
         shared.frame_serial.fetch_add(1, Ordering::SeqCst);
-        shared.notify(PlayerEvent::Frame(Arc::new(image)));
+        shared.notify(PlayerEvent::Frame {
+            image: Arc::new(image),
+            epoch,
+        });
         unsafe { (api.render_context_report_swap)(context) };
         resized = false;
         rendered_once = true;

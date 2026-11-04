@@ -99,17 +99,29 @@ impl MiniPlayer {
         }
     }
 
+    /// 换片 / 停止：正在显示的和还在排队的帧都属于上一部片子。
+    pub(in crate::app) fn discard_frame(&mut self) {
+        self.incoming = None;
+        if let Some(previous) = self.frame.take() {
+            self.retired.push_back(previous);
+        }
+    }
+
     /// 换上刚到的那一帧，旧的排队等着还给 atlas。
-    pub(super) fn swap_frame(&mut self, window: &mut Window) {
+    pub(super) fn swap_frame(&mut self) {
         let Some(incoming) = self.incoming.take() else {
             return;
         };
         if let Some(previous) = self.frame.replace(incoming) {
             self.retired.push_back(previous);
-            while self.retired.len() > 2 {
-                if let Some(stale) = self.retired.pop_front() {
-                    let _ = window.drop_image(stale);
-                }
+        }
+    }
+
+    /// 归还不再显示的帧；没有新帧送来时也要跑，清掉的旧帧才不会一直占着 atlas。
+    pub(super) fn drop_retired_frames(&mut self, window: &mut Window) {
+        while self.retired.len() > 2 {
+            if let Some(stale) = self.retired.pop_front() {
+                let _ = window.drop_image(stale);
             }
         }
     }

@@ -112,6 +112,7 @@ fn 小窗状态只在可见内容变化时重绘() {
         speed: 1.0,
         subtitle: false,
         has_subtitle: false,
+        audio_only: false,
     };
     assert!(base.same_as(&base.clone()));
 
@@ -149,4 +150,9 @@ fn 小窗状态只在可见内容变化时重绘() {
     captioned.has_subtitle = true;
     captioned.subtitle = true;
     assert!(!captioned.same_as(&base));
+
+    // 切成纯音频后要重绘一次：空状态占位得跟着撤掉。
+    let mut audio = base.clone();
+    audio.audio_only = true;
+    assert!(!audio.same_as(&base));
 }

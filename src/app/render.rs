@@ -4,7 +4,8 @@ use super::*;
 
 impl Render for PlayerApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.swap_frame(window);
+        self.swap_frame();
+        self.drop_retired_frames(window);
         self.drop_retired_previews(window);
         self.sync_clip_source(cx);
         self.sync_metadata_source(cx);

@@ -43,6 +43,14 @@ impl FrameBuffer {
         unsafe { self.storage.as_mut_ptr().add(self.offset) }
     }
 
+    /// 换片时抹掉上一部片子的像素。
+    ///
+    /// mpv 在纯音频文件上不会写这块缓冲，留着旧像素的话，尺寸变化或界面
+    /// 要求的强制重画会把「上一部片子的最后一帧」重新打包送出去。
+    pub(crate) fn clear(&mut self) {
+        self.storage.fill(0);
+    }
+
     /// 拷成一张紧密排列、alpha 全不透明的 BGRA 图像，并按 `rotation` 顺时针转。
     ///
     /// 三个细节：
@@ -152,4 +160,23 @@ pub(crate) fn render_sw(
         return Err(anyhow!("mpv_render_context_render: {}", api.error_text(rc)));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 换片清缓冲后不会再打包出上一帧() {
+        let mut buffer = FrameBuffer::default();
+        buffer.resize(2, 1);
+        buffer.storage.fill(0x80);
+        assert!(buffer.storage.iter().any(|&byte| byte != 0));
+
+        buffer.clear();
+        assert!(buffer.storage.iter().all(|&byte| byte == 0));
+        // 尺寸与对齐信息要留着，下一部片子直接复用这块缓冲。
+        assert_eq!((buffer.width, buffer.height), (2, 1));
+        let _ = buffer.to_image(0);
+    }
 }
