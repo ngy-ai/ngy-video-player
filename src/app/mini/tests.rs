@@ -88,6 +88,7 @@ fn 小窗状态只在可见内容变化时重绘() {
         empty: false,
         items: 3,
         loop_mode: LoopMode::Off,
+        speed: 1.0,
     };
     assert!(base.same_as(&base.clone()));
 
@@ -113,4 +114,11 @@ fn 小窗状态只在可见内容变化时重绘() {
     let mut looped = base.clone();
     looped.loop_mode = LoopMode::All;
     assert!(!looped.same_as(&base));
+
+    // 倍速按千分之一比较：拖动滑块造成的极小抖动不该重绘。
+    let mut faster = base.clone();
+    faster.speed = 1.0005;
+    assert!(faster.same_as(&base));
+    faster.speed = 1.25;
+    assert!(!faster.same_as(&base));
 }

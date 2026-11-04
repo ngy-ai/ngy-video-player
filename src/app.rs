@@ -610,6 +610,8 @@ struct MiniState {
     items: usize,
     /// 循环模式。右键菜单显示当前值，切换后小窗也要跟着更新。
     loop_mode: LoopMode,
+    /// 播放速度。`[` / `]` 调完之后小窗要浮一条当前倍速。
+    speed: f64,
 }
 
 impl MiniState {
@@ -620,6 +622,7 @@ impl MiniState {
             && self.empty == other.empty
             && self.items == other.items
             && self.loop_mode == other.loop_mode
+            && (self.speed - other.speed).abs() < 0.001
             && self.playing == other.playing
             && self.muted == other.muted
             && (self.position - other.position).abs() < 0.005

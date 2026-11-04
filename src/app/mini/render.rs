@@ -226,6 +226,20 @@ impl Render for MiniPlayer {
             .on_action(cx.listener(|this, _: &VolumeDown, _window, cx| {
                 this.forward(cx, |app, cx| app.change_volume(-VOLUME_STEP, cx));
             }))
+            // `[` / `]` 与主窗口同一套步长；小窗没有速度表，变速后由 `pull_state`
+            // 检测到 speed 变化再浮一条提示。
+            .on_action(cx.listener(|this, _: &SpeedUp, _window, cx| {
+                this.forward(cx, |app, cx| {
+                    let next = app.snapshot.speed + 0.25;
+                    app.set_speed(next, cx);
+                });
+            }))
+            .on_action(cx.listener(|this, _: &SpeedDown, _window, cx| {
+                this.forward(cx, |app, cx| {
+                    let next = app.snapshot.speed - 0.25;
+                    app.set_speed(next, cx);
+                });
+            }))
             .on_action(cx.listener(|this, _: &ToggleMini, window, cx| {
                 // T 在小窗里的含义与主窗口一致——切换小窗模式，也就是还原。
                 this.restore_to_main(window, cx);

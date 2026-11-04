@@ -341,6 +341,7 @@ impl PlayerApp {
             empty: self.playlist().is_empty(),
             items: self.playlist().len(),
             loop_mode: self.settings.loop_mode,
+            speed: self.snapshot.speed,
         }
     }
 

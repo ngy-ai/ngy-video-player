@@ -203,6 +203,10 @@ impl MiniPlayer {
         if self.state.loop_mode != state.loop_mode {
             self.flash_text(SharedString::from(state.loop_mode.label()), cx);
         }
+        // 倍速由 `[` / `]` 调，小窗没有速度表，浮一条当前值。
+        if (self.state.speed - state.speed).abs() >= 0.001 {
+            self.flash_text(SharedString::from(format_speed(state.speed)), cx);
+        }
         self.state = state;
         cx.notify();
     }
