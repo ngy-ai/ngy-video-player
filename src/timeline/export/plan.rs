@@ -176,6 +176,24 @@ impl Stream {
     }
 }
 
+/// 一道要拼进 concat 的画面：一条或几条滤镜链，加上最终输出标签。
+struct Piece {
+    /// 按顺序发出去的链。合并了转场时，前面几段的链也在这里面。
+    chains: Vec<String>,
+    /// 最终输出标签，进 concat 的就是它。
+    label: String,
+    start: Tick,
+    end: Tick,
+    /// 空档为 `None`：转场只认片段，不认黑场。
+    clip: Option<crate::timeline::Id>,
+}
+
+impl Piece {
+    fn len(&self) -> Tick {
+        self.end - self.start
+    }
+}
+
 fn video_stream(
     project: &Project,
     track: &Track,
@@ -183,7 +201,6 @@ fn video_stream(
     duration: Tick,
     inputs: &mut Vec<PathBuf>,
 ) -> Result<Stream, ExportError> {
-    let mut stream = Stream::new();
     let mut cursor = Tick::ZERO;
     let mut gap_index = 0;
     // `color` 的尺寸必须写成 `WxH`：滤镜参数用 `:` 分隔，`W:H` 会被当成两个参数。
@@ -191,46 +208,122 @@ fn video_stream(
     let color_size = format!("{}x{}", sequence.width, sequence.height);
     let dims = format!("{}:{}", sequence.width, sequence.height);
     let fps = format!("{}/{}", sequence.fps.num(), sequence.fps.den());
+    let mut pieces: Vec<Piece> = Vec::new();
 
     for clip in &track.clips {
         // 空档补黑：不补的话 concat 会把后面的画面整体提前。
         if clip.start > cursor {
-            let duration = (clip.start - cursor).secs();
-            stream.push(
-                format!("color=c=black:s={color_size}:r={fps}:d={duration:.6}"),
-                format!("[bgv{gap_index}]"),
-            );
+            pieces.push(Piece {
+                chains: vec![format!(
+                    "color=c=black:s={color_size}:r={fps}:d={:.6}",
+                    (clip.start - cursor).secs()
+                )],
+                label: format!("[bgv{gap_index}]"),
+                start: cursor,
+                end: clip.start,
+                clip: None,
+            });
             gap_index += 1;
         }
 
         let index = input_index(inputs, project, clip.asset_id)?;
-        let label = format!("[v{}]", clip.id.raw());
-        stream.push(
-            format!(
-                "[{index}:v]trim=start={:.6}:end={:.6},setpts=PTS-STARTPTS,\
-                 scale={dims}:force_original_aspect_ratio=decrease,\
-                 pad={dims}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}",
-                clip.source_in.secs(),
-                clip.source_out.secs()
-            ),
-            label,
+
+        // 交叉溶解要多取一段前一段的素材（往后延）和本片段之前的素材（往前挪）。
+        // 前一段没有余量就退化成硬切——宁可切得生硬，也不要 ffmpeg 因缺帧把时长算错。
+        let mut head = Tick::ZERO;
+        let mut kind = None;
+        if let Some(previous) = pieces.last()
+            && previous.end == clip.start
+            && let Some(previous_id) = previous.clip
+            && let Some(transition) = track
+                .transitions
+                .iter()
+                .find(|transition| transition.before == previous_id && transition.after == clip.id)
+        {
+            let usable = transition.duration.min(previous.len()).min(clip.source_in);
+            if usable > Tick::ZERO {
+                head = usable;
+                kind = Some(transition.kind);
+            }
+        }
+
+        let chain = format!(
+            "[{index}:v]atrim=start={:.6}:end={:.6},setpts=PTS-STARTPTS,\
+             scale={dims}:force_original_aspect_ratio=decrease,\
+             pad={dims}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}",
+            (clip.source_in - head).secs(),
+            clip.source_out.secs()
         );
+        let label = format!("[v{}]", clip.id.raw());
+
+        match kind {
+            Some(kind) => {
+                let previous = pieces.pop().expect("有转场就一定有前一段");
+                // `xfade` 从 `offset` 开始溶到本片段：offset 落在前一段的尾巴上，
+                // 也就是「前一段总长 - 溶接时长」。两段加起来仍等于原时长。
+                let xfade = format!(
+                    "{}[{label}]xfade=transition={}:duration={:.6}:offset={:.6}[xf{}]",
+                    previous.label,
+                    xfade_name(kind),
+                    head.secs(),
+                    (previous.len() - head).secs().max(0.0),
+                    clip.id.raw()
+                );
+                let mut chains = previous.chains;
+                chains.push(chain);
+                chains.push(xfade);
+                pieces.push(Piece {
+                    chains,
+                    label: format!("[xf{}]", clip.id.raw()),
+                    start: previous.start,
+                    end: clip.end(),
+                    clip: Some(clip.id),
+                });
+            }
+            None => pieces.push(Piece {
+                chains: vec![chain],
+                label,
+                start: clip.start,
+                end: clip.end(),
+                clip: Some(clip.id),
+            }),
+        }
         cursor = clip.end();
     }
 
     // 这条轨没铺满序列：补齐到整条序列的长度。多层 overlay 要求等长，
     // 而 `overlay` 默认按最短的一条截断——少这一段的成片会缺尾巴。
     if cursor < duration {
-        stream.push(
-            format!(
+        pieces.push(Piece {
+            chains: vec![format!(
                 "color=c=black:s={color_size}:r={fps}:d={:.6}",
                 (duration - cursor).secs()
-            ),
-            format!("[bgv{gap_index}]"),
-        );
+            )],
+            label: format!("[bgv{gap_index}]"),
+            start: cursor,
+            end: duration,
+            clip: None,
+        });
     }
 
+    let mut stream = Stream::new();
+    for piece in pieces {
+        for chain in piece.chains {
+            stream.chains.push(chain);
+        }
+        stream.segments.push(piece.label);
+    }
     Ok(stream)
+}
+
+/// 转场类型 → `xfade` 的 `transition` 取值。
+fn xfade_name(kind: crate::timeline::TransitionKind) -> &'static str {
+    match kind {
+        crate::timeline::TransitionKind::CrossDissolve => "dissolve",
+        crate::timeline::TransitionKind::Fade => "fade",
+        crate::timeline::TransitionKind::Wipe => "wipeleft",
+        crate::timeline::TransitionKind::Slide => "slideleft",
+    }
 }
 
 fn audio_stream(

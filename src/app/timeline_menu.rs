@@ -59,6 +59,20 @@ impl PlayerApp {
         };
         let track_id = menu.track;
 
+        // 转场只对「紧挨着的同轨前一段」成立，文案得照实说，不能让用户点了才发现。
+        let index = track.clip_index(menu.clip).unwrap_or(0);
+        let adjacent = index > 0 && track.clips[index - 1].end() == track.clips[index].start;
+        let has_transition = adjacent
+            && track.transitions.iter().any(|transition| {
+                transition.before == track.clips[index - 1].id && transition.after == menu.clip
+            });
+        let transition_label = match (adjacent, has_transition) {
+            (false, _) => "左边没有紧挨着的片段",
+            (true, true) => "去掉左侧转场",
+            (true, false) => "与左侧片段加转场",
+        };
+        let clip_id = menu.clip;
+
         Some(
             div()
                 .id("timeline-menu")
@@ -103,6 +117,17 @@ impl PlayerApp {
                         cx.stop_propagation();
                         this.timeline_menu = None;
                         this.delete_selected_clips(cx);
+                    }),
+                ))
+                .child(item_menu_entry(
+                    "timeline-menu-transition",
+                    IconName::Sparkles,
+                    transition_label,
+                    if adjacent { text() } else { text_faint() },
+                    cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                        cx.stop_propagation();
+                        this.timeline_menu = None;
+                        this.toggle_transition(clip_id, cx);
                     }),
                 ))
                 .child(

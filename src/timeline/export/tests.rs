@@ -321,6 +321,61 @@ fn 视频轨比序列短时补黑对齐() {
 }
 
 #[test]
+fn 相邻片段之间插交叉溶解() {
+    let scratch = Scratch::new("xfade");
+    let (mut project, ids) = project_with(&scratch, &[(s(1), s(3), Tick::ZERO)]);
+    let asset = project.assets[0].id;
+    // 紧贴前一段的第二个片段：source_in 要往前挪 0.5 秒做溶接。
+    let track = project.sequence.tracks[0].id;
+    let second = project.sequence.alloc_id();
+    project
+        .sequence
+        .track_mut(track)
+        .expect("视频轨存在")
+        .clips
+        .push(ClipItem::new(second, asset, s(2), s(4), s(2)));
+    project.sequence.track_mut(track).unwrap().sort_clips();
+
+    let transition = crate::timeline::Transition::new(
+        project.sequence.alloc_id(),
+        ids[0],
+        second,
+        crate::timeline::TransitionKind::CrossDissolve,
+        Tick::from_millis(500),
+    );
+    project
+        .sequence
+        .track_mut(track)
+        .unwrap()
+        .transitions
+        .push(transition);
+
+    let plan = plan_sequence(&project).expect("能导出");
+    assert!(
+        plan.filter
+            .contains("xfade=transition=dissolve:duration=0.500000"),
+        "{}",
+        plan.filter
+    );
+    assert!(
+        plan.filter.contains("offset=1.500000"),
+        "从第一段最后 0.5 秒开始溶：{}",
+        plan.filter
+    );
+    assert!(
+        plan.filter.contains("atrim=start=1.500000:end=4.000000"),
+        "第二段往前多取 0.5 秒：{}",
+        plan.filter
+    );
+    // 两段被 xfade 合成一段，concat 只看到一个。
+    assert!(
+        plan.filter.contains("concat=n=1:v=1:a=0[outv]"),
+        "{}",
+        plan.filter
+    );
+}
+
+#[test]
 fn 素材路径是绝对路径() {
     let scratch = Scratch::new("absolute");
     let (project, _) = project_with(&scratch, &[(s(0), s(1), Tick::ZERO)]);

@@ -375,6 +375,70 @@ impl PlayerApp {
         cx.notify();
     }
 
+    /// 在当前片段与它左邻居之间加 / 去掉一个 0.5 秒的交叉溶解。
+    ///
+    /// 转场的界面入口就这一处：拖边角调溶接是下一版的事，先把「能产生转场」打通，
+    /// 导出侧的 `xfade` 才有东西可测。只对紧挨着的同轨片段成立。
+    pub(super) fn toggle_transition(&mut self, clip: Id, cx: &mut Context<Self>) {
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
+        let Some(track) = project
+            .sequence
+            .tracks
+            .iter()
+            .find(|track| track.clip(clip).is_some())
+        else {
+            return;
+        };
+        let Some(index) = track.clip_index(clip) else {
+            return;
+        };
+        if index == 0 {
+            self.flash("左边没有相邻片段，加不了转场");
+            return;
+        }
+        let previous = &track.clips[index - 1];
+        if previous.end() != track.clips[index].start {
+            self.flash("两个片段之间有空档，加不了转场");
+            return;
+        }
+        let previous_id = previous.id;
+        let existing = track
+            .transitions
+            .iter()
+            .position(|transition| transition.before == previous_id && transition.after == clip);
+
+        let mut sequence = project.sequence.clone();
+        let mut message = "已去掉转场";
+        match existing {
+            Some(index) => {
+                if let Some(track) = sequence.tracks.iter_mut().find(|t| t.clip(clip).is_some())
+                    && index < track.transitions.len()
+                {
+                    track.transitions.remove(index);
+                }
+            }
+            None => {
+                let id = sequence.alloc_id();
+                if let Some(track) = sequence.tracks.iter_mut().find(|t| t.clip(clip).is_some()) {
+                    track.transitions.push(crate::timeline::Transition::new(
+                        id,
+                        previous_id,
+                        clip,
+                        crate::timeline::TransitionKind::CrossDissolve,
+                        Tick::from_micros(500_000),
+                    ));
+                }
+                message = "已加 0.5 秒交叉溶解";
+            }
+        }
+        self.commit_edit(sequence);
+        self.flash(message);
+        self.poke();
+        cx.notify();
+    }
+
     /// 往序列末尾加一条轨道。
     ///
     /// 多轨导出（M3-T03/T04）的前提是序列里真的能有多条同类型轨道；模型一直支持，
