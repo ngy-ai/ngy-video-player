@@ -16,6 +16,7 @@ impl Render for MiniPlayer {
         self.swap_frame(window);
         self.sync_on_top(window, cx);
         self.remember_width(window, cx);
+        self.remember_position(window, cx);
 
         // 任务栏按钮上写的就是窗口标题，小窗现在承担那一条（见 `open_mini` 的
         // `kind`），所以标题得跟着片子走。变了才下发：`SetWindowText` 每次都

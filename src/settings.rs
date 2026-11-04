@@ -294,6 +294,12 @@ pub struct Settings {
     /// 小窗是否置顶。跟着悬浮条上的图钉走，下次开小窗按它还原。
     #[serde(default = "default_mini_on_top")]
     pub mini_on_top: bool,
+    /// 小窗左上角在屏幕可移动范围内的比例（0 = 贴左上，1 = 贴右下）。
+    ///
+    /// 存比例而不是绝对坐标：换分辨率、换 DPI 之后小窗仍会落在视觉上同一个角落。
+    /// `None` 表示还没拖过，按右下角留边距的默认位置摆。
+    #[serde(default)]
+    pub mini_pos: Option<[f32; 2]>,
     pub fullscreen: bool,
     /// 解码模式。早期版本这里存的是 mpv 的 `hwdec` 原始字符串，换成枚举后
     /// 仍认旧键（`alias = "hwdec"`），否则整份配置会解析失败、被默认值覆盖。
@@ -336,6 +342,7 @@ impl Default for Settings {
             playlist_width: 300.0,
             mini_width: 400.0,
             mini_on_top: true,
+            mini_pos: None,
             fullscreen: false,
             decode: DecodeMode::Software,
             render_mode: RenderMode::Performance,

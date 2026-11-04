@@ -41,6 +41,10 @@ pub(in crate::app) struct MiniPlayer {
     pub(in crate::app) on_top_applied: Option<bool>,
     /// 上一次记下的窗口宽度，用来判断用户有没有拖动过边框（变了才回写偏好）。
     pub(in crate::app) last_width: f32,
+    /// 小窗所在的屏幕区域（全局坐标）。窗口位置要相对它换算成比例。
+    pub(in crate::app) screen: Bounds<Pixels>,
+    /// 上一次记下的位置比例；`None` 表示还没量过（打开后的第一帧只记基准）。
+    pub(in crate::app) last_pos: Option<(f32, f32)>,
     /// 主窗口要求关掉小窗（或者是主窗口没了）。真正的关闭要等到下一次 render，
     /// 那时才拿得到 `&mut Window`。
     pub(in crate::app) dismissed: bool,
@@ -56,6 +60,7 @@ impl MiniPlayer {
         app: WeakEntity<PlayerApp>,
         state: MiniState,
         on_top: bool,
+        screen: Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) -> Self {
         Self {
@@ -76,6 +81,8 @@ impl MiniPlayer {
             on_top,
             on_top_applied: None,
             last_width: 0.0,
+            screen,
+            last_pos: None,
             dismissed: false,
             app_gone: false,
             window_title: String::new(),
@@ -210,6 +217,45 @@ impl MiniPlayer {
         };
         window.defer(cx, move |_window, cx| {
             app.update(cx, |app, _cx| app.settings.mini_width = width);
+        });
+    }
+
+    /// 位置变了就按屏幕比例记进偏好，下次开小窗还落在同一个角落。
+    ///
+    /// 与 `remember_width` 同理：回写推到 defer，避免 render 期间二次租借
+    /// `PlayerApp`。第一帧只记基准——位置是 `open_mini` 按偏好摆好的，不必回写。
+    pub(super) fn remember_position(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let bounds = window.bounds();
+        let ratio = (
+            geometry::axis_ratio(
+                f32::from(bounds.origin.x),
+                f32::from(self.screen.origin.x),
+                f32::from(self.screen.size.width),
+                f32::from(bounds.size.width),
+            ),
+            geometry::axis_ratio(
+                f32::from(bounds.origin.y),
+                f32::from(self.screen.origin.y),
+                f32::from(self.screen.size.height),
+                f32::from(bounds.size.height),
+            ),
+        );
+        match self.last_pos {
+            None => {
+                self.last_pos = Some(ratio);
+                return;
+            }
+            Some(last) if (last.0 - ratio.0).abs() < 0.002 && (last.1 - ratio.1).abs() < 0.002 => {
+                return;
+            }
+            Some(_) => self.last_pos = Some(ratio),
+        }
+        let Some(app) = self.app.upgrade() else {
+            return;
+        };
+        let value = [ratio.0, ratio.1];
+        window.defer(cx, move |_window, cx| {
+            app.update(cx, |app, _cx| app.settings.mini_pos = Some(value));
         });
     }
 

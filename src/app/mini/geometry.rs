@@ -19,6 +19,23 @@ pub(in crate::app) fn mini_aspect(ratio: f32, swapped: bool) -> f32 {
     ratio.clamp(0.4, 4.0)
 }
 
+/// 把窗口在某一轴上的位置换算成 0..1 的比例：0 贴屏幕起始边，1 贴结束边。
+///
+/// 窗口比屏幕还大时没有可移动的空间，统一按 0 算——否则选一个负数再夹到 0，
+/// 每次打开都会偏一点。
+pub(in crate::app) fn axis_ratio(
+    origin: f32,
+    screen_origin: f32,
+    screen_span: f32,
+    window_span: f32,
+) -> f32 {
+    let travel = screen_span - window_span;
+    if travel <= 1.0 {
+        return 0.0;
+    }
+    ((origin - screen_origin) / travel).clamp(0.0, 1.0)
+}
+
 /// 指针横坐标换算成片内秒数。
 pub(super) fn time_for_x(bounds: Bounds<Pixels>, x: Pixels, duration: f64) -> Option<f64> {
     let width = f32::from(bounds.size.width);

@@ -1,7 +1,7 @@
 //! 小窗纯计算的单元测试：不需要 ffmpeg，也不需要绘制环境。
 
 use super::super::MiniState;
-use super::geometry::{mini_aspect, mini_width, time_for_x, volume_for_y};
+use super::geometry::{axis_ratio, mini_aspect, mini_width, time_for_x, volume_for_y};
 use super::*;
 
 /// 构造一块轨道区域，省得每处都写 `Bounds::new(point(..), size(..))`。
@@ -30,6 +30,21 @@ fn 小窗高宽比跟随旋转并夹在可用范围() {
     assert!((mini_aspect(wide, true) - wide.recip()).abs() < 1e-6);
     assert_eq!(mini_aspect(10.0, false), 4.0);
     assert_eq!(mini_aspect(0.1, false), 0.4);
+}
+
+#[test]
+fn 小窗位置换算成屏幕比例() {
+    // 1920 宽的屏幕、400 宽的窗口：可移动 1520。
+    assert_eq!(axis_ratio(0.0, 0.0, 1920.0, 400.0), 0.0);
+    assert_eq!(axis_ratio(760.0, 0.0, 1920.0, 400.0), 0.5);
+    // 越界的坐标按端点夹取：换分辨率后不能把窗口算到屏幕外。
+    assert_eq!(axis_ratio(-100.0, 0.0, 1920.0, 400.0), 0.0);
+    assert_eq!(axis_ratio(1920.0, 0.0, 1920.0, 400.0), 1.0);
+    // 副屏从 1920 开始：比例按副屏自己的原点算。
+    assert_eq!(axis_ratio(1920.0, 1920.0, 1920.0, 400.0), 0.0);
+    assert_eq!(axis_ratio(2680.0, 1920.0, 1920.0, 400.0), 0.5);
+    // 窗口比屏幕还大时没有可移动空间，统一回 0。
+    assert_eq!(axis_ratio(100.0, 0.0, 300.0, 400.0), 0.0);
 }
 
 #[test]

@@ -65,11 +65,7 @@ impl PlayerApp {
         let screen = self.screen_bounds(window, cx);
         let width = self.mini_width(screen);
         let height = width / self.mini_aspect();
-        let origin = point(
-            screen.origin.x + screen.size.width - px(width) - px(MINI_MARGIN),
-            // 底部多留一段给任务栏 / Dock，否则小窗会压在它上面。
-            screen.origin.y + screen.size.height - px(height) - px(MINI_BOTTOM_MARGIN),
-        );
+        let origin = self.mini_origin(screen, width, height);
 
         // 窗口一建出来就会立刻画第一帧，那时 `self` 还被可变借用着，
         // 所以初始状态要在这里先算好带进去，而不是让小窗自己去读。
@@ -111,7 +107,7 @@ impl PlayerApp {
                 ..Default::default()
             },
             |window, cx| {
-                let view = cx.new(|cx| MiniPlayer::new(app, state, on_top, cx));
+                let view = cx.new(|cx| MiniPlayer::new(app, state, on_top, screen, cx));
                 // 小窗没有任务栏入口时（macOS / Linux，它只是工具窗口）才需要这层兜底：
                 // 系统把它收走就等于把播放器藏没了，屏幕上什么都不剩。见 `recall`。
                 //
@@ -302,9 +298,17 @@ impl PlayerApp {
         // 这里用小窗最后记下的宽度兜一次底：拖完宽度立刻按 Esc / T 收回时，
         // 下面这次 `save` 才不会把旧宽度写进偏好。
         if let Some(mini) = self.mini.as_ref() {
-            let width = mini.read(cx).last_width;
+            let mini = mini.read(cx);
+            let width = mini.last_width;
             if width >= MINI_MIN_WIDTH && (width - self.settings.mini_width).abs() >= 1.0 {
                 self.settings.mini_width = width;
+            }
+            // 位置同理：`remember_position` 的回写也挂在 defer 上。
+            if let Some(pos) = mini.last_pos {
+                let pos = [pos.0, pos.1];
+                if self.settings.mini_pos != Some(pos) {
+                    self.settings.mini_pos = Some(pos);
+                }
             }
         }
         self.mini = None;
@@ -353,6 +357,24 @@ impl PlayerApp {
         }
         self.set_volume(volume);
         cx.notify();
+    }
+
+    /// 新小窗的左上角：用户拖过就按记下的屏幕比例还原，没拖过就落在右下角
+    /// 留出边距（底部多留一段给任务栏 / Dock，否则小窗会压在它上面）。
+    fn mini_origin(&self, screen: Bounds<Pixels>, width: f32, height: f32) -> Point<Pixels> {
+        if let Some([rx, ry]) = self.settings.mini_pos {
+            // 可移动范围是屏幕减去窗口自身；比例 0 贴起始边，1 贴结束边。
+            let span_x = (f32::from(screen.size.width) - width).max(0.0);
+            let span_y = (f32::from(screen.size.height) - height).max(0.0);
+            return point(
+                screen.origin.x + px(span_x * rx.clamp(0.0, 1.0)),
+                screen.origin.y + px(span_y * ry.clamp(0.0, 1.0)),
+            );
+        }
+        point(
+            screen.origin.x + screen.size.width - px(width) - px(MINI_MARGIN),
+            screen.origin.y + screen.size.height - px(height) - px(MINI_BOTTOM_MARGIN),
+        )
     }
 
     /// 小窗宽度。用户拖过就按拖过的来，但最多占屏幕宽的 40%——
