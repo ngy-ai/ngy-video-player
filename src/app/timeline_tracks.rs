@@ -369,6 +369,24 @@ impl PlayerApp {
         cx.notify();
     }
 
+    /// 在播放头处加一个标记；同一位置再按一次就删掉它。
+    pub(super) fn toggle_marker_at_playhead(&mut self, cx: &mut Context<Self>) {
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
+        let at = project.ui.playhead;
+        let name = format!("标记 {}", project.sequence.markers.len() + 1);
+        let added = project.sequence.toggle_marker(at, name);
+
+        self.flash(if added {
+            "已添加标记"
+        } else {
+            "已删除标记"
+        });
+        self.poke();
+        cx.notify();
+    }
+
     /// 记下落点。相同落点直接返回，拖动时指针每移动一个像素都重绘整窗太浪费。
     fn set_timeline_drop(&mut self, drop: TimelineDrop, cx: &mut Context<Self>) {
         if self.timeline_drop == Some(drop) {

@@ -392,6 +392,19 @@ impl Sequence {
         self.markers.iter().find(|marker| marker.id == id)
     }
 
+    /// 在 `at` 处加一个标记；同一时刻已经有标记就删掉它。返回是否新增。
+    ///
+    /// 用精确的时间相等判断：播放头没动过时两次按下的 `Tick` 完全一样，
+    /// 拖过一点就是另一个位置，该加新的。
+    pub fn toggle_marker(&mut self, at: Tick, name: impl Into<String>) -> bool {
+        if let Some(index) = self.markers.iter().position(|marker| marker.at == at) {
+            self.markers.remove(index);
+            return false;
+        }
+        self.add_marker(at, name);
+        true
+    }
+
     /// id 是否已经被占用（读工程时用来修 `next_id`）。
     pub fn id_is_used(&self, id: Id) -> bool {
         self.tracks.iter().any(|track| {

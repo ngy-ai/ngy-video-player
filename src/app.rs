@@ -74,6 +74,7 @@ actions!(
         SaveProject,
         SaveProjectAs,
         SplitPlayhead,
+        ToggleMarker,
     ]
 );
 
@@ -747,6 +748,8 @@ pub fn key_bindings() -> Vec<KeyBinding> {
             SplitPlayhead,
             None,
         ),
+        // `m` 已经是静音，标记只能用带 Shift 的那个。
+        KeyBinding::new("shift-m", ToggleMarker, None),
         KeyBinding::new("n", NextFile, None),
         KeyBinding::new("p", PreviousFile, None),
         KeyBinding::new("[", SpeedDown, None),

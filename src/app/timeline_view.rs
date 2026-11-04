@@ -328,6 +328,32 @@ impl PlayerApp {
                 );
             }
         }
+        // 标记：贯穿标尺的竖线加顶上一颗小方块。名字不上标尺——刻度文字已经够挤了。
+        for marker in &sequence.markers {
+            let x = view.x_of(marker.at.secs());
+            if x < 0.0 || x > lane_width {
+                continue;
+            }
+            ruler = ruler
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(x))
+                        .top_0()
+                        .bottom_0()
+                        .w(px(1.0))
+                        .bg(gpui_kit::rgba(0xf0c67499)),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(x - 3.0))
+                        .top_0()
+                        .size(px(6.0))
+                        .rounded(px(1.0))
+                        .bg(gpui_kit::rgba(0xf0c674)),
+                );
+        }
         root = root.child(ruler);
 
         // 轨道与左侧名称列。只画视口内、面板高度内的轨道，三小时工程也一样快。

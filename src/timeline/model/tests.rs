@@ -84,6 +84,27 @@ fn 序列往返保留轨道片段转场与标记() {
 }
 
 #[test]
+fn 同一位置再按一次标记等于删除() {
+    let mut sequence = Sequence::new("标记", Rational::FPS_25, 1920, 1080);
+    let at = Tick::from_secs(2.0);
+
+    assert!(sequence.toggle_marker(at, "标记 1"), "第一次是新增");
+    assert_eq!(sequence.markers.len(), 1);
+    assert!(
+        !sequence.toggle_marker(at, "标记 2"),
+        "同一位置再按一次是删除"
+    );
+    assert!(sequence.markers.is_empty());
+
+    // 差一秒就是另一个位置，该加新的。
+    assert!(sequence.toggle_marker(at, "A"));
+    assert!(sequence.toggle_marker(Tick::from_secs(3.0), "B"));
+    assert_eq!(sequence.markers.len(), 2);
+    assert_eq!(sequence.markers[0].name, "A", "标记按时间排序");
+    assert!(sequence.validate().is_ok());
+}
+
+#[test]
 fn 轨道状态随序列往返且老工程默认正常() {
     let mut sequence = sample();
     sequence.tracks[0].muted = true;
