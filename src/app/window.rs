@@ -268,8 +268,13 @@ impl PlayerApp {
         });
     }
 
-    /// 让小窗自己关掉。真正的销毁在它的下一次 render 里做——只有那儿拿得到
-    /// `&mut Window`。引用与偏好由 `mini_closed` 收尾。
+    /// 让小窗自己关掉。引用与偏好由 `mini_closed` 收尾。
+    ///
+    /// 不只置一个 `dismissed` 等小窗下一次 render：它可能正被系统藏着
+    /// （macOS / X11 上被别的窗口盖住、或者最小化），绘制不跑，主窗口就永远
+    /// 等不到 `mini_closed` 里的 `reveal_main`，最后变成「一个窗口都不剩」。
+    /// 所以这里直接移除窗口，只把「等到下一轮」留给租借：当前 `PlayerApp`
+    /// 还借着自己，`on_window_closed` 回调里的 `this.update` 会二次租借而 panic。
     pub(super) fn dismiss_mini(&mut self, cx: &mut Context<Self>) {
         let Some(mini) = &self.mini else {
             return;
@@ -281,6 +286,14 @@ impl PlayerApp {
             mini.dismissed = true;
             cx.notify();
         });
+        let Some(handle) = self.mini_window else {
+            return;
+        };
+        let handle: AnyWindowHandle = handle.into();
+        cx.spawn(async move |_this, cx| {
+            let _ = cx.update_window(handle, |_root, window, _cx| window.remove_window());
+        })
+        .detach();
     }
 
     /// 小窗关掉之后的收尾。窗口已经销毁，这里清界面侧的引用，并把主窗口放回来。
