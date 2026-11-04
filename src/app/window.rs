@@ -58,6 +58,8 @@ impl PlayerApp {
         // 退出全屏是**异步**的（gpui 在自己的任务里改窗口样式），收起主窗口因此
         // 也得等它落地，见 `hide_main_when_windowed`。
         let leaving_fullscreen = window.is_fullscreen();
+        // 记下来，等还原时把全屏还回去（见 `mini_closed`）。
+        self.mini_restore_fullscreen = leaving_fullscreen;
         if leaving_fullscreen {
             window.toggle_fullscreen();
         }
@@ -176,6 +178,8 @@ impl PlayerApp {
             }
             Err(error) => {
                 log_error!("打开小窗失败: {error:#}");
+                // 没进小窗，就别把「还原后要回全屏」这个意图留在身上。
+                self.mini_restore_fullscreen = false;
                 self.flash("打开小窗失败");
             }
         }
@@ -321,6 +325,17 @@ impl PlayerApp {
         // 这时多半还藏着——播放器不能以「一个窗口都没有」的样子留在后台，既看不见
         // 也没法操作。把它放回来，任务栏那一条也就跟着回来了。
         self.reveal_main(cx);
+        // 从全屏进的小窗：还原时把全屏还回去，否则用户会觉得自己按了 T 就丢了全屏。
+        // 进出全屏都是异步的，这里只发起请求，不手动改窗口样式。
+        if self.mini_restore_fullscreen {
+            self.mini_restore_fullscreen = false;
+            let handle = self.main_window;
+            let _ = cx.update_window(handle, |_root, window, _cx| {
+                if !window.is_fullscreen() {
+                    window.toggle_fullscreen();
+                }
+            });
+        }
         self.settings.save();
         self.flash("小窗：关");
     }

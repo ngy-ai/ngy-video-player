@@ -91,6 +91,7 @@ impl PlayerApp {
             mini: None,
             mini_window: None,
             main_restoring: false,
+            mini_restore_fullscreen: false,
             main_window: window.window_handle(),
             association_status: platform::associations::Status::default(),
             gpu_adapters: platform::gpu::adapters(),
