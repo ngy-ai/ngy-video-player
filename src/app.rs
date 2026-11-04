@@ -118,6 +118,7 @@ mod playlist_ui;
 mod project_autosave;
 mod project_export;
 mod project_file;
+mod project_pack;
 mod proxy;
 mod remux;
 mod render;

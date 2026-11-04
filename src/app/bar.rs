@@ -66,6 +66,11 @@ impl PlayerApp {
                         .hint(save_as_hint)
                         .enabled(self.project.is_some()),
                 ));
+                // 收集后工程变成自包含的：换机器打开不会缺素材。
+                items.push(BarItem::Entry(
+                    BarEntry::new("收集素材到工程目录", CollectAssets)
+                        .enabled(self.project.is_some() && self.project_path.is_some()),
+                ));
                 items.push(BarItem::Entry(
                     BarEntry::new("关闭工程", CloseProject).enabled(self.project.is_some()),
                 ));
@@ -371,6 +376,7 @@ impl PlayerApp {
                 self.save_project(Some(window), cx, None);
             }
             BarAction::SaveAs => self.save_project_as(Some(window), cx, None),
+            BarAction::CollectAssets => self.collect_assets(cx),
             BarAction::CloseProject => {
                 self.request_project_action(AfterSaveConfirm::CloseProject, Some(window), cx)
             }
