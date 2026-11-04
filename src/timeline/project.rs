@@ -9,7 +9,7 @@
 //! 素材找不到时工程照常打开：文件不存在只在 [`Asset::missing`] 上打标记，界面据此
 //! 提示重链，而不是让整个工程打不开。
 
-use crate::timeline::{AssetId, Id, Rational, Sequence, Tick};
+use crate::timeline::{AssetId, AssetState, Id, MediaInfo, MediaStamp, Rational, Sequence, Tick};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
@@ -34,6 +34,10 @@ pub struct Asset {
     /// 打开工程时原文件已经不在。不写进工程文件，下次打开重新判断。
     #[serde(skip)]
     pub missing: bool,
+    /// 探测结果缓存。随工程存盘，打开工程不必重探。
+    pub media: Option<MediaInfo>,
+    /// 探测时的文件指纹。文件改过时用它判断缓存过期。
+    pub stamp: Option<MediaStamp>,
 }
 
 impl Asset {
@@ -44,6 +48,26 @@ impl Asset {
             .map(|name| name.to_string_lossy().into_owned())
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| "素材".to_string())
+    }
+
+    /// 此刻能不能直接剪这段素材。
+    ///
+    /// 没探测过的素材算 `Ready`：没有缓存也就没有「过期」可言，真正要不要探测
+    /// 由调用方决定。文件被换过（大小或修改时间不同）才算 `Changed`。
+    pub fn state(&self) -> AssetState {
+        if self.missing {
+            return AssetState::Missing;
+        }
+        if self.resolved.as_os_str().is_empty() {
+            return AssetState::Ready;
+        }
+        if self.media.is_none() {
+            return AssetState::Ready;
+        }
+        match self.stamp {
+            Some(stamp) if MediaStamp::of(&self.resolved) == Some(stamp) => AssetState::Ready,
+            _ => AssetState::Changed,
+        }
     }
 }
 
@@ -125,6 +149,8 @@ impl Project {
             path: stored,
             resolved: absolute,
             missing: !path.is_file(),
+            media: None,
+            stamp: None,
         });
         id
     }

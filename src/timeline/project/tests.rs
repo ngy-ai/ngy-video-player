@@ -247,6 +247,57 @@ fn 加载时修好计数器并剔除失效选中() {
 }
 
 #[test]
+fn 探测结果随工程存盘且文件改动后标记过期() {
+    let dir = scratch("media-cache");
+    let path = dir.join("p.ngyproj");
+    let file = media(&dir, "a.mp4");
+    let mut project = Project::new();
+    let asset = project.add_asset(&file);
+
+    let stamp = MediaStamp::of(&file).expect("文件指纹");
+    {
+        let entry = project
+            .assets
+            .iter_mut()
+            .find(|entry| entry.id == asset)
+            .expect("素材登记");
+        entry.media = Some(MediaInfo {
+            duration: Tick::from_secs(10.0),
+            width: 1920,
+            height: 1080,
+            channels: 2,
+            ..MediaInfo::default()
+        });
+        entry.stamp = Some(stamp);
+    }
+    assert_eq!(project.asset(asset).unwrap().state(), AssetState::Ready);
+
+    project.save(&path).expect("保存工程");
+    let project = Project::open(&path).expect("打开工程");
+    let entry = project.asset(asset).expect("素材表还在");
+    assert_eq!(
+        entry.media.as_ref().unwrap().width,
+        1920,
+        "探测结果随工程存盘"
+    );
+    assert_eq!(entry.state(), AssetState::Ready);
+
+    // 换一份内容不同、大小也不同的文件：缓存必须失效而不是静默沿用。
+    fs::write(&file, b"a completely different file").expect("换文件");
+    assert_eq!(entry.state(), AssetState::Changed);
+
+    fs::remove_file(&file).expect("删文件");
+    let reopened = Project::open(&path).expect("素材没了也能打开");
+    assert_eq!(
+        reopened.asset(asset).unwrap().state(),
+        AssetState::Missing,
+        "文件不在原地时提示重链"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn 保存会去掉指向已删片段的转场() {
     let dir = scratch("dangling");
     let path = dir.join("p.ngyproj");

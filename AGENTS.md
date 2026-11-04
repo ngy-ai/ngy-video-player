@@ -59,6 +59,7 @@ src/clip/preset.rs    导出预设的存盘与读取（presets.json）
 src/encoder.rs   硬件编码器探测：NVENC / QSV / AMF / VideoToolbox
 src/proxy.rs     代理文件生成：低码率预览副本
 src/metadata.rs  章节与元数据编辑：ffmetadata、流复制任务
+src/media.rs     素材探测：`ffmpeg -i` 解析时长/帧率/分辨率/色彩/声道并登记进工程
 src/multicam.rs  双机位并排导出（sync 子模块：音频互相关自动对齐，依赖 rustfft）
 src/subtitle_codec.rs 字幕编码选择（轨道编辑与元数据编辑共用）
 src/convert.rs   格式转换：把当前文件或整个文件夹转成指定格式
@@ -83,6 +84,7 @@ src/player/engine.rs  引擎入口：Engine 句柄、Shared 共享状态、命�
 src/player/engine/    state（对外类型）、event_loop、dispatch、render_loop
 src/timeline.rs  剪辑时间线：入口只放文档、模块声明与 `pub use`
 src/timeline/time.rs  Tick（i64 微秒）与 Rational 帧率：全项目唯一的帧↔时间换算入口
+src/timeline/media.rs  素材元信息、文件指纹与过期判断；不含 ffmpeg 调用
 src/timeline/model.rs  序列 → 轨道 → 片段、转场与标记；纯数据，不持有文件路径
 src/timeline/ops.rs    编辑操作纯函数：旧序列进、新序列出，非法操作返回错误
 src/timeline/project.rs  .ngyproj 工程文件：版本迁移、相对素材路径、原子写 + .bak

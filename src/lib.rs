@@ -12,6 +12,7 @@ mod embed;
 // 硬件编码器探测：裁切与格式转换共用，对外没有 API。
 mod encoder;
 pub mod formats;
+pub mod media;
 pub mod metadata;
 pub mod multicam;
 pub mod platform;
