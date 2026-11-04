@@ -23,12 +23,10 @@ pub fn plan_sequence(project: &Project) -> Result<ExportPlan, ExportError> {
         return Err(ExportError::Empty);
     }
 
-    // 轨道顺序就是叠放顺序：列表靠上的画在上面。静音 / 隐藏的轨道整条跳过。
-    let video_tracks: Vec<&Track> = sequence
-        .tracks
-        .iter()
-        .filter(|track| track.kind == TrackKind::Video && !track.muted && !track.clips.is_empty())
-        .collect();
+    // 轨道顺序就是叠放顺序：列表靠上的画在上面。选轨规则与预览共用一份
+    // （`timeline::preview::enabled_video_tracks`），两边不会各写一遍。
+    let video_tracks: Vec<&Track> =
+        crate::timeline::preview::enabled_video_tracks(sequence).collect();
     if video_tracks.is_empty() {
         return Err(ExportError::NoVideoTrack);
     }

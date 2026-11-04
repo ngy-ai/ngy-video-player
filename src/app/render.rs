@@ -262,7 +262,7 @@ impl Render for PlayerApp {
                     this.drag_playlist_width(event.position.x, window);
                 }
                 if this.timeline_dragging {
-                    this.seek_timeline_to(event.position.x);
+                    this.seek_timeline_to(event.position.x, cx);
                 }
                 cx.notify();
             }))

@@ -12,6 +12,7 @@ mod export;
 mod media;
 mod model;
 mod ops;
+pub mod preview;
 mod project;
 mod time;
 mod undo;

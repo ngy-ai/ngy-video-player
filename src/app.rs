@@ -126,6 +126,7 @@ mod scope;
 mod session;
 mod settings_panel;
 mod timeline_menu;
+mod timeline_preview;
 mod timeline_tracks;
 mod timeline_view;
 mod video_area;
@@ -392,6 +393,8 @@ pub struct PlayerApp {
     timeline_drop: Option<TimelineDrop>,
     /// 时间线片段上的右键菜单；`None` 表示没展开。
     timeline_menu: Option<TimelineMenu>,
+    /// 工程模式预览正在放的那个素材文件。同一个文件只 seek，换文件才重新加载。
+    timeline_preview: Option<PathBuf>,
     /// 正在跑的导出任务；`None` 表示空闲。
     export_task: Option<ExportTask>,
     /// 导出进度 0..=1，仅在 `export_task` 存在时有意义。

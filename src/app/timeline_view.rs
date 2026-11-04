@@ -43,6 +43,7 @@ impl PlayerApp {
             self.history = None;
             self.timeline_dragging = false;
             self.timeline_menu = None;
+            self.timeline_preview = None;
             self.flash("已关闭工程");
         }
         self.poke();
@@ -155,6 +156,9 @@ impl PlayerApp {
                     self.autosave.mark_saved();
                     self.flash(format!("已打开工程「{name}」"));
                 }
+                // 打开就出一帧：进来先看到黑屏，会让人以为工程打不开。
+                self.timeline_preview = None;
+                self.preview_at_playhead(cx);
             }
             Err(error) => self.flash(format!("打开工程失败：{error}")),
         }
@@ -165,7 +169,7 @@ impl PlayerApp {
     /// 把窗口横坐标换成时间线时间，并移动播放头。
     ///
     /// 不调用播放器的 seek：工程模式下时间线是预览，拖动播放头只改工程里的位置。
-    pub(super) fn seek_timeline_to(&mut self, x: Pixels) {
+    pub(super) fn seek_timeline_to(&mut self, x: Pixels, cx: &mut Context<Self>) {
         let Some(project) = self.project.as_ref() else {
             return;
         };
@@ -175,6 +179,8 @@ impl PlayerApp {
         if let Some(project) = self.project.as_mut() {
             project.ui.playhead = Tick::from_secs(seconds);
         }
+        // 播放头动了，画面跟着走（M4-T01）。
+        self.preview_at_playhead(cx);
     }
 
     pub(super) fn scroll_timeline(&mut self, pixels: f32) {
@@ -484,7 +490,7 @@ impl PlayerApp {
                 cx.listener(|this, event: &MouseDownEvent, _window, cx| {
                     cx.stop_propagation();
                     this.timeline_dragging = true;
-                    this.seek_timeline_to(event.position.x);
+                    this.seek_timeline_to(event.position.x, cx);
                     this.poke();
                     cx.notify();
                 }),

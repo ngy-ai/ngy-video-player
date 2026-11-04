@@ -89,6 +89,7 @@ impl PlayerApp {
             timeline_dragging: false,
             timeline_drop: None,
             timeline_menu: None,
+            timeline_preview: None,
             export_task: None,
             export_progress: None,
             export_queue: VecDeque::new(),
