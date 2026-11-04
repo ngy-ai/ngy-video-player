@@ -138,8 +138,7 @@ src/player/engine/    state（对外类型）、event_loop、dispatch、render_l
   - 跨模块的集成测试留在 `tests/` 顶层。
 
 现状：`src/app.rs` 已经拆到 570 行左右；仍超限的是 `src/app/remux.rs`（约 810 行）、
-`src/app/metadata.rs`（约 790 行）、`src/app/mini.rs`（约 770 行）、
-`src/app/convert/panel.rs`（约 760 行）、`src/clip/export/tests.rs`（约 780 行）。
+`src/app/mini.rs`（约 770 行）、`src/app/convert/panel.rs`（约 760 行）。
 改动这些文件时先把要动的区域抽成子模块再加新逻辑，不要继续往上堆。
 
 ## 完成后必须自动提交（强制规则）
