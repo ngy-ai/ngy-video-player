@@ -207,12 +207,27 @@ impl MiniPlayer {
         if (self.state.speed - state.speed).abs() >= 0.001 {
             self.flash_text(SharedString::from(format_speed(state.speed)), cx);
         }
+        // 静音切换与滚轮调音量要有反馈：小窗盖在画面上，主窗口的 flash 看不见。
+        if self.state.muted != state.muted {
+            self.flash_text(
+                SharedString::from(if state.muted {
+                    "已静音"
+                } else {
+                    "取消静音"
+                }),
+                cx,
+            );
+        }
+        // 拖动滑块时不浮——面板里本来就有数字，而且每帧都在变，浮层会被反复重启。
+        if !self.volume_dragging && (self.state.volume - state.volume).abs() >= 0.5 {
+            self.flash_text(SharedString::from(format!("音量 {:.0}%", state.volume)), cx);
+        }
         self.state = state;
         cx.notify();
     }
 
     /// 让浮层显示 2 秒。代次用于连续触发：上一个定时器不能把新浮层提前收掉。
-    fn flash_text(&mut self, text: SharedString, cx: &mut Context<Self>) {
+    pub(super) fn flash_text(&mut self, text: SharedString, cx: &mut Context<Self>) {
         self.flash_seq = self.flash_seq.wrapping_add(1);
         let seq = self.flash_seq;
         self.flash = Some(text);

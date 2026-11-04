@@ -390,6 +390,13 @@ impl MiniPlayer {
                                     MouseButton::Left,
                                     cx.listener(|this, _: &MouseUpEvent, _window, cx| {
                                         this.volume_dragging = false;
+                                        // 拖动期间 `pull_state` 不浮音量，松手补一条最终值。
+                                        let text = if this.state.muted {
+                                            "已静音".to_string()
+                                        } else {
+                                            format!("音量 {:.0}%", this.state.volume)
+                                        };
+                                        this.flash_text(SharedString::from(text), cx);
                                         cx.notify();
                                     }),
                                 ),
