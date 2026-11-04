@@ -9,5 +9,6 @@
 mod action;
 mod panel;
 mod state;
+mod widgets;
 
 pub(in crate::app) use state::ConvertDialog;

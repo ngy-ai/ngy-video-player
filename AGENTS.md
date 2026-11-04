@@ -155,9 +155,9 @@ src/timeline/view.rs    时间线视图状态：缩放（1 像素 = 1 帧 ~ 10 �
     `#[cfg(test)] mod tests;`。
   - 跨模块的集成测试留在 `tests/` 顶层。
 
-现状：`src/app.rs` 已经拆到 570 行左右；仍超限的是 `src/app/mini.rs`（约 770 行）、
-`src/app/convert/panel.rs`（约 760 行）。
-改动这些文件时先把要动的区域抽成子模块再加新逻辑，不要继续往上堆。
+现状：所有源码文件都在 700 行以内（最大的三个：`src/app/convert/panel.rs` 约 673 行、
+`src/app.rs` 约 655 行、`src/app/timeline_tracks.rs` 约 615 行）。
+新增代码时如果目标文件接近上限，先把要动的区域抽成子模块再加逻辑，不要继续往上堆。
 
 ## 完成后必须自动提交（强制规则）
 
