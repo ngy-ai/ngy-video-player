@@ -22,7 +22,7 @@ impl PlayerApp {
             .items()
             .get(index)
             .is_some_and(|item| item.is_dir());
-        if is_dir && !modifiers.shift && !modifiers.secondary() {
+        if is_dir && !modifiers.shift && !modifiers.secondary(cx) {
             self.toggle_dir(index, cx);
             return;
         }
@@ -44,7 +44,7 @@ impl PlayerApp {
             return;
         }
 
-        if modifiers.secondary() {
+        if modifiers.secondary(cx) {
             if !self.selection.remove(&index) {
                 self.selection.insert(index);
             }

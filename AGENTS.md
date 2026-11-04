@@ -118,7 +118,8 @@ src/timeline/view.rs    时间线视图状态：缩放（1 像素 = 1 帧 ~ 10 �
 - 需要 ffmpeg 的端到端测试一律标 `#[ignore]`：没装 ffmpeg 的机器上 `cargo test`
   要能全绿，本地用 `cargo test -- --ignored` 手工跑。
 - 注释用中文，解释「为什么」而不是复述代码；错误信息要给出可执行的解决路径。
-- 新增依赖前先确认必要性；`gpui-kit` 版本与其它 ngy-* 项目保持一致。
+- 新增依赖前先确认必要性；`gpui-kit` 已升到 0.9（2026-11），其它 ngy-* 项目如果还锁在
+  0.6.x，同一个 target 目录里会各自编译一整套 gpui，升级尽量一起动。
 - `.cargo/config.toml` 里的 `+crt-static` 不能删：exe 要能在没装 VC++ 运行库的
   干净 Windows 上直接跑（见 `docs/adr/0006`）。
 - 不要提交大文件、密钥、日志或本地配置。

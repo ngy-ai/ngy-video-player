@@ -277,7 +277,7 @@ impl Render for PlayerApp {
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseUpEvent, _window, cx| this.release_drags(cx)),
             )
-            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, cx| {
+            .on_scroll(cx.listener(|this, event: &ScrollEvent, _window, cx| {
                 let delta = match event.delta {
                     ScrollDelta::Pixels(delta) => f32::from(delta.y),
                     ScrollDelta::Lines(delta) => delta.y * 24.0,
@@ -290,7 +290,7 @@ impl Render for PlayerApp {
                 //
                 // 方向：上滚回到前面的帧、下滚往后的帧。GPUI 里上滚是正 y，
                 // 与「加音量」同向，所以步进要取反。
-                if event.modifiers.secondary() {
+                if event.modifiers.secondary(cx) {
                     let steps = match event.delta {
                         ScrollDelta::Lines(delta) => -(delta.y.signum() as i32),
                         ScrollDelta::Pixels(delta) => {

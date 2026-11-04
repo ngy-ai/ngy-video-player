@@ -324,7 +324,7 @@ impl PlayerApp {
             .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
                 cx.stop_propagation();
             }))
-            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, cx| {
+            .on_scroll(cx.listener(|this, event: &ScrollEvent, _window, cx| {
                 if this.project.is_none() {
                     return;
                 }
@@ -336,7 +336,7 @@ impl PlayerApp {
                     return;
                 }
                 cx.stop_propagation();
-                if event.modifiers.secondary() {
+                if event.modifiers.secondary(cx) {
                     // 上滚放大、下滚缩小；锚点是鼠标所在的轨道区横坐标。
                     let factor = if dy > 0.0 { 1.25 } else { 0.8 };
                     let anchor = f32::from(event.position.x) - TIMELINE_GUTTER;

@@ -35,9 +35,9 @@ use gpui_kit::{
     AnyElement, AnyWindowHandle, App, AppContext, Bounds, ClickEvent, Context, Corners,
     CursorStyle, ElementId, Entity, ExternalPaths, FocusHandle, Hsla, IntoElement, KeyBinding,
     KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, Render, RenderImage, ScrollDelta, ScrollWheelEvent, SharedString, Styled, WeakEntity,
-    Window, WindowBounds, WindowHandle, WindowKind, WindowOptions, WindowVisibility, actions,
-    canvas, div, img, point, px, size,
+    Point, Render, RenderImage, ScrollDelta, ScrollEvent, SharedString, Styled, WeakEntity, Window,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions, WindowVisibility, actions, canvas, div,
+    img, point, px, size,
 };
 use std::{
     cell::Cell,
@@ -802,6 +802,8 @@ pub fn run(options: LaunchOptions) -> Result<()> {
                 move |window, cx| {
                     let view = cx.new(|cx| PlayerApp::new(options.clone(), window, cx));
                     view.update(cx, |_, cx| cx.notify());
+                    // 标题栏的 × 也要走未保存确认（见 `app/window.rs`）。
+                    self::window::guard_window_close(view.clone(), window, cx);
                     view
                 },
             )

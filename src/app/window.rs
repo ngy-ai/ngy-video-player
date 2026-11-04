@@ -469,3 +469,78 @@ impl PlayerApp {
 
     // -- 画面设置 ----------------------------------------------------------
 }
+
+/// 窗口被关掉之前该做什么。
+#[derive(Debug, PartialEq, Eq)]
+enum CloseAction {
+    /// 没有未保存改动：直接放行。
+    Allow,
+    /// 先问一句「保存 / 不保存 / 取消」，这一次先别关。
+    Ask,
+    /// 已经有对话框在等用户：既不放行，也不再叠一个。
+    Wait,
+}
+
+fn close_action(modified: bool, dialog_open: bool) -> CloseAction {
+    if !modified {
+        CloseAction::Allow
+    } else if dialog_open {
+        CloseAction::Wait
+    } else {
+        CloseAction::Ask
+    }
+}
+
+/// 给窗口挂上「关闭前确认」。
+///
+/// 标题栏的 × 以前是直接结束进程，未保存的东西只能靠 `.autosave` 事后捞回来。
+/// gpui 0.9 起有 `on_window_should_close`，可以在这里拦一下：返回 `false` 就不关，
+/// 然后把菜单「退出」那条确认路径复用一遍（保存 / 不保存 / 取消）。
+///
+/// 回调里不能阻塞，所以「拦截」和「弹框」分两步：先返回 `false`，再用 `defer`
+/// 把确认流程排到下一轮循环，避免在窗口事件的回调栈里再开一个原生对话框。
+pub(super) fn guard_window_close(player: Entity<PlayerApp>, window: &mut Window, cx: &mut App) {
+    let handle = player.downgrade();
+    window.on_window_should_close(cx, move |_window, cx| {
+        let Some(player) = handle.upgrade() else {
+            // 实体已经没了：没什么好确认的。
+            return true;
+        };
+        let app = player.read(cx);
+        match close_action(app.project_modified(), app.dialog_open) {
+            CloseAction::Allow => true,
+            CloseAction::Wait => false,
+            CloseAction::Ask => {
+                let player = handle.clone();
+                cx.defer(move |cx| {
+                    let _ = player.update(cx, |this, cx| {
+                        this.request_project_action(AfterSaveConfirm::Quit, None, cx);
+                    });
+                });
+                false
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 没有未保存改动就直接放行() {
+        assert_eq!(close_action(false, false), CloseAction::Allow);
+        // 就算正开着别的对话框，没改动也不拦。
+        assert_eq!(close_action(false, true), CloseAction::Allow);
+    }
+
+    #[test]
+    fn 有未保存改动要先问() {
+        assert_eq!(close_action(true, false), CloseAction::Ask);
+    }
+
+    #[test]
+    fn 已经有对话框时不叠第二个也不放行() {
+        assert_eq!(close_action(true, true), CloseAction::Wait);
+    }
+}

@@ -159,7 +159,7 @@ impl Render for MiniPlayer {
                     cx.notify();
                 });
             }))
-            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, cx| {
+            .on_scroll(cx.listener(|this, event: &ScrollEvent, _window, cx| {
                 // 只在音量面板展开时接管滚轮：那一刻指针必然停在图标或面板上，
                 // 也就是「用户正在调音量」。其余位置滚轮不做任何事——小窗没有
                 // 可滚动的内容，接过滚轮也不会抢走别处的手势。
