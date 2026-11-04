@@ -132,3 +132,31 @@ fn 倍速收进量程并对齐两位小数() {
     assert_eq!(normalize_speed(f64::NAN), 1.0);
     assert_eq!(normalize_speed(f64::INFINITY), 1.0);
 }
+
+#[test]
+fn 小窗偏好能存能读() {
+    let settings: Settings = serde_json::from_str(
+        r#"{"mini_width": 480.0, "mini_on_top": false, "mini_pos": [0.25, 0.75]}"#,
+    )
+    .unwrap();
+    assert_eq!(settings.mini_width, 480.0);
+    assert!(!settings.mini_on_top);
+    assert_eq!(settings.mini_pos, Some([0.25, 0.75]));
+
+    // 再存一轮：位置是数组，读回来不能变成别的形状。
+    let text = serde_json::to_string(&settings).unwrap();
+    let back: Settings = serde_json::from_str(&text).unwrap();
+    assert_eq!(back.mini_pos, Some([0.25, 0.75]));
+    assert_eq!(back.mini_width, 480.0);
+    assert!(!back.mini_on_top);
+}
+
+#[test]
+fn 旧配置没有小窗位置时不影响其它字段() {
+    // `mini_pos` 是后加的字段：老配置里没有它，只能是「还没拖过」，不能连带别的字段一起失效。
+    let settings: Settings = serde_json::from_str(r#"{"mini_width": 360.0}"#).unwrap();
+    assert_eq!(settings.mini_pos, None);
+    assert_eq!(settings.mini_width, 360.0);
+    // 置顶的默认值来自 `Settings::default()`，而不是 `bool::default()`。
+    assert!(settings.mini_on_top);
+}
