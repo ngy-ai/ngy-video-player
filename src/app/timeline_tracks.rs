@@ -164,6 +164,14 @@ impl PlayerApp {
                         cx.stop_propagation();
                         this.select_clip(clip_id, cx);
                     }))
+                    // 右键先选中再弹菜单：菜单上的每一项都作用于这一段。
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                            cx.stop_propagation();
+                            this.open_timeline_menu(clip_id, track_id, event.position, cx);
+                        }),
+                    )
                     // 拖到别的同类型轨道；落回同一条轨道就是改起点。
                     .on_drag(
                         TimelineDrag {

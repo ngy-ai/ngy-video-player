@@ -227,7 +227,9 @@ impl Render for PlayerApp {
                 cx.listener(|this, _: &MouseDownEvent, _window, cx| {
                     // 点任意别处先收起右键菜单；菜单项自己的点击会截断冒泡。
                     let lost_focus = this.clear_clip_focus();
-                    let closed = this.item_menu.take().is_some() | this.tab_menu.take().is_some();
+                    let closed = this.item_menu.take().is_some()
+                        | this.tab_menu.take().is_some()
+                        | this.timeline_menu.take().is_some();
                     if closed || lost_focus {
                         cx.notify();
                     }
@@ -237,7 +239,9 @@ impl Render for PlayerApp {
                 MouseButton::Right,
                 cx.listener(|this, _: &MouseDownEvent, _window, cx| {
                     // 空白处右键同样收起菜单（行上/页签上的右键会截断，转去弹新菜单）。
-                    let closed = this.item_menu.take().is_some() | this.tab_menu.take().is_some();
+                    let closed = this.item_menu.take().is_some()
+                        | this.tab_menu.take().is_some()
+                        | this.timeline_menu.take().is_some();
                     if closed {
                         cx.notify();
                     }
@@ -352,6 +356,7 @@ impl Render for PlayerApp {
             // 右键菜单在普通浮层之上、模态面板之下。
             .children(self.render_item_menu(cx))
             .children(self.render_tab_menu(cx))
+            .children(self.render_timeline_menu(cx))
             .children(self.render_settings(window, cx))
             .children(self.render_remux_dialog(cx))
             .children(self.render_metadata_dialog(cx))

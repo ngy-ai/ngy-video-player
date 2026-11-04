@@ -32,6 +32,9 @@ impl PlayerApp {
             self.show_settings = false;
         } else if self.file_info.is_some() {
             self.file_info = None;
+        } else if self.timeline_menu.is_some() {
+            // 时间线只在工程模式下画，全屏时它跟右侧面板一样不存在，不必再判。
+            self.timeline_menu = None;
         } else if !fullscreen && self.item_menu.is_some() {
             self.item_menu = None;
         } else if !fullscreen && self.tab_menu.is_some() {

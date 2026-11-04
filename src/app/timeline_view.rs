@@ -42,6 +42,7 @@ impl PlayerApp {
             self.project_saved = None;
             self.history = None;
             self.timeline_dragging = false;
+            self.timeline_menu = None;
             self.flash("已关闭工程");
         }
         self.poke();
@@ -111,6 +112,8 @@ impl PlayerApp {
     ) {
         let restored = recovery.is_some();
         let source = recovery.unwrap_or_else(|| path.clone());
+        // 上一个工程的菜单指向的片段在这个工程里不存在。
+        self.timeline_menu = None;
         match Project::open(&source) {
             Ok(project) => {
                 let duration = project.sequence.duration();

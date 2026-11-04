@@ -88,6 +88,7 @@ impl PlayerApp {
             timeline: ViewState::new(),
             timeline_dragging: false,
             timeline_drop: None,
+            timeline_menu: None,
             export_task: None,
             export_progress: None,
             dialog_open: false,

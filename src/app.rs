@@ -123,6 +123,7 @@ mod scenes;
 mod scope;
 mod session;
 mod settings_panel;
+mod timeline_menu;
 mod timeline_tracks;
 mod timeline_view;
 mod video_area;
@@ -143,6 +144,7 @@ use self::remux::RemuxDialog;
 use self::scenes::ScenesDialog;
 use self::scope::ScopeDialog;
 use self::settings_panel::SettingsTab;
+use self::timeline_menu::TimelineMenu;
 use self::timeline_tracks::TimelineDrop;
 use self::widgets::*;
 
@@ -384,6 +386,8 @@ pub struct PlayerApp {
     timeline_dragging: bool,
     /// 拖动片段时算出来的落点；`None` 表示没在拖。
     timeline_drop: Option<TimelineDrop>,
+    /// 时间线片段上的右键菜单；`None` 表示没展开。
+    timeline_menu: Option<TimelineMenu>,
     /// 正在跑的导出任务；`None` 表示空闲。
     export_task: Option<ExportTask>,
     /// 导出进度 0..=1，仅在 `export_task` 存在时有意义。

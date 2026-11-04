@@ -14,6 +14,7 @@ impl PlayerApp {
         self.item_menu = None;
         self.tab_menu = None;
         self.panel_menu = None;
+        self.timeline_menu = None;
         // 控制条先亮一下再按 `CONTROLS_IDLE` 淡出：用户看得见「已经全屏了」，
         // 而不是画面无声无息地变大。
         self.poke();
