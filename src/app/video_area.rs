@@ -46,11 +46,12 @@ impl PlayerApp {
         // 面板占掉的那一条不算视频区域，否则缩画面时会被拉伸。
         let panel = self.side_panel_width(window);
         let area_width = (f32::from(viewport.width) - panel).max(2.0) * scale;
-        // 窗口模式下菜单栏占掉了顶部一条，渲染目标要扣掉，否则画面会被裁掉一截。
+        // 窗口模式下菜单栏占掉顶部一条、时间线占掉底部一条，渲染目标都要扣掉，
+        // 否则画面会被裁掉一截或者在时间线后面白渲染。
         let chrome = if window.is_fullscreen() {
             0.0
         } else {
-            MENUBAR_HEIGHT
+            MENUBAR_HEIGHT + self.timeline_height(window)
         };
         let area_height = (f32::from(viewport.height) - chrome) * scale;
         if area_width < 2.0 || area_height < 2.0 {
@@ -121,6 +122,7 @@ impl PlayerApp {
         &self,
         top: Pixels,
         panel: f32,
+        bottom: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         div()
@@ -130,6 +132,8 @@ impl PlayerApp {
             .top(top)
             // 面板是真正的侧边栏：画面让出它那一条，而不是被盖住。
             .when(panel > 0.0, |this| this.right(px(panel)))
+            // 工程模式下时间线占住窗口底部，画面在剩下的区域里居中。
+            .when(bottom > 0.0, |this| this.bottom(px(bottom)))
             .bg(bg())
             .child(ui::video_surface(self.frame.clone()))
             // 空状态只看「有没有帧」，不看 mpv 上报的宽高：width/height 属性在

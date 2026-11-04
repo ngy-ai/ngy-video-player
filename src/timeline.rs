@@ -14,6 +14,7 @@ mod ops;
 mod project;
 mod time;
 mod undo;
+mod view;
 
 pub use media::{AssetState, ColorTags, MediaInfo, MediaStamp};
 pub use model::{
@@ -24,3 +25,4 @@ pub use ops::{ClipSpec, EditError, EditOp, apply};
 pub use project::{Asset, PROJECT_EXTENSION, PROJECT_VERSION, Project, ProjectError, UiState};
 pub use time::{MICROS_PER_SECOND, Rational, Tick};
 pub use undo::{HISTORY_LIMIT, UndoHistory};
+pub use view::{MIN_ZOOM, ViewState, visible_ticks};

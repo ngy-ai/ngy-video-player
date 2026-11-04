@@ -79,6 +79,9 @@ impl PlayerApp {
             hover: None,
             preview_request: None,
             preview_retired: VecDeque::new(),
+            project: None,
+            timeline: ViewState::new(),
+            timeline_dragging: false,
             dialog_open: false,
             show_stats: false,
             osd: None,
@@ -190,6 +193,10 @@ impl PlayerApp {
         // 面板自己的状态不动（裁切/转换跑到一半的任务、列表的开关都还在），
         // 退出全屏原样回来。
         if window.is_fullscreen() {
+            return 0.0;
+        }
+        // 工程模式只有「预览 + 时间线」两块，右侧通道整条让出来。
+        if self.project.is_some() {
             return 0.0;
         }
         // 裁切与转换都是定宽面板，宽度规则一模一样。
@@ -343,6 +350,10 @@ impl PlayerApp {
     // -- 播放控制 ----------------------------------------------------------
 
     pub(super) fn controls_visible(&self) -> bool {
+        // 工程模式是「预览 + 时间线」，播放控制条整条不画：进度与定位都交给时间线。
+        if self.project.is_some() {
+            return false;
+        }
         self.controls_forced
             || self.last_activity.elapsed() < CONTROLS_IDLE
             // 暂停时一直留着：播放器停下的时候，用户的第一反应就是去找「播放」按钮，

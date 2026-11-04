@@ -41,6 +41,9 @@ pub const SUBTITLE: &[&str] = &[
 /// 播放列表文件。
 pub const PLAYLIST: &[&str] = &["m3u", "m3u8", "pls", "xspf", "asx", "cue"];
 
+/// 工程文件。拖进窗口或从命令行传进来时进工程模式，而不是当视频播。
+pub const PROJECT: &[&str] = &["ngyproj"];
+
 /// 光盘镜像。
 pub const DISC: &[&str] = &["iso", "img", "mds", "mdx", "nrg", "bin"];
 
@@ -75,6 +78,10 @@ pub fn is_subtitle(path: &std::path::Path) -> bool {
 
 pub fn is_playlist(path: &std::path::Path) -> bool {
     extension(path).is_some_and(|ext| matches(PLAYLIST, &ext))
+}
+
+pub fn is_project(path: &std::path::Path) -> bool {
+    extension(path).is_some_and(|ext| matches(PROJECT, &ext))
 }
 
 pub fn kind_label(path: &std::path::Path) -> &'static str {

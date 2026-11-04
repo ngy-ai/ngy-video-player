@@ -127,6 +127,7 @@ impl PlayerApp {
             self.playlist_dragging = false;
             self.settings.save();
         }
+        self.timeline_dragging = false;
     }
 
     pub(super) fn render_controls(&self, panel: f32, cx: &mut Context<Self>) -> impl IntoElement {

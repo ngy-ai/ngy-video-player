@@ -14,6 +14,7 @@ impl Render for PlayerApp {
         self.sync_multicam_source(cx);
         self.poll_clip_preview(cx);
         self.poll_ab_loop(cx);
+        self.sync_timeline_view(window);
         self.update_render_target(window);
         self.sync_on_top(window, cx);
 
@@ -41,6 +42,8 @@ impl Render for PlayerApp {
         };
         // 面板宽度只算一次：画面、控制条、面板本身都按同一个数让位。
         let panel_width = self.side_panel_width(window);
+        // 工程模式下画面区让出底部这一条，时间线从窗口底边往上铺。
+        let timeline_height = self.timeline_height(window);
 
         div()
             .id("root")
@@ -188,6 +191,9 @@ impl Render for PlayerApp {
                 if this.playlist_dragging {
                     this.drag_playlist_width(event.position.x, window);
                 }
+                if this.timeline_dragging {
+                    this.seek_timeline_to(event.position.x);
+                }
                 cx.notify();
             }))
             .on_mouse_up(
@@ -246,13 +252,14 @@ impl Render for PlayerApp {
                 this.poke();
                 cx.notify();
             }))
-            .child(self.render_video_area(video_top, panel_width, cx))
+            .child(self.render_video_area(video_top, panel_width, timeline_height, cx))
             // 转换 / 裁切 / 播放列表互斥，占同一条右侧通道；前两者开着时优先它们。
             //
             // 全屏时这条通道整条不画：全屏要看的是画面本身，不是它旁边那一栏。
             // 面板的开关状态原样留着，退出全屏就回来——切一下全屏不该把正在跑的
             // 裁切/转换任务取消掉。
-            .when(!fullscreen, |this| {
+            // 工程模式下右侧通道整条让给预览与时间线，面板状态原样留着。
+            .when(!fullscreen && self.project.is_none(), |this| {
                 this.children(self.render_convert_panel(video_top, panel_width, cx))
                     .children(self.render_clip_panel(video_top, panel_width, cx))
                     .when(
@@ -264,6 +271,9 @@ impl Render for PlayerApp {
             })
             .when(self.controls_visible(), |this| {
                 this.child(self.render_controls(panel_width, cx))
+            })
+            .when(timeline_height > 0.0, |this| {
+                this.child(self.render_timeline(window, timeline_height, cx))
             })
             .children(self.render_menu(panel_width, cx))
             .children(self.render_osd(osd_top, panel_width))

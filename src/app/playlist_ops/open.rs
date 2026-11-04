@@ -11,6 +11,16 @@ impl PlayerApp {
         if let Some(first) = paths.first() {
             self.remember_dir(first);
         }
+        // 工程文件走另一条路：打开时间线，而不是把它当媒体排队播放。
+        // 一次拖入多个文件时以工程为准——工程才是这一屏的主语。
+        if let Some(project) = paths
+            .iter()
+            .find(|path| !path.is_dir() && formats::is_project(path))
+            .cloned()
+        {
+            self.open_project_path(project, cx);
+            return;
+        }
         // 文件夹和文件走两条路：文件夹开成自己的一页列表，文件才并进默认页。
         // 拖入、菜单、命令行都从这里过，落点保持一致。
         let mut files = Vec::new();

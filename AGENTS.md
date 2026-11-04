@@ -33,7 +33,8 @@ src/main.rs      入口：参数解析、帮助
 src/app.rs       主视图入口：状态类型、PlayerApp 字段、快捷键、run()
 src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  session（初始化/事件循环）、playback、window（迷你窗/置顶）、
-                 picture、playlist_ops、video_area、controls、menus、bar、
+                 picture、playlist_ops、video_area、timeline_view（工程模式时间线）、
+                 controls、menus、bar、
                  menu_bar、associations、ab_loop（A-B 循环）、
                  metadata（章节/元数据编辑，模态）、playlist_ui、
                  playlist_menu（面板上的弹出菜单：添加/排序/全部列表）、
@@ -92,6 +93,7 @@ src/timeline/ops.rs    编辑操作纯函数：旧序列进、新序列出，非
 src/timeline/project.rs  .ngyproj 工程文件：版本迁移、相对素材路径、原子写 + .bak
 src/timeline/undo.rs    撤销 / 重做：状态快照栈，一次操作一步，上限 200 步
 src/timeline/autosave.rs  自动保存（30 秒无操作）与 `.autosave` 崩溃恢复
+src/timeline/view.rs    时间线视图状态：缩放（1 像素 = 1 帧 ~ 10 秒）、滚动、标尺换挡
 ```
 
 ## 约定
@@ -105,6 +107,9 @@ src/timeline/autosave.rs  自动保存（30 秒无操作）与 `.autosave` 崩�
   `render()` 里把播放列表的显示条件补上它。全屏时这条通道整条让给画面
   （`side_panel_width()` 返回 0，`render()` 里那几个面板都不画），
   新面板同样要放进 `!fullscreen` 的分支里。
+- 工程模式（`project.is_some()`）是另一套布局：右侧通道、控制条与进度条都不画，
+  画面底部让出时间线（`timeline_height`）。新加面板/浮层时先想清楚它在工程模式下
+  该不该出现。
 - 模态对话框彼此互斥：新增一个对话框时，在它的 `open_*_dialog` 里把其它对话框
   都 `close_*_dialog` 一遍，并在 `render()` 里把它的 `render_*_dialog` 挂进模态层；
   漏掉的话两个模态会叠在一起抢键盘。

@@ -17,6 +17,7 @@ use crate::{
     },
     playlist::{self, DropSpot, Playlist, PlaylistSet},
     settings::{DecodeMode, OnTop, RenderMode, Rotation, Settings, VideoAspect, normalize_speed},
+    timeline::{Project, Tick, ViewState, visible_ticks},
     ui::{
         self, bg, format_time, icon, icon_button, icon_button_with_tip, pill_button_with_tip,
         surface, text, text_faint, text_muted,
@@ -102,6 +103,7 @@ mod scenes;
 mod scope;
 mod session;
 mod settings_panel;
+mod timeline_view;
 mod video_area;
 mod widgets;
 mod window;
@@ -337,6 +339,15 @@ pub struct PlayerApp {
     /// 已经画过、等待归还给 GPU atlas 的旧预览图。规则与 `retired` 相同。
     preview_retired: VecDeque<Arc<RenderImage>>,
 
+    /// 工程模式：打开 `.ngyproj` 后才有；`None` 表示纯播放器。
+    ///
+    /// 工程模式下布局切成「上方预览 + 下方时间线」，右侧面板与控制条都不画。
+    project: Option<Project>,
+    /// 时间线的缩放与滚动。关掉工程也留着，下次打开还在原处。
+    timeline: ViewState,
+    /// 正在拖时间线的播放头。
+    timeline_dragging: bool,
+
     /// 原生文件选择框是否已经打开。
     ///
     /// rfd 的对话框阻塞在后台线程里，主窗口在拿到结果前不会知道自己「正在等对话框」。
@@ -542,6 +553,12 @@ enum BarAction {
     Command(Command),
     OpenFile,
     OpenFolder,
+    /// 新建一个空工程，进入「预览 + 时间线」模式。
+    NewProject,
+    /// 打开 `.ngyproj`。
+    OpenProject,
+    /// 退出工程模式，回到纯播放器。
+    CloseProject,
     LoadSubtitle,
     Previous,
     Next,

@@ -22,6 +22,15 @@ pub(super) const SCREENSHOT_PREVIEW_HEIGHT: f32 = 158.0;
 /// 没人搭理时多久自动收起。鼠标停在卡片上时不计时。
 pub(super) const SCREENSHOT_CARD_LIFETIME: Duration = Duration::from_secs(10);
 pub(super) const MENUBAR_HEIGHT: f32 = 32.0;
+/// 工程模式的时间线：标题条、标尺、轨道行高与左侧名称列。
+pub(super) const TIMELINE_HEADER: f32 = 30.0;
+pub(super) const TIMELINE_RULER: f32 = 26.0;
+pub(super) const TIMELINE_GUTTER: f32 = 108.0;
+pub(super) const TIMELINE_TRACK_HEIGHT: f32 = 46.0;
+pub(super) const TIMELINE_TRACK_GAP: f32 = 2.0;
+/// 时间线高度的上下限：太矮放不下标尺与一条轨道，太高会把预览挤没。
+pub(super) const TIMELINE_MIN_HEIGHT: f32 = 170.0;
+pub(super) const TIMELINE_MAX_HEIGHT: f32 = 320.0;
 /// 播放列表面板拖动时的宽度边界。上限还要再受 `CONTROLS_MIN_WIDTH` 约束，
 /// 见 `PlayerApp::playlist_max_width`。
 pub(super) const PLAYLIST_MIN_WIDTH: f32 = 220.0;

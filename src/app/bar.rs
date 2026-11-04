@@ -24,6 +24,12 @@ impl PlayerApp {
                     OpenFolder,
                 )));
                 items.push(BarItem::Separator);
+                items.push(BarItem::Entry(BarEntry::new("新建工程", NewProject)));
+                items.push(BarItem::Entry(BarEntry::new("打开工程…", OpenProject)));
+                items.push(BarItem::Entry(
+                    BarEntry::new("关闭工程", CloseProject).enabled(self.project.is_some()),
+                ));
+                items.push(BarItem::Separator);
                 // 没有片子、或者时长还没读出来时无从编辑。
                 items.push(BarItem::Entry(
                     BarEntry::new("裁切片段…", Trim).enabled(self.file_editable()),
@@ -311,6 +317,9 @@ impl PlayerApp {
             BarAction::Command(command) => self.send(command),
             BarAction::OpenFile => self.pick_file(window, cx),
             BarAction::OpenFolder => self.pick_folder(window, cx),
+            BarAction::NewProject => self.new_project(cx),
+            BarAction::OpenProject => self.pick_project(window, cx),
+            BarAction::CloseProject => self.close_project(cx),
             BarAction::LoadSubtitle => self.pick_subtitle(window, cx),
             BarAction::Previous => self.previous_file(cx),
             BarAction::Next => self.next_file(cx),
