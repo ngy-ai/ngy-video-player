@@ -378,8 +378,14 @@ impl Drop for PlayerApp {
             engine.shutdown();
         }
         // 正常退出不必留崩溃恢复：那份 `.autosave` 只会在下次打开时白问一句。
-        // 真正的崩溃走不到这里，那才是它该存在的时候。
-        self.clear_autosave();
+        //
+        // 但「点窗口右上角 ×」这条路我们拦不住（gpui-base 0.6.6 没有 should_close，
+        // 只有事后的 on_window_closed），它同样会走到这里。所以只在**没有未保存改动**
+        // 时才删：有改动说明用户是带着没保存的东西被关掉的，留着下次打开能捡回来。
+        // 用户明确选过「不保存」的路径已经由 `request_project_action` 清掉了。
+        if !self.project_modified() {
+            self.clear_autosave();
+        }
         self.settings.save();
         // 列表本来就随改动落过盘，这里再存一次是兜住「拖入后一次都没点过」的情形。
         self.playlists.save();

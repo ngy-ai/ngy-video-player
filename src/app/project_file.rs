@@ -153,7 +153,12 @@ impl PlayerApp {
                         this.save_project(None, cx, Some(action));
                         true
                     }
-                    rfd::MessageDialogResult::No => this.run_project_action(action, cx),
+                    rfd::MessageDialogResult::No => {
+                        // 用户明确说了不保存：那份 `.autosave` 也不该再被捡回来。
+                        // `Drop` 只在「没有未保存改动」时才清理，这里必须补这一刀。
+                        this.clear_autosave();
+                        this.run_project_action(action, cx)
+                    }
                     _ => true,
                 };
                 if alive {
