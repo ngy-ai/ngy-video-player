@@ -210,7 +210,12 @@ impl Render for MiniPlayer {
                 this.restore_to_main(window, cx);
             }))
             .on_action(cx.listener(|this, _: &ExitOverlay, window, cx| {
-                // 小窗里没有别的浮层可关，Esc 就是退出小窗模式。
+                // 右键菜单是唯一有开/关状态的浮层：Esc 先关它，再按一次才退出小窗模式。
+                if this.menu.take().is_some() {
+                    cx.notify();
+                    return;
+                }
+                // 除此之外小窗里没有别的浮层可关，Esc 就是退出小窗模式。
                 this.restore_to_main(window, cx);
             }))
             .into_any_element()
