@@ -4,8 +4,8 @@
 //! 像素」「滚一格走多远」「标尺该用多大刻度」。三小时工程的滚动边界和缩放锚点
 //! 因此可以用单测钉住，不必开窗口反复试。
 //!
-//! 缩放范围按 `TODO.md` M2-T01 固定：最粗 `1 像素 = 10 秒`（[`MIN_ZOOM`]），
-//! 最细 `1 像素 = 1 帧`（[`ViewState::max_zoom`]，即每秒帧率那么多像素）。
+//! 缩放范围：最粗 `1 像素 = 10 秒`（[`MIN_ZOOM`]），最细一帧占 8 像素
+//! （[`ViewState::max_zoom`]）。到帧级时标尺改铺帧刻度，见 [`visible_frames`]。
 
 use crate::timeline::{Rational, Tick};
 
@@ -13,12 +13,16 @@ use crate::timeline::{Rational, Tick};
 pub const MIN_ZOOM: f32 = 0.1;
 /// 标尺主刻度之间至少留这么多像素，太密就换下一档。
 pub const MIN_LABEL_PX: f32 = 90.0;
+/// 最细一档一帧占多少像素。帧刻度要看得清，同时标签还能分开。
+const MAX_FRAME_PX: f32 = 8.0;
 
-/// 可选的主刻度档位（秒）。从一帧到四小时，够覆盖「1 像素 = 1 帧」到
-/// 「1 像素 = 10 秒」之间的所有缩放级别。
+/// 可选的主刻度档位（秒）。
+///
+/// 最小从 1 秒起步：标签用的是整秒文本，半秒档会让同一个「0:01」出现两次。
+/// 一秒以下的粒度交给帧刻度（[`visible_frames`]）。
 pub const TICK_STEPS: &[f64] = &[
-    0.04, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 900.0, 1800.0,
-    3600.0, 7200.0, 14400.0,
+    1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 900.0, 1800.0, 3600.0, 7200.0,
+    14400.0,
 ];
 
 /// 时间线的视口：左边界 `scroll` 秒，每秒 `zoom` 像素，宽 `width` 像素。
@@ -57,9 +61,9 @@ impl ViewState {
         self.width
     }
 
-    /// 最细一档：1 像素 = 1 帧。帧率越高，每秒占的像素越多。
+    /// 最细一档：一帧占 [`MAX_FRAME_PX`] 个像素。帧率越高，每秒占的像素越多。
     pub fn max_zoom(fps: Rational) -> f32 {
-        (fps.to_f64().clamp(1.0, 240.0)) as f32
+        (fps.to_f64().clamp(1.0, 240.0) as f32) * MAX_FRAME_PX
     }
 
     /// 视口宽度变了（窗口缩放）。滚动位置按新宽度重新夹一遍。
@@ -167,6 +171,23 @@ pub fn visible_ticks(view: &ViewState) -> Vec<f64> {
     ticks
 }
 
+/// 一帧在屏幕上占几个像素。放得够宽才铺帧刻度。
+pub fn frame_pixels(view: &ViewState, fps: Rational) -> f64 {
+    f64::from(view.zoom()) / fps.to_f64()
+}
+
+/// 视口里要画的帧序号（含两端）。
+///
+/// 右端和 [`visible_ticks`] 一样按视口算：序列末尾之后的空白也该有帧刻度，
+/// 播放头拖出去时不至于失去参照。
+pub fn visible_frames(view: &ViewState, fps: Rational) -> std::ops::RangeInclusive<i64> {
+    let start = Tick::from_secs(view.scroll().max(0.0));
+    let end = Tick::from_secs(view.scroll() + view.visible_seconds());
+    let first = fps.floor_frame_of(start);
+    let last = fps.ceil_frame_of(end).max(first);
+    first..=last
+}
+
 /// 播放头能停到的最晚时间：视口可见多远就能走多远，序列末尾之后的空白也算。
 ///
 /// 编辑时经常要先把播放头放到 8 秒、再导入下一段做出空档；夹在当前序列时长
@@ -228,17 +249,36 @@ mod tests {
     }
 
     #[test]
-    fn 缩放范围卡在一帧与十秒之间() {
+    fn 缩放范围卡在八分之一帧与十秒之间() {
         let fps = Rational::FPS_25;
         let max = ViewState::max_zoom(fps);
-        assert_eq!(max, 25.0, "1 像素 = 1 帧");
+        assert_eq!(max, 200.0, "25 帧/秒 × 每帧 8 像素");
+        assert!((frame_pixels(&ViewState::new(), fps) - 8.0 / 25.0).abs() < 1e-9);
 
         let mut view = ViewState::new();
         view.set_zoom(1_000.0, max, dur(60.0));
-        assert_eq!(view.zoom(), max, "不能比一帧更细");
+        assert_eq!(view.zoom(), max, "不能比一帧 8 像素更细");
 
         view.set_zoom(0.0001, max, dur(60.0));
         assert_eq!(view.zoom(), MIN_ZOOM, "不能比十秒更粗");
+    }
+
+    #[test]
+    fn 视口里只铺看得见的那几帧() {
+        let fps = Rational::FPS_25;
+        let mut view = ViewState::new();
+        view.set_width(800.0, dur(600.0));
+        // 200 像素/秒 → 一屏 4 秒，正好 100 帧。
+        view.set_zoom(200.0, 200.0, dur(600.0));
+        let frames = visible_frames(&view, fps);
+        assert_eq!(*frames.start(), 0);
+        assert_eq!(*frames.end(), 100);
+
+        // 滚到 10 秒：从第 250 帧开始，不再是固定从 0 数。
+        view.scroll_to(10.0, dur(600.0));
+        let frames = visible_frames(&view, fps);
+        assert_eq!(*frames.start(), 250);
+        assert_eq!(*frames.end(), 350);
     }
 
     #[test]
@@ -322,6 +362,8 @@ mod tests {
         assert_eq!(tick_step(8.0), 15.0);
         // 25px/s（1 像素 = 1 帧）：5 秒（125px）。
         assert_eq!(tick_step(25.0), 5.0);
+        // 最细一档：1 秒一格（200px），标签不会退到半秒。
+        assert_eq!(tick_step(200.0), 1.0);
         // 最粗一档：15 分钟（900s * 0.1 = 90px）。
         assert_eq!(tick_step(0.1), 900.0);
     }

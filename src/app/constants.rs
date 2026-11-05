@@ -27,7 +27,10 @@ pub(super) const SCREENSHOT_CARD_LIFETIME: Duration = Duration::from_secs(10);
 pub(super) const MENUBAR_HEIGHT: f32 = 32.0;
 /// 工程模式的时间线：标题条、标尺、轨道行高与左侧名称列。
 pub(super) const TIMELINE_HEADER: f32 = 30.0;
-pub(super) const TIMELINE_RULER: f32 = 26.0;
+/// 标尺：比原来高 6 像素，帧刻度铺满时还能看清层次。
+pub(super) const TIMELINE_RULER: f32 = 32.0;
+/// 一帧占到这个宽度就把刻度铺到帧；再窄就只剩一片糊。
+pub(super) const FRAME_TICK_PX: f32 = 4.0;
 pub(super) const TIMELINE_GUTTER: f32 = 108.0;
 pub(super) const TIMELINE_TRACK_HEIGHT: f32 = 46.0;
 pub(super) const TIMELINE_TRACK_GAP: f32 = 2.0;

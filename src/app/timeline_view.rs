@@ -408,6 +408,8 @@ impl PlayerApp {
 
         let step = view.tick_step();
         let minor_step = step / 5.0;
+        // 一帧放得够宽就把刻度铺到帧：帧级对位不用再靠「猜半帧」。
+        let frame_mode = frame_pixels(view, sequence.fps) >= f64::from(FRAME_TICK_PX);
         for tick in visible_ticks(view) {
             let x = view.x_of(tick);
             if x < -1.0 || x > lane_width {
@@ -432,6 +434,11 @@ impl PlayerApp {
                         .text_color(text_faint())
                         .child(format_time(tick)),
                 );
+            // 帧级时刻沿用秒级长线当骨架，短刻度交给下面的帧刻度；
+            // 两套短刻度叠在一起会糊成一片。
+            if frame_mode {
+                continue;
+            }
             for minor in 1..5 {
                 let at = tick + minor_step * minor as f64;
                 let minor_x = view.x_of(at);
@@ -446,6 +453,29 @@ impl PlayerApp {
                         .h(px(5.0))
                         .w(px(1.0))
                         .bg(gpui_kit::rgb(0x2c2c34)),
+                );
+            }
+        }
+
+        if frame_mode {
+            // 每帧一条，每 5 帧抬高一点当粗读单位；整秒那一根已经有长线了，
+            // 这里再画一条短的也无妨——它正好落在长线里面，看不出重影。
+            for frame in visible_frames(view, sequence.fps) {
+                let at = Tick::from_frames(frame, sequence.fps);
+                let x = view.x_of(at.secs());
+                if x < 0.0 || x > lane_width {
+                    continue;
+                }
+                // 高度都留在工作区色带（标尺上方 18–24）以下，不互相盖。
+                let fifth = frame % 5 == 0;
+                ruler = ruler.child(
+                    div()
+                        .absolute()
+                        .left(px(x))
+                        .bottom_0()
+                        .h(px(if fifth { 8.0 } else { 5.0 }))
+                        .w(px(1.0))
+                        .bg(gpui_kit::rgb(if fifth { 0x3a3a44 } else { 0x2c2c34 })),
                 );
             }
         }
