@@ -21,7 +21,7 @@ use crate::{
     timeline::{
         Project, Tick, UndoHistory, ViewState,
         autosave::{self, AutoSave},
-        seek_seconds, visible_ticks,
+        seek_seconds, snap_to_targets, visible_ticks,
     },
     ui::{
         self, bg, format_time, format_time_precise, icon, icon_button, icon_button_with_tip,

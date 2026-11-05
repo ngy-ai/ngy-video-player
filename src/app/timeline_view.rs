@@ -196,8 +196,21 @@ impl PlayerApp {
         let duration = project.sequence.duration();
         let seconds = seek_seconds(&self.timeline, lane_x, duration, snap);
         self.timeline_snap = snap;
+        let mut at = Tick::from_secs(seconds);
+        // 磁吸与 Shift 网格互斥：两套落点规则叠在一起会互相抢，按住 Shift 时
+        // 用户要的就是精确读数，不该再被拉到标记上。
+        if !snap {
+            let targets: Vec<Tick> = project
+                .ui
+                .in_point
+                .into_iter()
+                .chain(project.ui.out_point)
+                .chain(project.sequence.markers.iter().map(|marker| marker.at))
+                .collect();
+            at = snap_to_targets(&self.timeline, at, &targets);
+        }
         if let Some(project) = self.project.as_mut() {
-            project.ui.playhead = Tick::from_secs(seconds);
+            project.ui.playhead = at;
         }
         // 播放头动了，画面跟着走（M4-T01）。
         self.preview_at_playhead(cx);
@@ -452,6 +465,37 @@ impl PlayerApp {
                         .bg(gpui_kit::rgba(0x5aa9e6aa)),
                 );
             }
+        }
+
+        // 工作区两端：只有一端时也必须画出来。色带要两端齐全才成立，只设入点时
+        // 界面上原本什么变化都没有，用户既以为快捷键没生效，也没法把播放头拖回来。
+        for (at, label) in [(project.ui.in_point, "入"), (project.ui.out_point, "出")] {
+            let Some(at) = at else {
+                continue;
+            };
+            let x = view.x_of(at.secs());
+            if x < 0.0 || x > lane_width {
+                continue;
+            }
+            ruler = ruler
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(x))
+                        .top_0()
+                        .bottom_0()
+                        .w(px(1.0))
+                        .bg(gpui_kit::rgba(0x5aa9e6cc)),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .left(px((x + 3.0).min((lane_width - 10.0).max(0.0))))
+                        .top_0()
+                        .text_size(px(9.0))
+                        .text_color(gpui_kit::rgb(0x5aa9e6))
+                        .child(label),
+                );
         }
 
         // 标记：贯穿标尺的竖线加顶上一颗小方块。名字不上标尺——刻度文字已经够挤了。

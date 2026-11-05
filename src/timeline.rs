@@ -29,4 +29,4 @@ pub use ops::{ClipSpec, EditError, EditOp, apply, remove_clips, split_at};
 pub use project::{Asset, PROJECT_EXTENSION, PROJECT_VERSION, Project, ProjectError, UiState};
 pub use time::{MICROS_PER_SECOND, Rational, Tick};
 pub use undo::{HISTORY_LIMIT, UndoHistory};
-pub use view::{MIN_ZOOM, ViewState, playhead_limit, seek_seconds, visible_ticks};
+pub use view::{MIN_ZOOM, ViewState, playhead_limit, seek_seconds, snap_to_targets, visible_ticks};

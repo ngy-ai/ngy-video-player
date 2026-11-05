@@ -195,6 +195,30 @@ pub fn seek_seconds(view: &ViewState, lane_x: f32, duration: Tick, snap: bool) -
     if snap { snap_seconds(seconds) } else { seconds }
 }
 
+/// 磁吸半径：播放头离目标这么近就贴上去（像素，缩放变化时手感一致）。
+const MAGNET_PX: f32 = 6.0;
+
+/// 把播放头落点吸到最近的标记 / 工作区端点上。
+///
+/// 鼠标定位只有像素精度，差一像素就是几十毫秒；没有这一步，「拖回刚才那个
+/// 位置」全靠手稳，而 `Shift+M` / `Shift+I` 是否算「同一处」又依赖落点。
+/// 只吸这些离散目标，不吸片段边界：放播放头去看某段中间不该被弹开。
+pub fn snap_to_targets(view: &ViewState, at: Tick, targets: &[Tick]) -> Tick {
+    let radius = f64::from(MAGNET_PX) / f64::from(view.zoom());
+    let seconds = at.secs();
+    let mut best = at;
+    let mut best_distance = radius;
+    for &target in targets {
+        let distance = (target.secs() - seconds).abs();
+        // 并列时留下后一个没关系：同一个像素里的两个目标本来就分不开。
+        if distance <= best_distance {
+            best_distance = distance;
+            best = target;
+        }
+    }
+    best
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,6 +239,35 @@ mod tests {
 
         view.set_zoom(0.0001, max, dur(60.0));
         assert_eq!(view.zoom(), MIN_ZOOM, "不能比十秒更粗");
+    }
+
+    #[test]
+    fn 播放头吸附到最近的标记() {
+        // 默认 8 像素/秒，6 像素的磁吸半径就是 0.75 秒。
+        let mut view = ViewState::new();
+        let targets = [dur(3.0), dur(9.0)];
+
+        assert_eq!(
+            snap_to_targets(&view, Tick::from_millis(3300), &targets),
+            dur(3.0),
+            "离目标 0.3 秒，落在半径内"
+        );
+        assert_eq!(
+            snap_to_targets(&view, Tick::from_millis(4000), &targets),
+            Tick::from_millis(4000),
+            "两边都超过半径就保持原位"
+        );
+
+        // 放大后半径按像素收缩：25 像素/秒时只剩 0.24 秒。
+        view.set_zoom(25.0, 25.0, dur(60.0));
+        assert_eq!(
+            snap_to_targets(&view, Tick::from_millis(3200), &targets),
+            dur(3.0)
+        );
+        assert_eq!(
+            snap_to_targets(&view, Tick::from_millis(3300), &targets),
+            Tick::from_millis(3300)
+        );
     }
 
     #[test]

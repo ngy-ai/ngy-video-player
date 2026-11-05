@@ -158,10 +158,32 @@ impl PlayerApp {
                             ),
                         )
                     })
+                    // 工作区读数：只有一端时也要说出来。单边入点 / 出点在标尺上
+                    // 只是一条线，不给读数的话用户会以为快捷键没生效。
+                    .when_some(work_area_label(project), |this, label| {
+                        this.child(div().text_color(ui::accent()).child(label))
+                    })
                     .child(format_time(duration.secs()))
                     .child(format_time_precise(playhead))
                     .child(format!("{:.1} 像素/秒", self.timeline.zoom())),
             )
             .into_any_element()
+    }
+}
+
+/// 标题条上的工作区读数。
+///
+/// 只有一端时说明还在等另一端：区间要两端齐全才算成立，但「已经设了入点」
+/// 这件事本身得看得见。
+fn work_area_label(project: &Project) -> Option<String> {
+    match (project.ui.in_point, project.ui.out_point) {
+        (Some(start), Some(end)) if start < end => Some(format!(
+            "工作区 {} – {}",
+            format_time_precise(start.secs()),
+            format_time_precise(end.secs())
+        )),
+        (Some(start), _) => Some(format!("入点 {}", format_time_precise(start.secs()))),
+        (None, Some(end)) => Some(format!("出点 {}", format_time_precise(end.secs()))),
+        (None, None) => None,
     }
 }

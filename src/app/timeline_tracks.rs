@@ -653,8 +653,8 @@ fn range_message(project: &Project, waiting: &str) -> String {
     match project.ui.range() {
         Some((start, end)) => format!(
             "工作区 {} – {}",
-            format_time(start.secs()),
-            format_time(end.secs())
+            format_time_precise(start.secs()),
+            format_time_precise(end.secs())
         ),
         None => waiting.to_string(),
     }
