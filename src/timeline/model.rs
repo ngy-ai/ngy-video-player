@@ -403,12 +403,23 @@ impl Sequence {
         self.markers.iter().find(|marker| marker.id == id)
     }
 
-    /// 在 `at` 处加一个标记；同一时刻已经有标记就删掉它。返回是否新增。
+    /// 在 `at` 处加一个标记；`tolerance` 范围内已经有标记就删掉它。返回是否新增。
     ///
-    /// 用精确的时间相等判断：播放头没动过时两次按下的 `Tick` 完全一样，
-    /// 拖过一点就是另一个位置，该加新的。
-    pub fn toggle_marker(&mut self, at: Tick, name: impl Into<String>) -> bool {
-        if let Some(index) = self.markers.iter().position(|marker| marker.at == at) {
+    /// 不能用精确的时间相等判断：播放头是拖回来的，鼠标只精确到屏幕像素，
+    /// 同一个视图位置换算出来的 `Tick` 差几十毫秒是常态，精确比较等于永远删不掉
+    /// 旧标记、只会一直往上叠。容差由界面按当前缩放给出（一像素对应的时间），
+    /// 这里保持纯数据判断。命中多个时删最近的那一个。
+    pub fn toggle_marker(&mut self, at: Tick, name: impl Into<String>, tolerance: Tick) -> bool {
+        let tolerance = tolerance.micros().max(0) as u64;
+        let nearest = self
+            .markers
+            .iter()
+            .enumerate()
+            .filter(|(_, marker)| at.micros().abs_diff(marker.at.micros()) <= tolerance)
+            .min_by_key(|(_, marker)| at.micros().abs_diff(marker.at.micros()))
+            .map(|(index, _)| index);
+
+        if let Some(index) = nearest {
             self.markers.remove(index);
             return false;
         }

@@ -88,20 +88,52 @@ fn 同一位置再按一次标记等于删除() {
     let mut sequence = Sequence::new("标记", Rational::FPS_25, 1920, 1080);
     let at = Tick::from_secs(2.0);
 
-    assert!(sequence.toggle_marker(at, "标记 1"), "第一次是新增");
+    assert!(
+        sequence.toggle_marker(at, "标记 1", Tick::ZERO),
+        "第一次是新增"
+    );
     assert_eq!(sequence.markers.len(), 1);
     assert!(
-        !sequence.toggle_marker(at, "标记 2"),
+        !sequence.toggle_marker(at, "标记 2", Tick::ZERO),
         "同一位置再按一次是删除"
     );
     assert!(sequence.markers.is_empty());
 
     // 差一秒就是另一个位置，该加新的。
-    assert!(sequence.toggle_marker(at, "A"));
-    assert!(sequence.toggle_marker(Tick::from_secs(3.0), "B"));
+    assert!(sequence.toggle_marker(at, "A", Tick::ZERO));
+    assert!(sequence.toggle_marker(Tick::from_secs(3.0), "B", Tick::ZERO));
     assert_eq!(sequence.markers.len(), 2);
     assert_eq!(sequence.markers[0].name, "A", "标记按时间排序");
     assert!(sequence.validate().is_ok());
+}
+
+#[test]
+fn 标记的命中范围按像素容差算() {
+    let mut sequence = Sequence::new("标记", Rational::FPS_25, 1920, 1080);
+    // 8 像素/秒的默认缩放下，一个像素是 125 毫秒。
+    let tolerance = Tick::from_millis(125);
+    let at = Tick::from_secs(2.0);
+
+    assert!(sequence.toggle_marker(at, "标记 1", tolerance));
+    // 播放头拖回来只落在同一像素里：差 60 毫秒也算回到原位，删掉它。
+    assert!(
+        !sequence.toggle_marker(Tick::from_millis(2060), "标记 2", tolerance),
+        "同像素内的偏差不该再叠一个新标记"
+    );
+    assert!(sequence.markers.is_empty());
+
+    // 容差之外就是另一个位置：两枚都留着。
+    assert!(sequence.toggle_marker(at, "A", tolerance));
+    assert!(sequence.toggle_marker(Tick::from_secs(2.2), "B", tolerance));
+    assert_eq!(sequence.markers.len(), 2);
+
+    // 两枚都落在容差里时，删最近的那一枚。
+    assert!(!sequence.toggle_marker(Tick::from_micros(2_190_000), "C", tolerance));
+    assert_eq!(
+        sequence.markers.iter().map(|m| m.at).collect::<Vec<_>>(),
+        vec![at],
+        "远处那枚必须还在"
+    );
 }
 
 #[test]

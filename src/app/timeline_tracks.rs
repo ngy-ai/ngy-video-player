@@ -17,6 +17,12 @@ struct TimelineGhost {
     name: SharedString,
 }
 
+/// 标记的命中容差：播放头落在标记左右这么多像素内就算「回到标记上」。
+///
+/// 一像素太苛刻——手一抖就差半帧，标记还是删不掉；再大一点又会误删刚加在
+/// 旁边的另一枚。四个像素是能瞄得住、又不会吃掉隔壁标记的距离。
+const MARKER_HIT_PX: f64 = 4.0;
+
 impl Render for TimelineGhost {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -557,14 +563,18 @@ impl PlayerApp {
         cx.notify();
     }
 
-    /// 在播放头处加一个标记；同一位置再按一次就删掉它。
+    /// 在播放头处加一个标记；附近已经有标记就删掉它。
+    ///
+    /// 容差按当前缩放算：拖回来的播放头只能停在像素上，精确时间几乎不可能重合，
+    /// 严格相等的话标记就只有加、删不掉。
     pub(super) fn toggle_marker_at_playhead(&mut self, cx: &mut Context<Self>) {
+        let tolerance = Tick::from_secs(self.timeline.pixel_seconds() * MARKER_HIT_PX);
         let Some(project) = self.project.as_mut() else {
             return;
         };
         let at = project.ui.playhead;
         let name = format!("标记 {}", project.sequence.markers.len() + 1);
-        let added = project.sequence.toggle_marker(at, name);
+        let added = project.sequence.toggle_marker(at, name, tolerance);
 
         self.flash(if added {
             "已添加标记"

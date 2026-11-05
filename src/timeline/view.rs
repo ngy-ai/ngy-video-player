@@ -88,6 +88,14 @@ impl ViewState {
         f64::from(self.width) / f64::from(self.zoom)
     }
 
+    /// 一个屏幕像素对应的时间（秒）。
+    ///
+    /// 鼠标落点只精确到像素，「回到刚才那个位置」的容差就取这个量级：
+    /// 同一像素内换算出几十毫秒的差别是常态，不是用户放歪了。
+    pub fn pixel_seconds(&self) -> f64 {
+        1.0 / f64::from(self.zoom)
+    }
+
     /// 横向滚动：正数往右（更晚），负数往左。
     pub fn scroll_by(&mut self, pixels: f32, duration: Tick) {
         self.scroll += f64::from(pixels) / f64::from(self.zoom);
