@@ -354,6 +354,40 @@ fn 老存档里的平铺列表层级都是零() {
 }
 
 #[test]
+fn 搜索保留匹配文件与祖先文件夹且不理会折叠() {
+    let playlist = tree_of(
+        &[
+            dir_item("d", 0),
+            file_item("d/先验导论.mp4", 1),
+            file_item("d/其它.mp4", 1),
+            dir_item("e", 0),
+            file_item("e/康德.mp4", 1),
+            file_item("顶层.mp4", 0),
+        ],
+        1,
+    );
+    let paths = |indices: Vec<usize>| -> Vec<String> {
+        indices
+            .into_iter()
+            .map(|index| playlist.items()[index].path().to_string_lossy().to_string())
+            .collect()
+    };
+
+    assert_eq!(paths(playlist.search_indices("康德")), ["e", "e/康德.mp4"]);
+    assert_eq!(
+        paths(playlist.search_indices("先验")),
+        ["d", "d/先验导论.mp4"]
+    );
+    assert!(playlist.search_indices("找不到").is_empty());
+    assert_eq!(playlist.search_indices("").len(), 6, "空搜索就是整棵树");
+
+    // 搜索不看折叠：收起 e 之后，里面的文件仍然要能找出来。
+    let mut folded = playlist.clone();
+    folded.toggle_dir(3);
+    assert_eq!(paths(folded.search_indices("康德")), ["e", "e/康德.mp4"]);
+}
+
+#[test]
 fn 导入清单按列表顺序列出文件且不理会折叠() {
     let mut playlist = tree_of(
         &[

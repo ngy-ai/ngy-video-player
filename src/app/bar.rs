@@ -380,7 +380,7 @@ impl PlayerApp {
                 self.request_project_action(AfterSaveConfirm::OpenProject(path), cx);
             }
             BarAction::ImportToTimeline => self.import_to_timeline(window, cx),
-            BarAction::ImportPlaylistToTimeline => self.open_playlist_import_dialog(cx),
+            BarAction::ImportPlaylistToTimeline => self.open_playlist_import_dialog(window, cx),
             BarAction::Save => {
                 self.save_project(Some(window), cx, None);
             }

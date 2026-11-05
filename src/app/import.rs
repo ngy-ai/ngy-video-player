@@ -7,6 +7,8 @@ use std::path::Path;
 
 use super::*;
 use crate::timeline::{AssetId, ClipSpec, EditOp, MediaInfo, TrackKind, apply as apply_edit};
+use gpui_kit::Subscription;
+use gpui_kit::component::input::{Input, InputState};
 
 /// 「从播放列表导入」对话框：先选一页列表，再选其中的一个视频。
 pub(super) struct PlaylistImportDialog {
@@ -14,6 +16,12 @@ pub(super) struct PlaylistImportDialog {
     tab: usize,
     /// 选中的文件在 `Playlist::items` 里的下标；只可能是文件行。
     selected: Option<usize>,
+    /// 搜索框。文件名多是中文，必须走组件库输入框：自绘输入框没有输入法。
+    search: Entity<InputState>,
+    /// 搜索框当前的文本。输入框只会重绘自己，靠观察者同步到这里来过滤列表。
+    query: String,
+    /// 搜索词变化后清掉旧选择、重绘文件列表。
+    _search_changes: Subscription,
 }
 
 impl PlayerApp {
@@ -55,7 +63,11 @@ impl PlayerApp {
     ///
     /// 工程模式下右侧播放列表不画，所以用应用内对话框重新给一份：先选列表，
     /// 再选视频。一次只导入一个，误点最多多一段，撤一步就回去了。
-    pub(super) fn open_playlist_import_dialog(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn open_playlist_import_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.project.is_none() {
             return;
         }
@@ -91,7 +103,31 @@ impl PlayerApp {
             let visible = list.visible_indices();
             list.index().filter(|index| visible.contains(index))
         });
-        self.playlist_import = Some(PlaylistImportDialog { tab, selected });
+
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索文件名"));
+        let search_changes = cx.observe(&search, |this, state, cx| {
+            let query = state.read(cx).value().to_string();
+            let Some(dialog) = this.playlist_import.as_mut() else {
+                return;
+            };
+            // 光标移动也会触发通知，只有文本真的变了才重绘列表。
+            if dialog.query == query {
+                return;
+            }
+            // 搜索词变了：旧选中可能已不在结果里，别让「导入」指着一行
+            // 界面上看不见的文件。
+            dialog.query = query;
+            dialog.selected = None;
+            cx.notify();
+        });
+
+        self.playlist_import = Some(PlaylistImportDialog {
+            tab,
+            selected,
+            search,
+            query: String::new(),
+            _search_changes: search_changes,
+        });
         self.menu_bar = None;
         cx.notify();
     }
@@ -107,8 +143,18 @@ impl PlayerApp {
         let Some(list) = self.playlists.tab(tab) else {
             return;
         };
-        let visible = list.visible_indices();
-        let selected = list.index().filter(|index| visible.contains(index));
+        let searching = self
+            .playlist_import
+            .as_ref()
+            .is_some_and(|dialog| !dialog.query.trim().is_empty());
+        // 搜索中不预选：当前项多半不在结果里，非要选上只会让「导入」指着一行
+        // 界面上看不见的文件。
+        let selected = if searching {
+            None
+        } else {
+            let visible = list.visible_indices();
+            list.index().filter(|index| visible.contains(index))
+        };
         if let Some(dialog) = self.playlist_import.as_mut() {
             dialog.tab = tab;
             dialog.selected = selected;
@@ -211,8 +257,11 @@ impl PlayerApp {
                     }),
             );
 
+        let searching = !dialog.query.trim().is_empty();
         // 第二级：选视频。列表是树，文件夹照样画出来：点文件夹展开/收起，
-        // 点文件才是选中。收起时子树整段跳过，和面板上的行为一致。
+        // 点文件才是选中。搜索时只留匹配的文件和它们的祖先，忽略折叠状态。
+        let rows = list.search_indices(&dialog.query);
+        let no_match = searching && rows.is_empty();
         let items = div()
             .id("playlist-import-items")
             .flex()
@@ -220,7 +269,7 @@ impl PlayerApp {
             .gap(px(1.0))
             .max_h(px(300.0))
             .overflow_y_scroll()
-            .children(list.visible_indices().into_iter().map(|index| {
+            .children(rows.into_iter().map(|index| {
                 let Some(item) = list.items().get(index) else {
                     return div().into_any_element();
                 };
@@ -240,7 +289,10 @@ impl PlayerApp {
                     .pr(px(10.0))
                     .py(px(6.0))
                     .rounded(px(6.0))
-                    .cursor(CursorStyle::PointingHand)
+                    // 搜索结果的文件夹只是层级提示，点了不会改变结果，别给手型。
+                    .when(!is_dir || !searching, |this| {
+                        this.cursor(CursorStyle::PointingHand)
+                    })
                     .text_size(px(12.0))
                     .text_color(if selected {
                         ui::accent()
@@ -277,7 +329,9 @@ impl PlayerApp {
                     .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
                         cx.stop_propagation();
                         if is_dir {
-                            this.toggle_import_dir(index, cx);
+                            if !searching {
+                                this.toggle_import_dir(index, cx);
+                            }
                         } else {
                             this.select_import_item(index, cx);
                         }
@@ -300,7 +354,14 @@ impl PlayerApp {
                     .text_color(text_muted())
                     .child("先选一页列表，再选一个视频；导入后插在播放头，撞上了排到末尾。"),
             )
-            .child(tabs);
+            .child(tabs)
+            .child(
+                div().w_full().child(
+                    Input::new(&dialog.search)
+                        .id("playlist-import-search")
+                        .w_full(),
+                ),
+            );
 
         if list.file_count() == 0 {
             body = body.child(
@@ -311,6 +372,16 @@ impl PlayerApp {
                     .text_size(px(12.0))
                     .text_color(text_faint())
                     .child("这一页还没有可导入的文件"),
+            );
+        } else if no_match {
+            body = body.child(
+                div()
+                    .py(px(24.0))
+                    .flex()
+                    .justify_center()
+                    .text_size(px(12.0))
+                    .text_color(text_faint())
+                    .child("没有匹配的文件"),
             );
         } else {
             body = body.child(items);

@@ -239,6 +239,48 @@ impl Playlist {
         rows
     }
 
+    /// 搜索时要画的行：文件名匹配的文件，以及它们的祖先文件夹。
+    ///
+    /// 搜索不看折叠状态：藏在收起文件夹里的文件也得找得到。文件夹行本身不参与
+    /// 匹配，留着只是为了让结果仍然看得出层级。空查询退回 `visible_indices`。
+    pub fn search_indices(&self, query: &str) -> Vec<usize> {
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
+            return self.visible_indices();
+        }
+
+        let items = self.items();
+        let mut matched = vec![false; items.len()];
+        // 当前路径上的祖先：深度回退时弹出，遇到文件夹时压入。
+        let mut ancestors: Vec<usize> = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            while ancestors.len() > usize::from(item.depth()) {
+                ancestors.pop();
+            }
+            if item.is_dir() {
+                ancestors.push(index);
+                continue;
+            }
+            let name = item
+                .path()
+                .file_name()
+                .map(|value| value.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+            if name.contains(&needle) {
+                matched[index] = true;
+                for &ancestor in &ancestors {
+                    matched[ancestor] = true;
+                }
+            }
+        }
+
+        matched
+            .iter()
+            .enumerate()
+            .filter_map(|(index, keep)| keep.then_some(index))
+            .collect()
+    }
+
     /// 拖放：把第 `from` 项的整棵子树搬到 `spot`，层级跟着落点走。
     ///
     /// 顺序没变、落点在自己子树内部、或者落点不是文件夹却要求「放进去」时
