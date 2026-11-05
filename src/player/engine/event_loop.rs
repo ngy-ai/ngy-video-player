@@ -122,6 +122,9 @@ pub(super) fn event_loop(
                     shared.confirm_video();
                 }
                 event::END_FILE => {
+                    // 加载失败时不会有 `FILE_LOADED`，不清掉的话这个标志会一直
+                    // 挂着，之后所有 seek 都被当成「还在加载」吞掉。
+                    pending_start.reset();
                     let reason = if event.data.is_null() {
                         EndReason::Eof
                     } else {

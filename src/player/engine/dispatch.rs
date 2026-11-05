@@ -2,30 +2,67 @@
 
 use super::*;
 
-/// `Load` 带的起始位置：`loadfile` 是异步的，seek 必须等 `FILE_LOADED`。
+/// `Load` 的起点，以及「文件还没起来」这段窗口里收到的 seek。
 ///
-/// 紧跟着 `loadfile` 发 seek，文件还没初始化完时 mpv 会回
-/// "error running command"（新建工程后引擎空转时几乎必现）。那次失败在
-/// `Load` 里是要上报的，界面上于是多出一条假的「播放出错」；更糟的是 `?`
-/// 会提前返回，同一批命令里的「解除暂停」也一起漏发。
+/// `loadfile` 是异步的，命令返回成功时文件往往还没初始化完，这期间对 mpv 发
+/// seek 会回 "error running command"：
+///
+/// - 紧跟着 `loadfile` 发 seek 会报错，界面上多出一条假的「播放出错」；更糟的
+///   是 `?` 会提前返回，同一批命令里的「解除暂停」也一起漏发。
+/// - 工程模式拖播放头时，同一个素材的后续拖动都走 `SeekAbsolute`。第一下
+///   `Load` 之后 `timeline_preview` 已经记成这个文件，接下来几十下 seek 全部
+///   落在加载窗口里，日志里就是连成串的「命令执行失败」，画面还停在旧位置。
+///
+/// 所以加载窗口内的 seek 不发命令，只把目标记下来（后到的覆盖先到的），等
+/// `FILE_LOADED` 一次性落到用户最终停下的位置。
 #[derive(Default)]
-pub(super) struct PendingStart(Option<f64>);
+pub(super) struct PendingStart {
+    /// `loadfile` 已排队、但还没收到 `FILE_LOADED`。
+    loading: bool,
+    /// 文件加载完成后要落到的位置；`None` 表示打开后从头开始。
+    target: Option<f64>,
+}
 
 impl PendingStart {
     /// 换片 / 停止：上一次没能落地的起点作废，别带给下一个文件。
     pub(super) fn reset(&mut self) {
-        self.0 = None;
+        self.loading = false;
+        self.target = None;
     }
 
     /// `loadfile` 成功后才登记起点，避免载入失败留下脏值。
-    pub(super) fn set(&mut self, start: Option<f64>) {
-        self.0 = start;
+    pub(super) fn begin(&mut self, start: Option<f64>) {
+        self.loading = true;
+        self.target = start.map(|seconds| seconds.max(0.0));
+    }
+
+    /// 文件还在加载：把 seek 目标存下来，返回 `true` 表示这条命令已被接管。
+    ///
+    /// 只保留最后一个目标——拖动播放头时中间那些位置用户早就滑过去了，
+    /// 加载完成后直接落到松手处才有意义。
+    pub(super) fn defer(&mut self, seconds: f64) -> bool {
+        if !self.loading {
+            return false;
+        }
+        self.target = Some(seconds.max(0.0));
+        true
+    }
+
+    pub(super) fn is_loading(&self) -> bool {
+        self.loading
+    }
+
+    /// 结束加载窗口并取走待落地的目标。拆出来是为了让状态机本身可以脱离
+    /// mpv 句柄测试。
+    fn take_loaded(&mut self) -> Option<f64> {
+        self.loading = false;
+        self.target.take()
     }
 
     /// 文件加载完成后补上延时 seek，只执行一次。失败只记日志：文件已经打开，
     /// 起点差一点不该弹「播放出错」横幅。
     pub(super) fn seek_loaded(&mut self, api: &MpvApi, handle: *mut ffi::MpvHandle) {
-        let Some(seconds) = self.0.take() else {
+        let Some(seconds) = self.take_loaded() else {
             return;
         };
         let target = seconds.max(0.0).to_string();
@@ -64,7 +101,7 @@ pub(super) fn dispatch(
                 shared.reset_frame();
                 api.run_command(handle, &["loadfile", &url, "replace"])?;
                 // 起点等 `FILE_LOADED` 再 seek，理由见 [`PendingStart`]。
-                pending_start.set(start);
+                pending_start.begin(start);
                 // 必须用命令、不能用 `set_property`：
                 // `--pause` 是「打开文件后暂停」的选项，mpv 每次 loadfile 都会把它
                 // 重新应用一遍；而 `set_property` 是即时的，会抢在排队的 loadfile
@@ -99,6 +136,15 @@ pub(super) fn dispatch(
             Command::SetPaused(paused) => api.set_flag(handle, "pause", paused)?,
             Command::SeekAbsolute(seconds) => {
                 let target = seconds.max(0.0);
+                // 文件还在加载：现在发 seek 必定失败，记下目标等 `FILE_LOADED`。
+                if pending_start.defer(target) {
+                    return Ok(());
+                }
+                // 引擎空闲（还没打开文件，或刚 Stop）：没有可跳的片子。这不是
+                // 用户的错，也不该每拖一下就在日志里刷一条「命令执行失败」。
+                if shared.state().path.is_none() {
+                    return Ok(());
+                }
                 let ended = api.property_flag(handle, "eof-reached").unwrap_or(false);
                 api.run_command(handle, &["seek", &target.to_string(), "absolute", "exact"])?;
                 // 结尾处（keep-open 会把播放停住）往回拖通常是想接着看，
@@ -108,6 +154,11 @@ pub(super) fn dispatch(
                 }
             }
             Command::SeekRelative(delta) => {
+                // 相对位置基于「当前位置」，加载窗口里没有当前位置可加；
+                // 而且加载完成后会落到用户最后指定的绝对位置，这里直接跳过。
+                if pending_start.is_loading() || shared.state().path.is_none() {
+                    return Ok(());
+                }
                 let ended = api.property_flag(handle, "eof-reached").unwrap_or(false);
                 api.run_command(handle, &["seek", &delta.to_string(), "relative", "exact"])?;
                 if ended {
@@ -193,15 +244,44 @@ mod tests {
     #[test]
     fn 起点只在文件加载后消费一次且换片时作废() {
         let mut pending = PendingStart::default();
-        assert!(pending.0.is_none());
+        assert!(pending.target.is_none());
 
-        pending.set(Some(12.5));
-        assert_eq!(pending.0.take(), Some(12.5));
-        assert_eq!(pending.0.take(), None);
+        pending.begin(Some(12.5));
+        assert!(pending.is_loading());
+        assert_eq!(pending.take_loaded(), Some(12.5));
+        assert!(!pending.is_loading());
+        assert!(pending.target.is_none());
 
         // 上一次 loadfile 可能压根没成功，起点不能留给下一个文件。
-        pending.set(Some(3.0));
+        pending.begin(Some(3.0));
         pending.reset();
-        assert!(pending.0.is_none());
+        assert!(!pending.is_loading());
+        assert!(pending.target.is_none());
+    }
+
+    #[test]
+    fn 加载窗口里的连续拖动只保留最后一个目标() {
+        let mut pending = PendingStart::default();
+        pending.begin(Some(1.0));
+
+        // 加载还没完成：这些 seek 不该落到 mpv，只更新待落地目标。
+        assert!(pending.defer(5.7));
+        assert!(pending.defer(0.3));
+        assert_eq!(pending.target, Some(0.3));
+
+        // 加载完成后一次性落到最后一个位置，之后 seek 恢复即时执行。
+        assert_eq!(pending.take_loaded(), Some(0.3));
+        assert_eq!(pending.target, None);
+        assert!(!pending.is_loading());
+        assert!(!pending.defer(9.0));
+    }
+
+    #[test]
+    fn 加载失败后不再吞掉后续的seek() {
+        let mut pending = PendingStart::default();
+        pending.begin(None);
+        // 加载失败只会来 `END_FILE`，不会来 `FILE_LOADED`。
+        pending.reset();
+        assert!(!pending.defer(2.0));
     }
 }
