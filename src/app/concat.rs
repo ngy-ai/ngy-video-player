@@ -29,10 +29,8 @@ impl PlayerApp {
             self.close_concat_dialog(cx);
             return;
         }
-        let playlist = self.playlist();
-        let inputs: Vec<PathBuf> = (0..playlist.len())
-            .filter_map(|index| playlist.playable_path(index).cloned())
-            .collect();
+        // 顺序与「导入到时间线」共用同一份清单：折叠的文件夹不算没内容。
+        let inputs = self.playlist().file_paths();
         if inputs.len() < 2 {
             self.flash("列表里至少要有两个文件，才好拼接");
             cx.notify();

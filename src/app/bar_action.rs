@@ -19,6 +19,8 @@ pub(super) enum BarAction {
     OpenRecentProject(PathBuf),
     /// 选媒体文件插进时间线。
     ImportToTimeline,
+    /// 把当前播放列表里的文件按顺序插进时间线。
+    ImportPlaylistToTimeline,
     /// 保存到当前路径；没存过时走「另存为」。
     Save,
     /// 换一个路径保存。

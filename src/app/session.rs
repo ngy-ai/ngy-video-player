@@ -88,6 +88,8 @@ impl PlayerApp {
             project_path: None,
             project_saved: None,
             autosave: AutoSave::new(),
+            pending_import: None,
+            import_generation: 0,
             timeline: ViewState::new(),
             timeline_dragging: false,
             timeline_snap: false,

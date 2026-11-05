@@ -40,14 +40,25 @@ pub fn probe(path: &Path) -> Result<MediaInfo> {
 /// 登记素材并探测。已有可信缓存时不再重探。
 pub fn register(project: &mut Project, path: &Path) -> Result<AssetId> {
     let id = project.add_asset(path);
-    if let Some(asset) = project.asset(id)
-        && asset.media.is_some()
-        && asset.state() == AssetState::Ready
-    {
+    if asset_ready(project, id) {
         return Ok(id);
     }
 
     let info = probe(path)?;
+    register_probed(project, path, info)
+}
+
+/// 用别处（通常是后台线程）探测好的信息登记素材。
+///
+/// 「从播放列表导入」一次可能有几十个文件，`ffmpeg -i` 放到后台跑，主线程只负责
+/// 把结果写进素材表。期间文件被换掉时照旧按指纹判断：这次的 `info` 会连同新的
+/// 指纹一起写回去，缓存仍然可信。
+pub fn register_probed(project: &mut Project, path: &Path, info: MediaInfo) -> Result<AssetId> {
+    let id = project.add_asset(path);
+    if asset_ready(project, id) {
+        return Ok(id);
+    }
+
     let stamp =
         MediaStamp::of(path).ok_or_else(|| anyhow!("读不到文件指纹：{}", path.display()))?;
     let asset = project
@@ -59,6 +70,13 @@ pub fn register(project: &mut Project, path: &Path) -> Result<AssetId> {
     asset.stamp = Some(stamp);
     asset.missing = false;
     Ok(id)
+}
+
+/// 素材表里已经有可信的探测结果：这次不必再跑 ffmpeg。
+fn asset_ready(project: &Project, id: AssetId) -> bool {
+    project
+        .asset(id)
+        .is_some_and(|asset| asset.media.is_some() && asset.state() == AssetState::Ready)
 }
 
 /// 从 `ffmpeg -i` 的 stderr 里解析元信息。解析不出来（没有 Duration 也没有轨道）返回 `None`。

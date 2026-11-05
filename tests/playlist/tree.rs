@@ -352,3 +352,29 @@ fn 老存档里的平铺列表层级都是零() {
     assert_eq!(depths(&playlist), [0, 0]);
     assert!(playlist.items().iter().all(|item| !item.is_dir()));
 }
+
+#[test]
+fn 导入清单按列表顺序列出文件且不理会折叠() {
+    let mut playlist = tree_of(
+        &[
+            dir_item("d", 0),
+            file_item("d/a.mp4", 1),
+            file_item("b.mp4", 0),
+            dir_item("e", 0),
+            file_item("e/c.mp4", 1),
+        ],
+        1,
+    );
+
+    let paths: Vec<String> = playlist
+        .file_paths()
+        .iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect();
+    assert_eq!(paths, ["d/a.mp4", "b.mp4", "e/c.mp4"], "文件夹行不算素材");
+
+    // 收起文件夹只是界面上的事：整页导入不该因此少几个文件。
+    playlist.toggle_dir(0);
+    playlist.toggle_dir(2);
+    assert_eq!(playlist.file_paths().len(), 3);
+}

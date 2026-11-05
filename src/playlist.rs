@@ -208,6 +208,18 @@ impl Playlist {
         self.items.iter().filter(|item| !item.dir).count()
     }
 
+    /// 全部可播放文件，按列表顺序。
+    ///
+    /// 文件夹行只是界面上的分组，这里连同收起文件夹里的项一起给出：整页内容才是
+    /// 「导入到时间线」和「拼接」要的东西，界面上少画几行不该少导入几个文件。
+    pub fn file_paths(&self) -> Vec<PathBuf> {
+        self.items
+            .iter()
+            .filter(|item| !item.dir)
+            .map(|item| item.path.clone())
+            .collect()
+    }
+
     pub fn index(&self) -> Option<usize> {
         self.index
     }
