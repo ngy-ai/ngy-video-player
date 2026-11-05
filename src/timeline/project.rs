@@ -90,12 +90,14 @@ pub struct UiState {
 }
 
 impl UiState {
-    /// 设入点。已经停在同一时刻就清掉——和标记一样的开关手感。
-    pub fn set_in(&mut self, at: Tick) {
-        self.in_point = if self.in_point == Some(at) {
-            None
-        } else {
-            Some(at)
+    /// 设入点。已经停在同一时刻（容差内）就清掉——和标记一样的开关手感。
+    ///
+    /// 容差由界面按当前缩放给出：拖回来的播放头只精确到像素，严格相等就等于
+    /// 「入点一旦设上就再也清不掉」。
+    pub fn set_in(&mut self, at: Tick, tolerance: Tick) {
+        self.in_point = match self.in_point {
+            Some(existing) if existing.within(at, tolerance) => None,
+            _ => Some(at),
         };
         // 出点必须晚于入点。留一个反向区间比清掉更让人困惑，所以直接舍掉另一端。
         if let (Some(start), Some(end)) = (self.in_point, self.out_point)
@@ -106,11 +108,10 @@ impl UiState {
     }
 
     /// 设出点，规则与 [`UiState::set_in`] 对称。
-    pub fn set_out(&mut self, at: Tick) {
-        self.out_point = if self.out_point == Some(at) {
-            None
-        } else {
-            Some(at)
+    pub fn set_out(&mut self, at: Tick, tolerance: Tick) {
+        self.out_point = match self.out_point {
+            Some(existing) if existing.within(at, tolerance) => None,
+            _ => Some(at),
         };
         if let (Some(start), Some(end)) = (self.in_point, self.out_point)
             && end <= start
@@ -125,6 +126,15 @@ impl UiState {
             (Some(start), Some(end)) if start < end => Some((start, end)),
             _ => None,
         }
+    }
+
+    /// 清除工作区：入点和出点一起丢掉。标尺右键菜单用。
+    ///
+    /// 快捷键那条路依赖播放头落回原位，缩得很粗或者手不稳时仍可能清不掉；
+    /// 这个入口不看播放头，是兜底。
+    pub fn clear_range(&mut self) {
+        self.in_point = None;
+        self.out_point = None;
     }
 }
 

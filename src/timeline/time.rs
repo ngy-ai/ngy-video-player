@@ -105,6 +105,16 @@ impl Tick {
     pub fn saturating_sub(self, other: Tick) -> Tick {
         Tick(self.0.saturating_sub(other.0))
     }
+
+    /// 两个时间点之间的距离是否不超过 `tolerance`。
+    ///
+    /// 鼠标落点只精确到屏幕像素，「回到刚才那个位置」必须按容差判断：播放头拖回来
+    /// 差几十毫秒是常态，精确相等就等于「同一个位置」永远对不上。用 `abs_diff`
+    /// 而不是相减再取绝对值，避免 `i64::MIN` 那种溢出。
+    pub fn within(self, other: Tick, tolerance: Tick) -> bool {
+        let tolerance = tolerance.micros().max(0) as u64;
+        self.micros().abs_diff(other.micros()) <= tolerance
+    }
 }
 
 impl Add for Tick {

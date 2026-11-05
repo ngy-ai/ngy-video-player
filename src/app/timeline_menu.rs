@@ -9,9 +9,18 @@
 use super::*;
 use crate::timeline::Id;
 
-/// 展开中的时间线菜单。`clip` / `track` 是右键点中的那一段与它所在的轨道。
+/// 展开中的时间线菜单。
 #[derive(Clone, Copy, Debug)]
-pub(super) struct TimelineMenu {
+pub(super) enum TimelineMenu {
+    /// 片段右键：作用对象是点中的那一段与它所在的轨道。
+    Clip(ClipMenu),
+    /// 标尺右键：整条时间线级别的动作，不指向任何片段。
+    Ruler { position: Point<Pixels> },
+}
+
+/// 片段菜单的上下文：右键点中的那一段、它所在的轨道与鼠标位置。
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ClipMenu {
     clip: Id,
     track: Id,
     position: Point<Pixels>,
@@ -29,16 +38,34 @@ impl PlayerApp {
         if let Some(project) = self.project.as_mut() {
             project.ui.selected = vec![clip];
         }
-        self.timeline_menu = Some(TimelineMenu {
+        self.timeline_menu = Some(TimelineMenu::Clip(ClipMenu {
             clip,
             track,
             position,
-        });
+        }));
+        cx.notify();
+    }
+
+    /// 标尺上右键：弹出与整条时间线相关的菜单。
+    ///
+    /// 「清除工作区」放这里当兜底：快捷键那条路要求播放头落回入点 / 出点附近，
+    /// 缩得很粗或者手不稳时可能清不掉；这个入口不看播放头。
+    pub(super) fn open_ruler_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        if self.project.is_none() {
+            return;
+        }
+        self.timeline_menu = Some(TimelineMenu::Ruler { position });
         cx.notify();
     }
 
     pub(super) fn render_timeline_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let menu = self.timeline_menu?;
+        match self.timeline_menu? {
+            TimelineMenu::Clip(menu) => self.render_clip_menu(menu, cx),
+            TimelineMenu::Ruler { position } => self.render_ruler_menu(position, cx),
+        }
+    }
+
+    fn render_clip_menu(&self, menu: ClipMenu, cx: &mut Context<Self>) -> Option<AnyElement> {
         let project = self.project.as_ref()?;
         let track = project.sequence.track(menu.track)?;
         // 片段已经被删掉（比如刚按过 Delete）时，菜单跟着收掉，不留一张空壳。
@@ -157,6 +184,54 @@ impl PlayerApp {
                         cx.stop_propagation();
                         this.timeline_menu = None;
                         this.toggle_track_locked(track_id, cx);
+                    }),
+                ))
+                .into_any_element(),
+        )
+    }
+
+    /// 标尺菜单。外壳与片段菜单一致，只是内容只有时间线级别的那几项。
+    fn render_ruler_menu(
+        &self,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let project = self.project.as_ref()?;
+        // 没设过工作区时这一项压暗，点下去给一句说明而不是无声无息。
+        let has_range = project.ui.in_point.is_some() || project.ui.out_point.is_some();
+
+        Some(
+            div()
+                .id("timeline-ruler-menu")
+                .absolute()
+                .left(position.x)
+                .top(position.y)
+                .w(px(ITEM_MENU_WIDTH))
+                .py(px(6.0))
+                .rounded(px(10.0))
+                .bg(surface())
+                .border_1()
+                .border_color(gpui_kit::rgb(0x2c2c34))
+                .shadow_lg()
+                // 与片段菜单一样：点菜单本身不能漏到下面的标尺去挪播放头。
+                .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
+                    cx.stop_propagation();
+                }))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                        cx.stop_propagation();
+                    }),
+                )
+                .child(item_menu_entry(
+                    "timeline-ruler-clear-range",
+                    IconName::Trash,
+                    "清除工作区",
+                    if has_range { text() } else { text_faint() },
+                    cx.listener(|this, _: &ClickEvent, _window, cx| {
+                        cx.stop_propagation();
+                        this.timeline_menu = None;
+                        this.clear_work_area(cx);
                     }),
                 ))
                 .into_any_element(),

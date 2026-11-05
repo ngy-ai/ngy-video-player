@@ -383,6 +383,14 @@ impl PlayerApp {
                     this.poke();
                     cx.notify();
                 }),
+            )
+            // 右键不看播放头在哪儿：工作区的清除入口得有一个位置无关的兜底。
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                    cx.stop_propagation();
+                    this.open_ruler_menu(event.position, cx);
+                }),
             );
 
         let step = view.tick_step();

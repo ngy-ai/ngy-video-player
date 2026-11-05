@@ -86,24 +86,48 @@ fn 入出点成对才有效且顺序不对会清掉另一端() {
     let mut ui = UiState::default();
     assert_eq!(ui.range(), None);
 
-    ui.set_in(Tick::from_secs(1.0));
+    ui.set_in(Tick::from_secs(1.0), Tick::ZERO);
     assert_eq!(ui.range(), None, "只有入点不算区间");
-    ui.set_out(Tick::from_secs(3.0));
+    ui.set_out(Tick::from_secs(3.0), Tick::ZERO);
     assert_eq!(
         ui.range(),
         Some((Tick::from_secs(1.0), Tick::from_secs(3.0)))
     );
 
     // 同一时刻再按一次出点：清掉。
-    ui.set_out(Tick::from_secs(3.0));
+    ui.set_out(Tick::from_secs(3.0), Tick::ZERO);
     assert_eq!(ui.out_point, None);
     assert_eq!(ui.range(), None);
 
     // 出点早于入点：保留出点，入点被清掉，不留反向区间。
-    ui.set_in(Tick::from_secs(4.0));
-    ui.set_out(Tick::from_secs(2.0));
+    ui.set_in(Tick::from_secs(4.0), Tick::ZERO);
+    ui.set_out(Tick::from_secs(2.0), Tick::ZERO);
     assert_eq!(ui.in_point, None);
     assert_eq!(ui.out_point, Some(Tick::from_secs(2.0)));
+}
+
+#[test]
+fn 入出点按像素容差清除() {
+    let mut ui = UiState::default();
+    // 8 像素/秒的默认缩放下，一个像素就是 125 毫秒。
+    let tolerance = Tick::from_millis(125);
+    ui.set_in(Tick::from_secs(2.0), tolerance);
+    ui.set_out(Tick::from_secs(5.0), tolerance);
+
+    // 播放头拖回来差 60 毫秒：算回到入点上，再按一次清掉。
+    ui.set_in(Tick::from_millis(2060), tolerance);
+    assert_eq!(ui.in_point, None, "同一像素内再按一次是清除");
+    assert_eq!(ui.out_point, Some(Tick::from_secs(5.0)), "清入点不动出点");
+
+    // 容差之外是改设新值，不该把已有入点清掉。
+    ui.set_in(Tick::from_secs(1.0), tolerance);
+    ui.set_in(Tick::from_millis(1900), tolerance);
+    assert_eq!(ui.in_point, Some(Tick::from_millis(1900)));
+
+    // 右键菜单的兜底入口：不看播放头，两个点一起清。
+    ui.clear_range();
+    assert_eq!(ui.range(), None);
+    assert!(ui.in_point.is_none() && ui.out_point.is_none());
 }
 
 #[test]

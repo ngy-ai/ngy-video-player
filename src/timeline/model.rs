@@ -410,12 +410,11 @@ impl Sequence {
     /// 旧标记、只会一直往上叠。容差由界面按当前缩放给出（一像素对应的时间），
     /// 这里保持纯数据判断。命中多个时删最近的那一个。
     pub fn toggle_marker(&mut self, at: Tick, name: impl Into<String>, tolerance: Tick) -> bool {
-        let tolerance = tolerance.micros().max(0) as u64;
         let nearest = self
             .markers
             .iter()
             .enumerate()
-            .filter(|(_, marker)| at.micros().abs_diff(marker.at.micros()) <= tolerance)
+            .filter(|(_, marker)| marker.at.within(at, tolerance))
             .min_by_key(|(_, marker)| at.micros().abs_diff(marker.at.micros()))
             .map(|(index, _)| index);
 
