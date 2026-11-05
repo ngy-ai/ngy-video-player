@@ -85,8 +85,12 @@ impl PlayerApp {
         self.close_concat_dialog(cx);
 
         let tab = self.playlists.active();
-        // 默认选这一页正在播的那一项：多半就是想把它放进时间线。
-        let selected = self.playlists.tab(tab).and_then(Playlist::index);
+        // 默认选这一页正在播的那一项：多半就是想把它放进时间线。它藏在收起的
+        // 文件夹里时不预选，免得按钮亮着却看不见选中的是哪一行。
+        let selected = self.playlists.tab(tab).and_then(|list| {
+            let visible = list.visible_indices();
+            list.index().filter(|index| visible.contains(index))
+        });
         self.playlist_import = Some(PlaylistImportDialog { tab, selected });
         self.menu_bar = None;
         cx.notify();
@@ -103,10 +107,34 @@ impl PlayerApp {
         let Some(list) = self.playlists.tab(tab) else {
             return;
         };
-        let selected = list.index();
+        let visible = list.visible_indices();
+        let selected = list.index().filter(|index| visible.contains(index));
         if let Some(dialog) = self.playlist_import.as_mut() {
             dialog.tab = tab;
             dialog.selected = selected;
+        }
+        cx.notify();
+    }
+
+    /// 展开或收起一个文件夹。收起来之后选中的文件看不见了，顺手取消选择：
+    /// 确认按钮不该指着一个界面上根本不存在的行。
+    fn toggle_import_dir(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(tab) = self.playlist_import.as_ref().map(|dialog| dialog.tab) else {
+            return;
+        };
+        let Some(list) = self.playlists.tab_mut(tab) else {
+            return;
+        };
+        if !list.toggle_dir(index) {
+            return;
+        }
+        let visible = list.visible_indices();
+        if let Some(dialog) = self.playlist_import.as_mut()
+            && dialog
+                .selected
+                .is_some_and(|selected| !visible.contains(&selected))
+        {
+            dialog.selected = None;
         }
         cx.notify();
     }
@@ -183,42 +211,79 @@ impl PlayerApp {
                     }),
             );
 
-        // 第二级：选视频。只列文件行，文件夹不占位置。
+        // 第二级：选视频。列表是树，文件夹照样画出来：点文件夹展开/收起，
+        // 点文件才是选中。收起时子树整段跳过，和面板上的行为一致。
         let items = div()
             .id("playlist-import-items")
             .flex()
             .flex_col()
-            .gap(px(2.0))
+            .gap(px(1.0))
             .max_h(px(300.0))
             .overflow_y_scroll()
-            .children(
-                list.items()
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, item)| !item.is_dir())
-                    .map(|(index, item)| {
-                        let selected = dialog.selected == Some(index);
-                        div()
-                            .id(gpui_kit::ElementId::Name(
-                                format!("playlist-import-item-{index}").into(),
-                            ))
-                            .px(px(10.0))
-                            .py(px(7.0))
-                            .rounded(px(6.0))
-                            .cursor(CursorStyle::PointingHand)
-                            .text_size(px(12.0))
-                            .text_color(if selected { ui::accent() } else { text() })
-                            .when(selected, |this| this.bg(gpui_kit::rgba(0x5aa9ff1f)))
-                            .when(!selected, |this| {
-                                this.hover(|style| style.bg(ui::surface_hover()))
-                            })
-                            .child(ui::ellipsis(file_name(item.path())))
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
-                                cx.stop_propagation();
-                                this.select_import_item(index, cx);
-                            }))
-                    }),
-            );
+            .children(list.visible_indices().into_iter().map(|index| {
+                let Some(item) = list.items().get(index) else {
+                    return div().into_any_element();
+                };
+                let is_dir = item.is_dir();
+                let folded = item.collapsed();
+                let depth = item.depth();
+                let selected = !is_dir && dialog.selected == Some(index);
+                div()
+                    .id(gpui_kit::ElementId::Name(
+                        format!("playlist-import-item-{index}").into(),
+                    ))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    // 缩进就是层级：和面板上的树保持同一套节奏。
+                    .pl(px(10.0 + f32::from(depth) * PLAYLIST_INDENT))
+                    .pr(px(10.0))
+                    .py(px(6.0))
+                    .rounded(px(6.0))
+                    .cursor(CursorStyle::PointingHand)
+                    .text_size(px(12.0))
+                    .text_color(if selected {
+                        ui::accent()
+                    } else if is_dir {
+                        text_muted()
+                    } else {
+                        text()
+                    })
+                    .when(selected, |this| this.bg(gpui_kit::rgba(0x5aa9ff1f)))
+                    .when(!selected, |this| {
+                        this.hover(|style| style.bg(ui::surface_hover()))
+                    })
+                    .when(is_dir, |this| {
+                        this.child(icon(
+                            if folded {
+                                IconName::ChevronRight
+                            } else {
+                                IconName::ChevronDown
+                            },
+                            12.0,
+                            text_muted(),
+                        ))
+                        .child(icon(
+                            if folded {
+                                IconName::Folder
+                            } else {
+                                IconName::FolderOpen
+                            },
+                            14.0,
+                            text_muted(),
+                        ))
+                    })
+                    .child(ui::ellipsis(file_name(item.path())))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                        cx.stop_propagation();
+                        if is_dir {
+                            this.toggle_import_dir(index, cx);
+                        } else {
+                            this.select_import_item(index, cx);
+                        }
+                    }))
+                    .into_any_element()
+            }));
 
         let confirm_enabled = dialog
             .selected
