@@ -21,7 +21,7 @@ use crate::{
     timeline::{
         Project, Tick, UndoHistory, ViewState,
         autosave::{self, AutoSave},
-        seek_seconds, snap_to_targets, visible_ticks,
+        frame_pixels, seek_seconds, snap_to_targets, visible_frames, visible_ticks,
     },
     ui::{
         self, bg, format_time, format_time_precise, icon, icon_button, icon_button_with_tip,
@@ -142,7 +142,7 @@ use self::constants::*;
 use self::convert::ConvertDialog;
 use self::export_queue::QueuedExport;
 use self::format::*;
-use self::import::PendingImport;
+use self::import::PlaylistImportDialog;
 use self::metadata::MetadataDialog;
 use self::mini::MiniPlayer;
 use self::multicam::MulticamDialog;
@@ -395,12 +395,8 @@ pub struct PlayerApp {
     project_saved: Option<Project>,
     /// 自动保存的计时器：编辑后 30 秒没有新操作就落一份 `.autosave`。
     autosave: AutoSave,
-    /// 正在从播放列表导入的素材批次；`None` 表示空闲。
-    ///
-    /// 探测在后台跑，结果回来之前它得一直活着，界面也能据此挡住重复点击。
-    pending_import: Option<PendingImport>,
-    /// 导入批次代次。换工程 / 关工程之后，旧批次晚到的事件据此丢掉。
-    import_generation: u64,
+    /// 「从播放列表导入」对话框；`None` 表示没打开。
+    playlist_import: Option<PlaylistImportDialog>,
     /// 时间线的缩放与滚动。关掉工程也留着，下次打开还在原处。
     timeline: ViewState,
     /// 正在拖时间线的播放头。

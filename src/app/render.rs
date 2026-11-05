@@ -367,6 +367,7 @@ impl Render for PlayerApp {
             .children(self.render_scenes_dialog(cx))
             .children(self.render_multicam_dialog(cx))
             .children(self.render_concat_dialog(cx))
+            .children(self.render_playlist_import_dialog(cx))
             .children(self.render_file_info(cx))
             // 重命名是模态的，压在所有东西上面。
             .children(self.render_tab_rename(cx))

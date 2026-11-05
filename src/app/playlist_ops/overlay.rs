@@ -9,7 +9,10 @@ impl PlayerApp {
         // 队伍里，Esc 第一下关掉的就是一个看不见的东西，屏幕上毫无变化——看着像
         // Esc 失灵，退出全屏得按第二下。所以全屏时跳过那几层。
         let fullscreen = window.is_fullscreen();
-        if self.tab_rename.is_some() {
+        if self.playlist_import.is_some() {
+            // 选择器是模态，Esc 先关它，别顺手把下面的面板也收掉。
+            self.close_playlist_import_dialog(cx);
+        } else if self.tab_rename.is_some() {
             // 输入框自己会吃掉 Esc（见 `on_rename_key`），这里兜住「焦点不在
             // 根视图」的那一次，保证 Esc 总能关掉它。
             self.tab_rename = None;

@@ -45,10 +45,15 @@ impl PlayerApp {
                     BarEntry::new("导入到时间线…", ImportToTimeline)
                         .enabled(self.project.is_some()),
                 ));
-                // 列表里已经排好的东西直接当素材用：不用再在文件框里翻一遍。
+                // 列表里已经排好的东西直接当素材用：先选列表，再选其中一个视频。
+                let has_playlist_files = self
+                    .playlists
+                    .tabs()
+                    .iter()
+                    .any(|tab| tab.playlist.file_count() > 0);
                 items.push(BarItem::Entry(
-                    BarEntry::new("从当前列表导入到时间线", ImportPlaylistToTimeline)
-                        .enabled(self.project.is_some() && self.playlist().file_count() > 0),
+                    BarEntry::new("从播放列表导入…", ImportPlaylistToTimeline)
+                        .enabled(self.project.is_some() && has_playlist_files),
                 ));
                 // 有未保存改动时，标题栏会挂一个 `*`；这里把保存入口放在最顺手的位置。
                 let save_hint = if cfg!(target_os = "macos") {
@@ -375,7 +380,7 @@ impl PlayerApp {
                 self.request_project_action(AfterSaveConfirm::OpenProject(path), cx);
             }
             BarAction::ImportToTimeline => self.import_to_timeline(window, cx),
-            BarAction::ImportPlaylistToTimeline => self.import_playlist_to_timeline(cx),
+            BarAction::ImportPlaylistToTimeline => self.open_playlist_import_dialog(cx),
             BarAction::Save => {
                 self.save_project(Some(window), cx, None);
             }

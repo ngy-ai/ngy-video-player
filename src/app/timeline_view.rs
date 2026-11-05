@@ -35,8 +35,6 @@ impl PlayerApp {
 
     /// 退出工程模式。未保存改动由调用方先确认（见 `request_project_action`）。
     pub(super) fn close_project(&mut self, cx: &mut Context<Self>) {
-        // 还没回来的导入结果属于这个工程，关掉之后不能再插进别处。
-        self.cancel_pending_import();
         // 预览播放属于工程：工程关掉了，时钟和 mpv 都不该继续跑。
         self.stop_timeline_playback(cx);
         if self.project.take().is_some() {
@@ -57,7 +55,6 @@ impl PlayerApp {
 
     /// 新建一个空工程：默认 1080p30，自带一条视频轨与一条音频轨。
     pub(super) fn new_project(&mut self, cx: &mut Context<Self>) {
-        self.cancel_pending_import();
         // 换工程 = 换播放源：上一个工程的预览时钟和已加载的素材都作废。
         self.stop_timeline_playback(cx);
         // 普通播放里的上一部片子不属于这个空工程：连画面带播放一起停掉，
@@ -126,7 +123,6 @@ impl PlayerApp {
     ) {
         let restored = recovery.is_some();
         let source = recovery.unwrap_or_else(|| path.clone());
-        self.cancel_pending_import();
         // 换工程 = 换播放源：上一个工程的预览时钟和已加载的素材都作废。
         self.stop_timeline_playback(cx);
         self.timeline_preview = None;

@@ -75,6 +75,7 @@ impl PlayerApp {
         self.close_clip_dialog(cx);
         self.close_multicam_dialog(cx);
         self.close_scenes_dialog(cx);
+        self.close_playlist_import_dialog(cx);
         self.scope_generation += 1;
         self.scope = Some(ScopeDialog {
             generation: self.scope_generation,

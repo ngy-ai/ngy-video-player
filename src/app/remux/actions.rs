@@ -30,6 +30,7 @@ impl PlayerApp {
         self.close_scope_dialog(cx);
         self.close_scenes_dialog(cx);
         self.close_multicam_dialog(cx);
+        self.close_playlist_import_dialog(cx);
         self.remux_generation += 1;
         self.remux = Some(RemuxDialog::new(
             self.remux_generation,

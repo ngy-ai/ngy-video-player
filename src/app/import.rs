@@ -1,26 +1,19 @@
 //! 把媒体文件导入时间线：登记素材、探测、接进序列。
 //!
-//! 单个文件优先落在播放头，撞上了就退到末尾；整批导入（文件框多选、整页列表）
-//! 则一条接一条接在序列末尾，免得和播放头附近的已有内容互相挤。
-//!
-//! 「导入整页」可能一次几十个文件，所以那条路把 `ffmpeg -i` 放到后台跑，
-//! 结果收齐后主线程一次性插入。
+//! 单个文件优先落在播放头，撞上了就退到末尾。来源有两种：文件选择框，以及
+//! 「从播放列表导入」——后者先选一页列表，再选其中一个视频，一次只导一个。
 
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::*;
 use crate::timeline::{AssetId, ClipSpec, EditOp, MediaInfo, TrackKind, apply as apply_edit};
 
-/// 正在从播放列表导入的一批素材。
-///
-/// `generation` 用来认领后台结果：换工程、关工程之后这批结果才回来时，
-/// 不该再往新工程里插片段。`cancelled` 让后台探测也能提前收手，
-/// 不必为一份已经关掉的工程把整页文件读完。
-pub(super) struct PendingImport {
-    generation: u64,
-    cancelled: Arc<AtomicBool>,
+/// 「从播放列表导入」对话框：先选一页列表，再选其中的一个视频。
+pub(super) struct PlaylistImportDialog {
+    /// 当前显示的是哪一页。
+    tab: usize,
+    /// 选中的文件在 `Playlist::items` 里的下标；只可能是文件行。
+    selected: Option<usize>,
 }
 
 impl PlayerApp {
@@ -58,154 +51,243 @@ impl PlayerApp {
         .detach();
     }
 
-    /// 菜单「从当前列表导入到时间线」。
+    /// 菜单「从播放列表导入…」。
     ///
-    /// 直接拿当前页当输入，不再让用户挑一遍——列表里已经是排好的顺序了。
-    /// 探测放到后台：整页可能有几十集，同步跑 ffmpeg 会把界面卡住。结果收齐后
-    /// 一次性插进序列，中途不会留下「只插进去一半」的状态挡在撤销前面。
-    pub(super) fn import_playlist_to_timeline(&mut self, cx: &mut Context<Self>) {
+    /// 工程模式下右侧播放列表不画，所以用应用内对话框重新给一份：先选列表，
+    /// 再选视频。一次只导入一个，误点最多多一段，撤一步就回去了。
+    pub(super) fn open_playlist_import_dialog(&mut self, cx: &mut Context<Self>) {
         if self.project.is_none() {
             return;
         }
-        if self.pending_import.is_some() {
-            self.flash("正在从播放列表导入，等这一批完成");
-            cx.notify();
+        // 再点一次菜单就是收起：和裁切面板的开关语义一致。
+        if self.playlist_import.is_some() {
+            self.close_playlist_import_dialog(cx);
             return;
         }
-        let paths = self.playlist().file_paths();
-        if paths.is_empty() {
+        let has_files = self
+            .playlists
+            .tabs()
+            .iter()
+            .any(|tab| tab.playlist.file_count() > 0);
+        if !has_files {
             self.flash("播放列表里还没有文件");
             cx.notify();
             return;
         }
-        let total = paths.len();
 
-        self.import_generation += 1;
-        let generation = self.import_generation;
-        let cancelled = Arc::new(AtomicBool::new(false));
-        self.pending_import = Some(PendingImport {
-            generation,
-            cancelled: cancelled.clone(),
-        });
-        self.flash(format!("正在探测 {total} 个素材…"));
+        // 这几个对话框都是「对工程做件大事」的，同一时间只留一个。
+        self.close_remux_dialog(cx);
+        self.close_metadata_dialog(cx);
+        self.close_proxy_dialog(cx);
+        self.close_scope_dialog(cx);
+        self.close_scenes_dialog(cx);
+        self.close_multicam_dialog(cx);
+        self.close_concat_dialog(cx);
+
+        let tab = self.playlists.active();
+        // 默认选这一页正在播的那一项：多半就是想把它放进时间线。
+        let selected = self.playlists.tab(tab).and_then(Playlist::index);
+        self.playlist_import = Some(PlaylistImportDialog { tab, selected });
+        self.menu_bar = None;
         cx.notify();
-
-        let (tx, mut rx) = futures::channel::mpsc::unbounded();
-        std::thread::spawn(move || {
-            for path in paths {
-                // 换工程时不必把整页探测完：剩下的结果已经没人要了。
-                if cancelled.load(Ordering::Relaxed) {
-                    break;
-                }
-                let info = crate::media::probe(&path).map_err(|error| format!("{error:#}"));
-                if tx.unbounded_send((path, info)).is_err() {
-                    break;
-                }
-            }
-        });
-
-        cx.spawn(async move |this, cx| {
-            let mut results = Vec::with_capacity(total);
-            while let Some(item) = rx.next().await {
-                results.push(item);
-            }
-            let _ = this.update(cx, |this, cx| {
-                this.finish_playlist_import(generation, results);
-                cx.notify();
-            });
-        })
-        .detach();
     }
 
-    /// 换工程 / 关工程：正在跑的这批导入不再有意义，结果回来时一律丢掉。
-    pub(super) fn cancel_pending_import(&mut self) {
-        if let Some(pending) = self.pending_import.take() {
-            pending.cancelled.store(true, Ordering::Relaxed);
-            // 自增代次，旧结果到达时认不出来，也不会改写新工程。
-            self.import_generation += 1;
+    pub(super) fn close_playlist_import_dialog(&mut self, cx: &mut Context<Self>) {
+        if self.playlist_import.take().is_some() {
+            cx.notify();
         }
     }
 
-    /// 整页探测完毕：按列表顺序一条接一条接在序列末尾，整批算一步撤销。
-    fn finish_playlist_import(
-        &mut self,
-        generation: u64,
-        results: Vec<(PathBuf, Result<MediaInfo, String>)>,
-    ) {
-        let Some(pending) = self.pending_import.as_ref() else {
+    /// 换一页列表：预选这一页的当前项，没有就空着，等用户自己点。
+    fn select_import_tab(&mut self, tab: usize, cx: &mut Context<Self>) {
+        let Some(list) = self.playlists.tab(tab) else {
             return;
         };
-        if pending.generation != generation {
+        let selected = list.index();
+        if let Some(dialog) = self.playlist_import.as_mut() {
+            dialog.tab = tab;
+            dialog.selected = selected;
+        }
+        cx.notify();
+    }
+
+    fn select_import_item(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(dialog) = self.playlist_import.as_mut() else {
+            return;
+        };
+        if !self
+            .playlists
+            .tab(dialog.tab)
+            .is_some_and(|list| list.playable_path(index).is_some())
+        {
             return;
         }
-        self.pending_import = None;
+        dialog.selected = Some(index);
+        cx.notify();
+    }
 
-        // 起点取处理时的末尾，而不是探测开始时的：等待期间用户可能又改了几处，
-        // 新素材应该排在那些改动之后，而不是和它们抢位置。
-        let mut cursor = self
-            .project
-            .as_ref()
-            .map(|project| project.sequence.duration())
-            .unwrap_or(Tick::ZERO);
-        let mut imported = 0;
-        let mut failed = 0;
+    /// 把选中的那一个文件插进时间线。
+    fn confirm_playlist_import(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.playlist_import.take() else {
+            return;
+        };
+        let Some(path) = self.playlists.tab(dialog.tab).and_then(|list| {
+            dialog
+                .selected
+                .and_then(|index| list.playable_path(index).cloned())
+        }) else {
+            return;
+        };
+        self.import_paths(vec![path], cx);
+    }
 
-        for (path, info) in results {
-            let info = match info {
-                Ok(info) => info,
-                Err(message) => {
-                    log_warn!("导入「{}」失败：{message}", path.display());
-                    failed += 1;
-                    continue;
-                }
-            };
+    pub(super) fn render_playlist_import_dialog(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let dialog = self.playlist_import.as_ref()?;
+        let list = self.playlists.tab(dialog.tab)?;
 
-            let Some(project) = self.project.as_mut() else {
-                break;
-            };
-            let id = match crate::media::register_probed(project, &path, info) {
-                Ok(id) => id,
-                Err(error) => {
-                    log_warn!("导入「{}」失败：{error:#}", path.display());
-                    failed += 1;
-                    continue;
-                }
-            };
-            // 借用不能跨过 `insert_probed`：先把时长与轨道信息拿出来。
-            let Some(media) = self
-                .project
-                .as_ref()
-                .and_then(|project| project.asset(id))
-                .and_then(|asset| asset.media.clone())
-            else {
-                failed += 1;
-                continue;
-            };
-            if media.duration <= Tick::ZERO {
-                log_warn!("「{}」读不出时长，跳过", path.display());
-                failed += 1;
-                continue;
-            }
+        // 第一级：选列表。页签多了换行，按钮区不跟着无限变高。
+        let tabs = div()
+            .id("playlist-import-tabs")
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(6.0))
+            .max_h(px(76.0))
+            .overflow_y_scroll()
+            .children(
+                self.playlists
+                    .tabs()
+                    .iter()
+                    .enumerate()
+                    .map(|(index, tab)| {
+                        let active = index == dialog.tab;
+                        div()
+                            .id(gpui_kit::ElementId::Name(
+                                format!("playlist-import-tab-{index}").into(),
+                            ))
+                            .px(px(10.0))
+                            .py(px(4.0))
+                            .rounded(px(6.0))
+                            .cursor(CursorStyle::PointingHand)
+                            .text_size(px(11.0))
+                            .bg(if active { ui::accent() } else { ui::track() })
+                            .text_color(if active { bg() } else { text_muted() })
+                            .child(ui::ellipsis(tab.name.clone()))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                                cx.stop_propagation();
+                                this.select_import_tab(index, cx);
+                            }))
+                    }),
+            );
 
-            match self.insert_probed(id, &media, cursor) {
-                Some(end) => {
-                    cursor = end;
-                    imported += 1;
-                }
-                None => failed += 1,
-            }
+        // 第二级：选视频。只列文件行，文件夹不占位置。
+        let items = div()
+            .id("playlist-import-items")
+            .flex()
+            .flex_col()
+            .gap(px(2.0))
+            .max_h(px(300.0))
+            .overflow_y_scroll()
+            .children(
+                list.items()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, item)| !item.is_dir())
+                    .map(|(index, item)| {
+                        let selected = dialog.selected == Some(index);
+                        div()
+                            .id(gpui_kit::ElementId::Name(
+                                format!("playlist-import-item-{index}").into(),
+                            ))
+                            .px(px(10.0))
+                            .py(px(7.0))
+                            .rounded(px(6.0))
+                            .cursor(CursorStyle::PointingHand)
+                            .text_size(px(12.0))
+                            .text_color(if selected { ui::accent() } else { text() })
+                            .when(selected, |this| this.bg(gpui_kit::rgba(0x5aa9ff1f)))
+                            .when(!selected, |this| {
+                                this.hover(|style| style.bg(ui::surface_hover()))
+                            })
+                            .child(ui::ellipsis(file_name(item.path())))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                                cx.stop_propagation();
+                                this.select_import_item(index, cx);
+                            }))
+                    }),
+            );
+
+        let confirm_enabled = dialog
+            .selected
+            .and_then(|index| list.playable_path(index))
+            .is_some();
+
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(10.0))
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(text_muted())
+                    .child("先选一页列表，再选一个视频；导入后插在播放头，撞上了排到末尾。"),
+            )
+            .child(tabs);
+
+        if list.file_count() == 0 {
+            body = body.child(
+                div()
+                    .py(px(24.0))
+                    .flex()
+                    .justify_center()
+                    .text_size(px(12.0))
+                    .text_color(text_faint())
+                    .child("这一页还没有可导入的文件"),
+            );
+        } else {
+            body = body.child(items);
         }
 
-        if imported > 0 {
-            self.remember_history();
-        }
-        self.report_import(imported, failed);
-        self.poke();
+        let body = body.child(
+            div()
+                .flex()
+                .items_center()
+                .justify_end()
+                .gap(px(8.0))
+                .child(settings_button(
+                    "playlist-import-cancel",
+                    "取消",
+                    true,
+                    cx.listener(|this, _: &ClickEvent, _window, cx| {
+                        this.close_playlist_import_dialog(cx);
+                    }),
+                ))
+                .child(primary_button(
+                    "playlist-import-confirm",
+                    "导入",
+                    confirm_enabled,
+                    cx.listener(|this, _: &ClickEvent, _window, cx| {
+                        this.confirm_playlist_import(cx);
+                    }),
+                )),
+        );
+
+        Some(modal_card(
+            "playlist-import-dialog",
+            "从播放列表导入",
+            body.into_any_element(),
+            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                this.close_playlist_import_dialog(cx);
+            }),
+        ))
     }
 
     /// 文件选择框那一路：同步探测，逐个插进时间线。
     ///
-    /// 多选时整批接在序列末尾；只选一个文件时仍优先落在播放头，撞上了再退到末尾。
+    /// 多选时整批接在序列末尾；只选一个文件时优先落在播放头，撞上了再退到末尾。
     fn import_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         let batch = paths.len() > 1;
         let mut cursor = self
