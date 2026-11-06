@@ -213,10 +213,11 @@ impl PlayerApp {
         self.playing_tab
     }
 
-    /// 右侧面板占的宽度：裁切 / 转换 / 播放列表互斥，同一时刻最多一条。
+    /// 右侧面板占的宽度：播放器模式是裁切 / 转换 / 播放列表互斥，工程模式只有
+    /// 编辑历史侧栏。同一时刻最多一条，宽度只能在这里算一次。
     ///
-    /// 画面、控制条、菜单都按这个数让位，所以只能有一个地方算——三处各算一次
-    /// 迟早会有一处忘了改，表现为画面被面板盖住一条。
+    /// 画面、控制条、菜单都按这个数让位——三处各算一次迟早会有一处忘了改，
+    /// 表现为画面被面板盖住一条。
     pub(super) fn side_panel_width(&self, window: &Window) -> f32 {
         // 全屏只放画面：右侧这条通道整条让出来，画面与控制条铺满整屏。
         // 面板自己的状态不动（裁切/转换跑到一半的任务、列表的开关都还在），
@@ -224,9 +225,15 @@ impl PlayerApp {
         if window.is_fullscreen() {
             return 0.0;
         }
-        // 工程模式只有「预览 + 时间线」两块，右侧通道整条让出来。
+        // 工程模式只有「预览 + 时间线」两块，右侧通道平时整条让出来；
+        // 编辑历史侧栏展开时才占一条，画面按这个数让位。
         if self.project.is_some() {
-            return 0.0;
+            if !self.show_history {
+                return 0.0;
+            }
+            // 窄窗口先保住预览：至少给画面留 240 像素。
+            let available = f32::from(window.viewport_size().width);
+            return HISTORY_PANEL_WIDTH.min((available - 240.0).max(120.0));
         }
         // 裁切与转换都是定宽面板，宽度规则一模一样。
         let fixed = if self.convert.is_some() {

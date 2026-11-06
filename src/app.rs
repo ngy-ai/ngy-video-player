@@ -387,7 +387,7 @@ pub struct PlayerApp {
     project: Option<Project>,
     /// 编辑撤销栈。只在工程模式下有，新建 / 打开工程时重置。
     history: Option<UndoHistory>,
-    /// 编辑历史列表窗口是否打开。它是一个模态，只在工程模式下有意义。
+    /// 编辑历史侧栏是否展开。贴在工程模式预览区右侧，不是模态。
     show_history: bool,
     /// 当前工程的落点；`None` 表示新建之后还没存过。
     project_path: Option<PathBuf>,

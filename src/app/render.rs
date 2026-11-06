@@ -330,16 +330,26 @@ impl Render for PlayerApp {
             // 全屏时这条通道整条不画：全屏要看的是画面本身，不是它旁边那一栏。
             // 面板的开关状态原样留着，退出全屏就回来——切一下全屏不该把正在跑的
             // 裁切/转换任务取消掉。
-            // 工程模式下右侧通道整条让给预览与时间线，面板状态原样留着。
+            // 工程模式下这三块都不画，面板状态原样留着。
             .when(!fullscreen && self.project.is_none(), |this| {
                 this.children(self.render_convert_panel(video_top, panel_width, cx))
                     .children(self.render_clip_panel(video_top, panel_width, cx))
                     .when(
                         self.settings.show_playlist
                             && self.clip.is_none()
-                            && self.convert.is_none(),
+                            && self.convert.is_none()
+                            && !self.show_history,
                         |this| this.child(self.render_playlist(video_top, panel_width, cx)),
                     )
+            })
+            // 工程模式的右侧：编辑历史贴着预览区，下边界让开时间线。
+            .when(!fullscreen && self.project.is_some(), |this| {
+                this.children(self.render_history_panel(
+                    video_top,
+                    panel_width,
+                    timeline_height,
+                    cx,
+                ))
             })
             .when(self.controls_visible(), |this| {
                 this.child(self.render_controls(panel_width, cx))
@@ -369,7 +379,6 @@ impl Render for PlayerApp {
             .children(self.render_concat_dialog(cx))
             .children(self.render_playlist_import_dialog(cx))
             .children(self.render_file_info(cx))
-            .children(self.render_history_dialog(cx))
             // 重命名是模态的，压在所有东西上面。
             .children(self.render_tab_rename(cx))
             // 未保存确认比它还靠上一层：它一旦出现，答案决定的是整份工程的去留。

@@ -105,9 +105,9 @@ impl PlayerApp {
                         "timeline-history",
                         IconName::List,
                         self.show_history,
-                        "编辑历史（点一步直接回退 / 前进）",
+                        "编辑历史侧栏（点一步直接回退 / 前进）",
                         cx.listener(|this, _: &ClickEvent, _window, cx| {
-                            this.open_history_dialog(cx);
+                            this.open_history_panel(cx);
                         }),
                     ))
                     .child(ui::icon_toggle_small(

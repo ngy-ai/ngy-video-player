@@ -55,9 +55,11 @@ impl PlayerApp {
                     BarEntry::new("从播放列表导入…", ImportPlaylistToTimeline)
                         .enabled(self.project.is_some() && has_playlist_files),
                 ));
-                // 撤销 / 重做只能一格一格挪，历史列表能直接跳到任意一步。
+                // 撤销 / 重做只能一格一格挪，右侧历史侧栏能直接跳到任意一步。
                 items.push(BarItem::Entry(
-                    BarEntry::new("编辑历史…", ShowHistory).enabled(self.project.is_some()),
+                    BarEntry::new("编辑历史侧栏", ShowHistory)
+                        .checked(self.show_history)
+                        .enabled(self.project.is_some()),
                 ));
                 // 有未保存改动时，标题栏会挂一个 `*`；这里把保存入口放在最顺手的位置。
                 let save_hint = if cfg!(target_os = "macos") {
@@ -372,10 +374,6 @@ impl PlayerApp {
         cx: &mut Context<Self>,
     ) {
         self.menu_bar = None;
-        // 历史列表是模态：从菜单里开别的面板时先收掉它，别让两层遮罩叠着。
-        if !matches!(&action, BarAction::ShowHistory) {
-            self.show_history = false;
-        }
         match action {
             BarAction::Command(command) => self.send(command),
             BarAction::OpenFile => self.pick_file(window, cx),
@@ -389,7 +387,7 @@ impl PlayerApp {
             }
             BarAction::ImportToTimeline => self.import_to_timeline(window, cx),
             BarAction::ImportPlaylistToTimeline => self.open_playlist_import_dialog(window, cx),
-            BarAction::ShowHistory => self.open_history_dialog(cx),
+            BarAction::ShowHistory => self.open_history_panel(cx),
             BarAction::Save => {
                 self.save_project(Some(window), cx, None);
             }

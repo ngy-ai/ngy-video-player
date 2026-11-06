@@ -1,15 +1,16 @@
-//! 编辑历史列表窗口：把撤销栈里的每一步摊开，点一行直接跳到那一步。
+//! 编辑历史侧栏：贴在工程模式预览区右侧，点一行直接跳到那一步。
 //!
-//! 撤销 / 重做只挪一格，改错了十几步之前的东西就得一直按 Ctrl+Z；这里把快照
-//! 自带的说明列出来，往前点是回退、往后点是前进，跳过去之后重做分支仍然留着。
+//! 不做模态：历史是「一直看着、随手点一下」的东西，弹窗会把预览连同正在看的
+//! 那帧全遮住，也没法边看画面边试几步之前的状态。侧栏与画面并排，宽度统一由
+//! `side_panel_width()` 算；底部让开时间线，时间线仍铺满整窗。
 
 use super::*;
 
 impl PlayerApp {
-    /// 打开历史列表。再点一次入口就收起，和别的对话框开关一致。
-    pub(super) fn open_history_dialog(&mut self, cx: &mut Context<Self>) {
+    /// 开关编辑历史侧栏。再点一次入口就收起。
+    pub(super) fn open_history_panel(&mut self, cx: &mut Context<Self>) {
         if self.show_history {
-            self.close_history_dialog(cx);
+            self.close_history_panel(cx);
             return;
         }
         if self.project.is_none() {
@@ -17,37 +18,30 @@ impl PlayerApp {
             cx.notify();
             return;
         }
-
-        // 模态互斥：其它对话框都收掉，否则两层全屏遮罩会叠在一起抢键盘。
-        self.close_remux_dialog(cx);
-        self.close_metadata_dialog(cx);
-        self.close_proxy_dialog(cx);
-        self.close_scope_dialog(cx);
-        self.close_scenes_dialog(cx);
-        self.close_multicam_dialog(cx);
-        self.close_clip_dialog(cx);
-        self.close_convert_dialog(cx);
-        self.close_concat_dialog(cx);
-        self.close_playlist_import_dialog(cx);
-        self.show_settings = false;
-        self.file_info = None;
+        // 侧栏不是模态：别的对话框弹出来时仍压在它上面，不必互相收掉。
+        // 工程模式下裁切 / 转换 / 播放列表本来就不画（见 `render`），右侧只此一条。
         self.timeline_menu = None;
-
-        self.show_history = true;
-        self.menu = None;
         self.menu_bar = None;
+        self.show_history = true;
         cx.notify();
     }
 
-    pub(super) fn close_history_dialog(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn close_history_panel(&mut self, cx: &mut Context<Self>) {
         if self.show_history {
             self.show_history = false;
             cx.notify();
         }
     }
 
-    pub(super) fn render_history_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.show_history {
+    /// `bottom` 是时间线高度：侧栏只占预览区右侧，不压住底部时间线。
+    pub(super) fn render_history_panel(
+        &self,
+        top: Pixels,
+        width: f32,
+        bottom: f32,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if !self.show_history || width <= 0.0 {
             return None;
         }
         let history = self.history.as_ref()?;
@@ -62,7 +56,10 @@ impl PlayerApp {
             .flex()
             .flex_col()
             .gap(px(2.0))
-            .max_h(px(300.0))
+            .px(px(8.0))
+            .flex_1()
+            .min_h(px(0.0))
+            // 两百步也不该把面板撑出屏幕：列表自己滚，标题和按钮留在两头。
             .overflow_y_scroll();
         for (index, label) in labels.into_iter().enumerate() {
             let is_current = index == current;
@@ -79,7 +76,7 @@ impl PlayerApp {
                     .flex()
                     .items_center()
                     .gap(px(8.0))
-                    .px(px(10.0))
+                    .px(px(8.0))
                     .py(px(6.0))
                     .rounded(px(6.0))
                     .cursor(CursorStyle::PointingHand)
@@ -89,7 +86,7 @@ impl PlayerApp {
                     })
                     .child(
                         div()
-                            .w(px(26.0))
+                            .w(px(22.0))
                             .flex_none()
                             .text_size(px(11.0))
                             .text_color(if is_current {
@@ -122,73 +119,93 @@ impl PlayerApp {
                             .child(state),
                     )
                     .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
-                        // 模态底下的时间线也接点击，不拦住会顺手把播放头挪走。
+                        // 侧栏底下的画面也接点击，不拦住会顺手切换播放 / 暂停。
                         cx.stop_propagation();
                         this.jump_to_history_step(index, cx);
                     })),
             );
         }
 
-        let body = div()
-            .flex()
-            .flex_col()
-            .gap(px(10.0))
-            .child(
-                div()
-                    .text_size(px(12.0))
-                    .text_color(text_muted())
-                    .child(format!(
-                        "含初始状态共 {} 个，最多保留 {} 步操作。点任意一行即可回退或前进。",
-                        total,
-                        history.limit()
-                    )),
-            )
-            .child(rows)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.0))
-                            .child(settings_button(
-                                "history-undo",
-                                "撤销一步",
-                                can_undo,
-                                cx.listener(|this, _: &ClickEvent, _window, cx| {
-                                    this.undo_edit(cx);
-                                }),
-                            ))
-                            .child(settings_button(
-                                "history-redo",
-                                "重做一步",
-                                can_redo,
-                                cx.listener(|this, _: &ClickEvent, _window, cx| {
-                                    this.redo_edit(cx);
-                                }),
-                            )),
-                    )
-                    .child(primary_button(
-                        "history-close",
-                        "关闭",
-                        true,
-                        cx.listener(|this, _: &ClickEvent, _window, cx| {
-                            this.close_history_dialog(cx);
-                        }),
-                    )),
-            );
-
-        Some(modal_card(
-            "history-dialog",
-            "编辑历史",
-            body.into_any_element(),
-            cx.listener(|this, _: &ClickEvent, _window, cx| {
-                this.close_history_dialog(cx);
-            }),
-        ))
+        Some(
+            div()
+                .id("history-panel")
+                .absolute()
+                .top(top)
+                .right_0()
+                .bottom(px(bottom))
+                .w(px(width))
+                .flex()
+                .flex_col()
+                .bg(gpui_kit::rgba(0x131317e6))
+                .border_l_1()
+                .border_color(gpui_kit::rgb(0x26262e))
+                // 面板上的点击不该漏到画面去（画面那一层负责播放 / 暂停）。
+                .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
+                    cx.stop_propagation();
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .pl(px(14.0))
+                        .pr(px(6.0))
+                        .py(px(8.0))
+                        .child(
+                            div()
+                                .text_size(px(14.0))
+                                .text_color(text())
+                                .child("编辑历史"),
+                        )
+                        .child(icon_button(
+                            "history-close",
+                            IconName::X,
+                            false,
+                            false,
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.close_history_panel(cx);
+                            }),
+                        )),
+                )
+                .child(
+                    div()
+                        .px(px(14.0))
+                        .pb(px(8.0))
+                        .text_size(px(11.0))
+                        .text_color(text_faint())
+                        .whitespace_normal()
+                        .child(format!(
+                            "含初始状态共 {total} 个，最多保留 {} 步。点任意一行回退或前进。",
+                            history.limit()
+                        )),
+                )
+                .child(rows)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .p(px(10.0))
+                        .border_t_1()
+                        .border_color(gpui_kit::rgb(0x26262e))
+                        .child(settings_button(
+                            "history-undo",
+                            "撤销一步",
+                            can_undo,
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.undo_edit(cx);
+                            }),
+                        ))
+                        .child(settings_button(
+                            "history-redo",
+                            "重做一步",
+                            can_redo,
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.redo_edit(cx);
+                            }),
+                        )),
+                )
+                .into_any_element(),
+        )
     }
 }
