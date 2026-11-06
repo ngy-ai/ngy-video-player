@@ -150,6 +150,26 @@ pub enum TransitionKind {
     Slide,
 }
 
+impl TransitionKind {
+    /// 界面上的选项，顺序固定：菜单与面板照这个顺序排，用户不用每次都找。
+    pub const ALL: [TransitionKind; 4] = [
+        TransitionKind::CrossDissolve,
+        TransitionKind::Fade,
+        TransitionKind::Wipe,
+        TransitionKind::Slide,
+    ];
+
+    /// 给人看的中文名。`xfade` 的滤镜名不直接拿来当界面文案。
+    pub fn label(self) -> &'static str {
+        match self {
+            TransitionKind::CrossDissolve => "交叉溶解",
+            TransitionKind::Fade => "淡入淡出",
+            TransitionKind::Wipe => "擦除",
+            TransitionKind::Slide => "滑动",
+        }
+    }
+}
+
 /// 两个相邻片段之间的转场。
 ///
 /// 转场占用两段的重叠区间，**不改变序列总时长**：导入导出时按 `duration`

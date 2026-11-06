@@ -175,6 +175,44 @@ impl PlayerApp {
             );
         }
 
+        // 接缝上的转场标记：宽按转场时长算、跨在接缝两侧，点一下打开转场面板。
+        // 画在片段之后，所以压在片段上面；缩得很粗时至少留 6 像素，否则点不到。
+        for transition in &track.transitions {
+            let Some(after) = track.clip(transition.after) else {
+                continue;
+            };
+            let center = view.x_of(after.start.secs());
+            let half = (view.x_of(after.start.secs() + transition.duration.secs()) - center) / 2.0;
+            let width = (half * 2.0).max(6.0);
+            let left = center - width / 2.0;
+            if left > lane_width || left + width < 0.0 {
+                continue;
+            }
+            let after_id = after.id;
+            lane = lane.child(
+                div()
+                    .id(format!("timeline-transition-{}", transition.id.raw()))
+                    .absolute()
+                    .left(px(left))
+                    .top(px(4.0))
+                    .bottom(px(4.0))
+                    .w(px(width))
+                    .rounded(px(3.0))
+                    .bg(gpui_kit::rgba(0x00d8ff55))
+                    .border_1()
+                    .border_color(gpui_kit::rgba(0x00d8ffdd))
+                    .opacity(if track.muted { 0.4 } else { 1.0 })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                            // 标记压在片段上：不截断的话点它会顺带选中 / 拖走片段。
+                            cx.stop_propagation();
+                            this.open_transition_menu(after_id, event.position, cx);
+                        }),
+                    ),
+            );
+        }
+
         // 拖动预览：贴着落点画一个半透明框，松手之前就能看出会落到哪。
         if let Some(drop) = self.timeline_drop
             && drop.to_track == track_id

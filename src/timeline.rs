@@ -18,6 +18,7 @@ mod project;
 mod spec;
 mod three_point;
 mod time;
+mod transition;
 mod undo;
 mod view;
 
@@ -34,6 +35,10 @@ pub use project::{
 pub use spec::{SequenceSpec, SpecError, rate_label};
 pub use three_point::{ThreePoint, ThreePointError, three_point};
 pub use time::{MICROS_PER_SECOND, Rational, Tick};
+pub use transition::{
+    DEFAULT_TRANSITION, MAX_TRANSITION, MIN_TRANSITION, TransitionApplied, TransitionError,
+    current as transition_at, remove as remove_transition, set as set_transition, transition_room,
+};
 pub use undo::{HISTORY_LIMIT, UndoHistory};
 pub use view::{
     MIN_ZOOM, ViewState, frame_pixels, playhead_limit, seek_seconds, snap_to_targets,

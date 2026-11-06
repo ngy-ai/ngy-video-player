@@ -4,66 +4,54 @@ use super::super::delete_track_confirm::{track_content_detail, track_has_content
 use super::*;
 
 impl PlayerApp {
-    /// 在当前片段与它左邻居之间加 / 去掉一个 0.5 秒的交叉溶解。
+    /// 设置（或改）接缝上的转场。没有就新建，有就改类型与时长。
     ///
-    /// 转场的界面入口就这一处：拖边角调溶接是下一版的事，先把「能产生转场」打通，
-    /// 导出侧的 `xfade` 才有东西可测。只对紧挨着的同轨片段成立。
-    pub(crate) fn toggle_transition(&mut self, clip: Id, cx: &mut Context<Self>) {
+    /// 时长会被钳到两侧余量以内：用户可以随便点，但落进工程里的值必须是导出
+    /// 能兑现的那个（余量不够时导出只会退化成硬切，见 `timeline::export`）。
+    pub(crate) fn apply_transition(
+        &mut self,
+        after: Id,
+        kind: crate::timeline::TransitionKind,
+        duration: Tick,
+        cx: &mut Context<Self>,
+    ) {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        let Some(track) = project
-            .sequence
-            .tracks
-            .iter()
-            .find(|track| track.clip(clip).is_some())
-        else {
-            return;
-        };
-        let Some(index) = track.clip_index(clip) else {
-            return;
-        };
-        if index == 0 {
-            self.flash("左边没有相邻片段，加不了转场");
-            return;
+        match crate::timeline::set_transition(&project.sequence, after, kind, duration) {
+            Ok(applied) => {
+                let label = crate::timeline::transition_at(&applied.sequence, after)
+                    .map(|transition| transition.kind.label())
+                    .unwrap_or_else(|| kind.label());
+                let message = if applied.clamped {
+                    format!(
+                        "两侧余量不够，{label}按 {:.2} 秒生效",
+                        applied.duration.secs()
+                    )
+                } else {
+                    format!("转场：{label} {:.2} 秒", applied.duration.secs())
+                };
+                self.commit_edit(applied.sequence, message.clone());
+                self.flash(message);
+            }
+            Err(error) => self.flash(error.to_string()),
         }
-        let previous = &track.clips[index - 1];
-        if previous.end() != track.clips[index].start {
-            self.flash("两个片段之间有空档，加不了转场");
-            return;
-        }
-        let previous_id = previous.id;
-        let existing = track
-            .transitions
-            .iter()
-            .position(|transition| transition.before == previous_id && transition.after == clip);
+        self.poke();
+        cx.notify();
+    }
 
-        let mut sequence = project.sequence.clone();
-        let mut message = "已去掉转场";
-        match existing {
-            Some(index) => {
-                if let Some(track) = sequence.tracks.iter_mut().find(|t| t.clip(clip).is_some())
-                    && index < track.transitions.len()
-                {
-                    track.transitions.remove(index);
-                }
+    /// 去掉接缝上的转场。本来就没有时给一句提示，不留空操作。
+    pub(crate) fn drop_transition(&mut self, after: Id, cx: &mut Context<Self>) {
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
+        match crate::timeline::remove_transition(&project.sequence, after) {
+            Ok(sequence) => {
+                self.commit_edit(sequence, "去掉转场");
+                self.flash("已去掉转场");
             }
-            None => {
-                let id = sequence.alloc_id();
-                if let Some(track) = sequence.tracks.iter_mut().find(|t| t.clip(clip).is_some()) {
-                    track.transitions.push(crate::timeline::Transition::new(
-                        id,
-                        previous_id,
-                        clip,
-                        crate::timeline::TransitionKind::CrossDissolve,
-                        Tick::from_micros(500_000),
-                    ));
-                }
-                message = "已加 0.5 秒交叉溶解";
-            }
+            Err(error) => self.flash(error.to_string()),
         }
-        self.commit_edit(sequence, message);
-        self.flash(message);
         self.poke();
         cx.notify();
     }

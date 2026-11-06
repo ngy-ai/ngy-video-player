@@ -17,6 +17,15 @@ pub(super) enum TimelineMenu {
     Clip(ClipMenu),
     /// 标尺右键：整条时间线级别的动作，不指向任何片段。
     Ruler { position: Point<Pixels> },
+    /// 接缝上的转场面板：类型与时长都在这里点，改一次落一步撤销。
+    Transition(TransitionMenu),
+}
+
+/// 转场面板的上下文：接缝右侧的那段片段（转场挂在它身上）与鼠标位置。
+#[derive(Clone, Copy, Debug)]
+pub(super) struct TransitionMenu {
+    after: Id,
+    position: Point<Pixels>,
 }
 
 /// 片段菜单的上下文：右键点中的那一段、它所在的轨道与鼠标位置。
@@ -67,7 +76,167 @@ impl PlayerApp {
         match self.timeline_menu? {
             TimelineMenu::Clip(menu) => self.render_clip_menu(menu, window, cx),
             TimelineMenu::Ruler { position } => self.render_ruler_menu(position, window, cx),
+            TimelineMenu::Transition(menu) => self.render_transition_menu(menu, window, cx),
         }
+    }
+
+    /// 打开接缝上的转场面板。左边不是紧邻的片段时直接给提示，不弹一张空面板。
+    pub(super) fn open_transition_menu(
+        &mut self,
+        after: Id,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
+        if crate::timeline::transition_room(&project.sequence, after).is_none() {
+            self.flash("左边没有紧挨着的片段，加不了转场（先把两段接上）");
+            cx.notify();
+            return;
+        }
+        self.timeline_menu = Some(TimelineMenu::Transition(TransitionMenu { after, position }));
+        cx.notify();
+    }
+
+    /// 转场面板：两行互斥 chip（类型、时长）加一颗「去掉转场」。
+    ///
+    /// 面板保持打开：调类型和时长是一件事的两半，点一下换一个就得重新点开，
+    /// 等于逼用户来回三次。每次改动各自落一步撤销。
+    fn render_transition_menu(
+        &self,
+        menu: TransitionMenu,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let project = self.project.as_ref()?;
+        // 片段被删掉时菜单跟着收掉，不留一张指向不存在接缝的壳。
+        project.sequence.clip(menu.after)?;
+        let current = crate::timeline::transition_at(&project.sequence, menu.after);
+        let kind = current
+            .as_ref()
+            .map(|transition| transition.kind)
+            .unwrap_or_default();
+        let duration = current
+            .as_ref()
+            .map(|transition| transition.duration)
+            .unwrap_or(crate::timeline::DEFAULT_TRANSITION);
+        let room = crate::timeline::transition_room(&project.sequence, menu.after)?;
+        let after = menu.after;
+        let origin = menu_origin(menu.position, TRANSITION_PANEL_HEIGHT, window);
+
+        let title = match &current {
+            Some(_) => format!("转场 · {} {:.2} 秒", kind.label(), duration.secs()),
+            None => "加转场".to_string(),
+        };
+
+        let mut kinds = div().flex().flex_wrap().gap(px(4.0));
+        for (index, option) in crate::timeline::TransitionKind::ALL.into_iter().enumerate() {
+            kinds = kinds.child(chip(
+                TYPE_CHIP_IDS[index],
+                option.label(),
+                option == kind,
+                cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                    // 换类型时保留当前时长：用户多半只是想换个效果看看。
+                    let duration = this
+                        .project
+                        .as_ref()
+                        .and_then(|project| {
+                            crate::timeline::transition_at(&project.sequence, after)
+                        })
+                        .map(|transition| transition.duration)
+                        .unwrap_or(crate::timeline::DEFAULT_TRANSITION);
+                    this.apply_transition(after, option, duration, cx);
+                }),
+            ));
+        }
+
+        let mut durations = div().flex().flex_wrap().gap(px(4.0));
+        for (index, option) in DURATION_CHOICES.into_iter().enumerate() {
+            durations = durations.child(chip(
+                DURATION_CHIP_IDS[index],
+                DURATION_LABELS[index],
+                current
+                    .as_ref()
+                    .is_some_and(|transition| transition.duration == option),
+                cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                    // 换时长时保留当前类型；还没有转场就先按默认类型加一个。
+                    let kind = this
+                        .project
+                        .as_ref()
+                        .and_then(|project| {
+                            crate::timeline::transition_at(&project.sequence, after)
+                        })
+                        .map(|transition| transition.kind)
+                        .unwrap_or_default();
+                    this.apply_transition(after, kind, option, cx);
+                }),
+            ));
+        }
+
+        let footer = if current.is_some() {
+            chip(
+                "transition-remove",
+                "去掉转场",
+                false,
+                cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                    this.drop_transition(after, cx);
+                }),
+            )
+        } else {
+            // 没有转场时这里放余量说明：用户能看见「最多能加多长」。
+            div()
+                .text_size(px(11.0))
+                .text_color(text_faint())
+                .child(format!("最多 {:.2} 秒（两侧余量）", room.secs()))
+                .into_any_element()
+        };
+
+        Some(
+            div()
+                .id("timeline-transition-menu")
+                .absolute()
+                .left(origin.x)
+                .top(origin.y)
+                .w(px(TRANSITION_PANEL_WIDTH))
+                .py(px(8.0))
+                .px(px(10.0))
+                .rounded(px(10.0))
+                .bg(surface())
+                .border_1()
+                .border_color(gpui_kit::rgb(0x2c2c34))
+                .shadow_lg()
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                // 与其它菜单一样：点面板本身不能漏到下面的时间线去。
+                .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
+                    cx.stop_propagation();
+                }))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                        cx.stop_propagation();
+                    }),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(text_muted())
+                        .child(title),
+                )
+                .child(kinds)
+                .child(durations)
+                .child(
+                    div()
+                        .mt(px(2.0))
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(footer),
+                )
+                .into_any_element(),
+        )
     }
 
     fn render_clip_menu(
@@ -105,8 +274,8 @@ impl PlayerApp {
             });
         let transition_label = match (adjacent, has_transition) {
             (false, _) => "左边没有紧挨着的片段",
-            (true, true) => "去掉左侧转场",
-            (true, false) => "与左侧片段加转场",
+            (true, true) => "转场设置…",
+            (true, false) => "与左侧片段加转场…",
         };
         let clip_id = menu.clip;
         // 片段菜单：7 行 + 1 条分隔线。
@@ -177,8 +346,7 @@ impl PlayerApp {
                     if adjacent { text() } else { text_faint() },
                     cx.listener(move |this, _: &ClickEvent, _window, cx| {
                         cx.stop_propagation();
-                        this.timeline_menu = None;
-                        this.toggle_transition(clip_id, cx);
+                        this.open_transition_menu(clip_id, menu.position, cx);
                     }),
                 ))
                 .child(
@@ -278,6 +446,35 @@ impl PlayerApp {
 
 /// 菜单至少离窗口边缘留这么多：贴着边框圆角看不清，也容易点到窗口外面去。
 const MENU_MARGIN: f32 = 8.0;
+
+/// 转场面板的宽度与估算高度（标题 + 两行 chip + 一行底部）。
+const TRANSITION_PANEL_WIDTH: f32 = 252.0;
+const TRANSITION_PANEL_HEIGHT: f32 = 120.0;
+
+/// 时长选项：几档常见的值，真正生效的上限还是两侧余量。
+const DURATION_CHOICES: [Tick; 5] = [
+    Tick::from_millis(200),
+    Tick::from_millis(500),
+    Tick::from_millis(1000),
+    Tick::from_millis(1500),
+    Tick::from_millis(2000),
+];
+const DURATION_LABELS: [&str; 5] = ["0.2 秒", "0.5 秒", "1 秒", "1.5 秒", "2 秒"];
+
+/// chip 的 id 必须是静态串：GPUI 靠它做命中测试，每次渲染换一个就等于换了元素。
+const TYPE_CHIP_IDS: [&str; 4] = [
+    "transition-kind-dissolve",
+    "transition-kind-fade",
+    "transition-kind-wipe",
+    "transition-kind-slide",
+];
+const DURATION_CHIP_IDS: [&str; 5] = [
+    "transition-duration-200",
+    "transition-duration-500",
+    "transition-duration-1000",
+    "transition-duration-1500",
+    "transition-duration-2000",
+];
 
 /// 按行数估算菜单高度，只用来判断在鼠标下方放不放得下。
 fn menu_height(rows: usize, separators: usize) -> f32 {
