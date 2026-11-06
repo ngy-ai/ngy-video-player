@@ -407,7 +407,7 @@ impl Render for PlayerApp {
             // 右键菜单在普通浮层之上、模态面板之下。
             .children(self.render_item_menu(cx))
             .children(self.render_tab_menu(cx))
-            .children(self.render_timeline_menu(cx))
+            .children(self.render_timeline_menu(window, cx))
             .children(self.render_settings(window, cx))
             .children(self.render_sequence_dialog(cx))
             .children(self.render_remux_dialog(cx))

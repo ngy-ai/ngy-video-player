@@ -70,6 +70,14 @@ pub(super) const PLAYLIST_INDENT: f32 = 14.0;
 /// 行右键菜单的尺寸，只用来把弹窗往窗口里收。
 pub(super) const ITEM_MENU_WIDTH: f32 = 168.0;
 pub(super) const ITEM_MENU_HEIGHT: f32 = 118.0;
+/// 右键菜单里一行的高度：`widgets::item_menu_entry` 的上下各 7 像素内边距，
+/// 加 13 号字一行。改那边的内边距或字号时要跟着改。
+/// 用途只有一个：估算菜单总高，判断在鼠标上方还是下方展开。
+pub(super) const ITEM_MENU_ROW_HEIGHT: f32 = 33.0;
+/// 菜单外框的上下内边距（`py(6.0)`）。
+pub(super) const ITEM_MENU_PADDING: f32 = 6.0;
+/// 菜单里的分隔线：上下各 4 像素外边距加 1 像素线。
+pub(super) const ITEM_MENU_SEPARATOR_HEIGHT: f32 = 9.0;
 /// 页签右键菜单的尺寸，同样只用来把弹窗往窗口里收。
 pub(super) const TAB_MENU_WIDTH: f32 = 152.0;
 pub(super) const TAB_MENU_HEIGHT: f32 = 82.0;

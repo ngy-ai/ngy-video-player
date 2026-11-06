@@ -35,9 +35,9 @@ use gpui_kit::{
     AnyElement, AnyWindowHandle, App, AppContext, Bounds, ClickEvent, Context, Corners,
     CursorStyle, ElementId, Entity, ExternalPaths, FocusHandle, Hsla, IntoElement, KeyBinding,
     KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, Render, RenderImage, ScrollDelta, ScrollEvent, SharedString, Styled, WeakEntity, Window,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, WindowVisibility, actions, canvas, div,
-    img, point, px, size,
+    Point, Render, RenderImage, ScrollDelta, ScrollEvent, SharedString, Size, Styled, WeakEntity,
+    Window, WindowBounds, WindowHandle, WindowKind, WindowOptions, WindowVisibility, actions,
+    canvas, div, img, point, px, size,
 };
 use std::{
     cell::Cell,
