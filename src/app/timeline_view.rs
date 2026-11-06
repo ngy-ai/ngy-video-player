@@ -10,6 +10,8 @@
 use super::*;
 use crate::timeline::Id;
 
+mod tracks_area;
+
 impl PlayerApp {
     /// 时间线占多高。窗口高时按比例，窄窗口不低于 170，宽屏不超过 320。
     pub(super) fn timeline_height(&self, window: &Window) -> f32 {
@@ -24,8 +26,18 @@ impl PlayerApp {
             .min(ceiling)
     }
 
-    /// 按窗口宽度同步视口宽度。渲染与鼠标换算共用同一个「一屏多少秒」。
+    /// 按窗口宽度同步视口宽度，并按面板高度夹住轨道的垂直滚动。
     pub(super) fn sync_timeline_view(&mut self, window: &Window) {
+        let height = self.timeline_height(window);
+        if height > 0.0 {
+            let total = self
+                .project
+                .as_ref()
+                .map_or(0, |project| project.sequence.tracks.len());
+            // 加轨时只记了「要看最后一屏」的意图，面板高度到这里才知道；
+            // 删轨 / 窗口变矮之后也在这里把滚动位置夹回合法范围。
+            self.timeline.sync_tracks(total, visible_track_rows(height));
+        }
         let Some(duration) = self.project.as_ref().map(|p| p.sequence.duration()) else {
             return;
         };
@@ -44,6 +56,7 @@ impl PlayerApp {
             self.project_saved = None;
             self.history = None;
             self.show_history = false;
+            self.delete_track_confirm = None;
             self.timeline_dragging = false;
             self.timeline_menu = None;
             self.timeline_preview = None;
@@ -71,6 +84,7 @@ impl PlayerApp {
         self.project_path = None;
         self.history = Some(UndoHistory::new(project.sequence.clone()));
         self.show_history = false;
+        self.delete_track_confirm = None;
         self.project = Some(project);
         self.timeline = ViewState::new();
         self.timeline_dragging = false;
@@ -165,6 +179,7 @@ impl PlayerApp {
                 self.project_path = Some(path);
                 self.history = Some(UndoHistory::new(project.sequence.clone()));
                 self.show_history = false;
+                self.delete_track_confirm = None;
                 self.project = Some(project);
                 if restored {
                     // 恢复出来的改动也怕再崩一次：重新排上自动保存。
@@ -580,40 +595,8 @@ impl PlayerApp {
         }
         root = root.child(ruler);
 
-        // 轨道与左侧名称列。只画视口内、面板高度内的轨道，三小时工程也一样快。
-        let tracks_top = TIMELINE_HEADER + TIMELINE_RULER;
-        let visible_tracks = ((height - tracks_top) / (TIMELINE_TRACK_HEIGHT + TIMELINE_TRACK_GAP))
-            .floor()
-            .max(0.0) as usize;
-        for (index, track) in sequence
-            .tracks
-            .iter()
-            .take(visible_tracks.max(1))
-            .enumerate()
-        {
-            let top = tracks_top + index as f32 * (TIMELINE_TRACK_HEIGHT + TIMELINE_TRACK_GAP);
-            let lane = self.render_timeline_lane(project, track, top, lane_width, cx);
-            root = root
-                .child(lane)
-                .child(self.render_timeline_label(track, top, cx));
-        }
-
-        if sequence.tracks.is_empty() {
-            root = root.child(
-                div()
-                    .absolute()
-                    .top(px(tracks_top))
-                    .left_0()
-                    .right_0()
-                    .h(px(TIMELINE_TRACK_HEIGHT))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(12.0))
-                    .text_color(text_faint())
-                    .child("这条序列还没有轨道"),
-            );
-        }
+        // 轨道区自己管垂直滚动：只画当前窗口里的那几条，新加的轨道会自动跟进来。
+        root = root.child(self.render_timeline_tracks_area(height, lane_width, cx));
 
         // 播放头：贯穿标尺与轨道区。滚出视口就不画，免得贴在边上装成「在 0 秒」。
         let playhead_x = TIMELINE_GUTTER + view.x_of(playhead);
@@ -679,6 +662,16 @@ impl PlayerApp {
     }
 }
 
+/// 面板高度能完整放下几条轨道行。至少一条：面板再矮也得画一行。
+///
+/// 标题条与标尺占掉的高度不算进轨道区，否则最后一条会被裁成半截。
+fn visible_track_rows(height: f32) -> usize {
+    let usable = (height - TIMELINE_HEADER - TIMELINE_RULER).max(0.0);
+    (usable / (TIMELINE_TRACK_HEIGHT + TIMELINE_TRACK_GAP))
+        .floor()
+        .max(1.0) as usize
+}
+
 /// 撤销 / 重做之后，选中集合里指向已消失片段的 id 要清掉，
 /// 否则下一次删除会拿一个不存在的 id 去查表并报错。
 fn prune_selection(selected: &mut Vec<Id>, sequence: &crate::timeline::Sequence) {
@@ -689,6 +682,14 @@ fn prune_selection(selected: &mut Vec<Id>, sequence: &crate::timeline::Sequence)
 mod tests {
     use super::*;
     use crate::timeline::{AssetId, ClipItem, Rational, Sequence};
+
+    #[test]
+    fn 面板高度决定可见轨道行数() {
+        assert_eq!(visible_track_rows(170.0), 2, "(170-62)/48 = 2.25");
+        assert_eq!(visible_track_rows(213.0), 3, "213 高的窗口画三条");
+        assert_eq!(visible_track_rows(320.0), 5, "(320-62)/48 = 5.375");
+        assert_eq!(visible_track_rows(0.0), 1, "全屏 / 空工程也留一条兜底");
+    }
 
     #[test]
     fn 历史回退后清掉指向已删片段的选中() {

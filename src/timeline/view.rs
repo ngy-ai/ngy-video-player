@@ -8,6 +8,7 @@
 //! （[`ViewState::max_zoom`]）。到帧级时标尺改铺帧刻度，见 [`visible_frames`]。
 
 use crate::timeline::{Rational, Tick};
+use std::ops::Range;
 
 /// 1 像素 = 10 秒，缩到最粗的那一档。
 pub const MIN_ZOOM: f32 = 0.1;
@@ -25,12 +26,18 @@ pub const TICK_STEPS: &[f64] = &[
     14400.0,
 ];
 
-/// 时间线的视口：左边界 `scroll` 秒，每秒 `zoom` 像素，宽 `width` 像素。
+/// 时间线的视口：横向 `scroll` 秒、每秒 `zoom` 像素，纵向 `track_scroll` 条轨道。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ViewState {
     zoom: f32,
     scroll: f64,
     width: f32,
+    /// 纵向可见的第一条轨道（0 起）。轨道多到一屏放不下时靠它换页。
+    track_scroll: usize,
+    /// 滚轮余量：触控板一次滑动拆成很多小增量，攒够一行高才走一行。
+    track_wheel: f32,
+    /// 刚加过轨道：下次布局同步时挪到最后一屏，让新轨立刻可见。
+    reveal_last: bool,
 }
 
 impl Default for ViewState {
@@ -40,6 +47,9 @@ impl Default for ViewState {
             zoom: 8.0,
             scroll: 0.0,
             width: 800.0,
+            track_scroll: 0,
+            track_wheel: 0.0,
+            reveal_last: false,
         }
     }
 }
@@ -131,6 +141,75 @@ impl ViewState {
         let duration = duration.secs().max(0.0);
         let max_scroll = (duration - self.visible_seconds()).max(0.0);
         self.scroll = self.scroll.clamp(0.0, max_scroll);
+    }
+
+    /// 一屏能画几条轨道时，最后一屏的第一行索引。
+    fn max_track_scroll(total: usize, rows: usize) -> usize {
+        total.saturating_sub(rows.max(1))
+    }
+
+    /// 这一屏该画哪些轨道。轨道被删、窗口变矮导致滚动值越界时，这里就地夹住。
+    pub fn visible_tracks(&self, total: usize, rows: usize) -> Range<usize> {
+        let rows = rows.max(1);
+        let first = self.track_scroll.min(Self::max_track_scroll(total, rows));
+        first..(first + rows).min(total)
+    }
+
+    /// 每次布局同步时夹一次滚动位置，并兑现「加轨后显示新轨」的请求。
+    ///
+    /// 加轨的入口拿不到窗口高度，所以只记一个意图；由 `sync_timeline_view` 带着
+    /// 面板高度执行，不必把视口尺寸再塞进 app 状态。
+    pub fn sync_tracks(&mut self, total: usize, rows: usize) {
+        let rows = rows.max(1);
+        if self.reveal_last {
+            self.reveal_last = false;
+            self.track_scroll = total.saturating_sub(rows);
+        }
+        self.track_scroll = self.track_scroll.min(Self::max_track_scroll(total, rows));
+        if total <= rows {
+            self.track_wheel = 0.0;
+        }
+    }
+
+    /// 加轨后请下一次布局同步把视口挪到最后一屏。
+    pub fn reveal_last_track(&mut self) {
+        self.reveal_last = true;
+    }
+
+    /// 滚动条点选：直接跳到某一行开头。
+    pub fn scroll_tracks_to(&mut self, first: usize, total: usize, rows: usize) {
+        self.track_scroll = first.min(Self::max_track_scroll(total, rows.max(1)));
+    }
+
+    /// 轨道区滚轮：攒够一行高才走一行。GPUI 里上滚是正 y，取反才是「往回看」。
+    /// 返回是否真的换了行，界面据此决定是否重绘。
+    pub fn scroll_tracks_by_wheel(
+        &mut self,
+        pixels: f32,
+        row_px: f32,
+        total: usize,
+        rows: usize,
+    ) -> bool {
+        let rows = rows.max(1);
+        if total <= rows {
+            self.track_wheel = 0.0;
+            return false;
+        }
+        self.track_wheel += pixels;
+        let step = row_px.max(1.0);
+        let lines = (-self.track_wheel / step).trunc() as i32;
+        if lines == 0 {
+            return false;
+        }
+        self.track_wheel += lines as f32 * step;
+        let before = self.track_scroll;
+        let next = if lines >= 0 {
+            before.saturating_add(lines as usize)
+        } else {
+            before.saturating_sub(lines.unsigned_abs() as usize)
+        };
+        self.track_scroll = next.min(Self::max_track_scroll(total, rows));
+        before != self.track_scroll
     }
 
     /// 当前缩放下的主刻度间隔（秒）。
@@ -246,6 +325,44 @@ mod tests {
 
     fn dur(seconds: f64) -> Tick {
         Tick::from_secs(seconds)
+    }
+
+    #[test]
+    fn 轨道窗口按可见行数裁切() {
+        let mut view = ViewState::new();
+        assert_eq!(view.visible_tracks(5, 2), 0..2);
+        view.scroll_tracks_to(3, 5, 2);
+        assert_eq!(view.visible_tracks(5, 2), 3..5, "最后一屏从第 4 条起");
+        view.scroll_tracks_to(99, 5, 2);
+        assert_eq!(view.visible_tracks(5, 2), 3..5, "跳转要夹在末尾");
+        assert_eq!(view.visible_tracks(1, 2), 0..1, "没满一屏就只画这些");
+        assert_eq!(view.visible_tracks(0, 2), 0..0);
+    }
+
+    #[test]
+    fn 加轨后同步到最后一屏_删轨后夹回() {
+        let mut view = ViewState::new();
+        view.reveal_last_track();
+        view.sync_tracks(4, 2);
+        assert_eq!(view.visible_tracks(4, 2), 2..4, "新加的第 4 条要露出来");
+        view.sync_tracks(2, 2);
+        assert_eq!(view.visible_tracks(2, 2), 0..2, "删到只剩两条就回到顶部");
+    }
+
+    #[test]
+    fn 滚轮攒够一行才换一行() {
+        let mut view = ViewState::new();
+        view.scroll_tracks_to(2, 6, 2);
+        assert!(!view.scroll_tracks_by_wheel(20.0, 48.0, 6, 2));
+        assert_eq!(view.visible_tracks(6, 2), 2..4, "20 像素还不够一行");
+        // 上滚（正 y）回到前面的轨道：累计 80 像素走一行，余 32。
+        assert!(view.scroll_tracks_by_wheel(60.0, 48.0, 6, 2));
+        assert_eq!(view.visible_tracks(6, 2), 1..3);
+        // 反向时先把上一段余量走完，不足一行不动。
+        assert!(!view.scroll_tracks_by_wheel(-20.0, 48.0, 6, 2));
+        assert_eq!(view.visible_tracks(6, 2), 1..3);
+        assert!(view.scroll_tracks_by_wheel(-70.0, 48.0, 6, 2));
+        assert_eq!(view.visible_tracks(6, 2), 2..4);
     }
 
     #[test]

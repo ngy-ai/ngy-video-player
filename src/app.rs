@@ -100,6 +100,7 @@ mod concat;
 mod constants;
 mod controls;
 mod convert;
+mod delete_track_confirm;
 mod export_queue;
 mod format;
 mod history;
@@ -143,6 +144,7 @@ use self::clip::ClipDialog;
 use self::concat::ConcatDialog;
 use self::constants::*;
 use self::convert::ConvertDialog;
+use self::delete_track_confirm::DeleteTrackConfirm;
 use self::export_queue::QueuedExport;
 use self::format::*;
 use self::import::PlaylistImportDialog;
@@ -438,6 +440,8 @@ pub struct PlayerApp {
     dialog_open: bool,
     /// 「工程还没有保存」的确认框；`None` 表示没在问。
     project_confirm: Option<ProjectConfirm>,
+    /// 「删除轨道」确认框；`None` 表示没在问。轨道上有片段时才会弹出来。
+    delete_track_confirm: Option<DeleteTrackConfirm>,
 
     /// 播放统计浮层（帧率、丢帧计数）是否打开。按 I 切换。
     show_stats: bool,

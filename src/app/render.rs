@@ -205,6 +205,7 @@ impl Render for PlayerApp {
                 // 输入框有焦点时接管键盘的裁切面板，以及各个模态对话框。
                 // 不拦住的话，输入框里的字符会顺带触发播放器的快捷键。
                 if this.on_project_confirm_key(event, cx)
+                    || this.on_delete_track_confirm_key(event, cx)
                     || this.on_rename_key(event, cx)
                     || this.on_clip_key(event, cx)
                     || this.on_remux_key(event, cx)
@@ -381,6 +382,7 @@ impl Render for PlayerApp {
             .children(self.render_concat_dialog(cx))
             .children(self.render_playlist_import_dialog(cx))
             .children(self.render_file_info(cx))
+            .children(self.render_delete_track_confirm(cx))
             // 重命名是模态的，压在所有东西上面。
             .children(self.render_tab_rename(cx))
             // 未保存确认比它还靠上一层：它一旦出现，答案决定的是整份工程的去留。
