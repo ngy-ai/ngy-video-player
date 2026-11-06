@@ -16,7 +16,7 @@ mod markers;
 mod track_ops;
 
 use super::*;
-use crate::timeline::{EditOp, Id, Rational, apply as apply_edit};
+use crate::timeline::{EditOp, Id, Placement, Rational, apply as apply_edit};
 
 /// 拖动中的片段。GPUI 的拖放按值的类型分发，专用类型不会和「从资源管理器拖文件进来」混在一起。
 pub(crate) struct TimelineDrag {
@@ -56,6 +56,8 @@ pub(crate) struct TimelineDrop {
     pub(crate) clip: Id,
     pub(crate) to_track: Id,
     pub(crate) start: Tick,
+    /// 落点压到别的片段时怎么处理：默认覆盖，按住 `Shift` 是插入。
+    pub(crate) mode: Placement,
 }
 
 /// 片段底色：视频蓝、音频绿、字幕橙。整块颜色比图标更容易在缩放很小时认出来。

@@ -26,7 +26,7 @@ pub use model::{
     AssetId, ClipItem, Id, Marker, ModelError, Sequence, Track, TrackKind, Transition,
     TransitionKind,
 };
-pub use ops::{ClipSpec, EditError, EditOp, apply, remove_clips, split_at};
+pub use ops::{ClipSpec, EditError, EditOp, Placement, apply, remove_clips, split_at};
 pub use project::{
     Asset, AssetRemoveError, PROJECT_EXTENSION, PROJECT_VERSION, Project, ProjectError, UiState,
 };

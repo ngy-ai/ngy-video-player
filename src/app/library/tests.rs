@@ -7,7 +7,7 @@ use super::drop::{
     snap_to_clip_edges, total_duration,
 };
 use super::panel::LibraryImport;
-use crate::timeline::{AssetId, MediaInfo, Rational, Sequence, Tick, TrackKind};
+use crate::timeline::{AssetId, MediaInfo, Placement, Rational, Sequence, Tick, TrackKind};
 
 #[test]
 fn 规格按有无画面分开写() {
@@ -170,7 +170,7 @@ fn 多素材按顺序首尾相接() {
         item(3, 1.5, true, false),
     ];
 
-    let next = place_items(&base, track, s(1.0), &items).expect("放得下");
+    let next = place_items(&base, track, s(1.0), &items, Placement::Overwrite).expect("放得下");
     let clips = &next.tracks[0].clips;
     assert_eq!(clips.len(), 3);
     assert_eq!(clips[0].start, s(1.0));
@@ -186,28 +186,65 @@ fn 有一段落不下就整组放弃() {
     let base = sequence();
     let track = base.tracks[0].id;
     // 先占住 0..4 秒。
-    let occupied =
-        place_items(&base, track, Tick::ZERO, &[item(9, 4.0, true, false)]).expect("先放一段");
+    let occupied = place_items(
+        &base,
+        track,
+        Tick::ZERO,
+        &[item(9, 4.0, true, false)],
+        Placement::Overwrite,
+    )
+    .expect("先放一段");
 
-    // 前一段放得下（3..4 秒压在已有片段上，其实放不下）——整组都要失败。
+    // 锁住轨道之后整组都进不去，而不是进去一部分。
+    let mut locked = occupied.clone();
+    locked.tracks[0].locked = true;
     let items = vec![item(1, 1.0, true, false), item(2, 1.0, true, false)];
     assert!(
-        place_items(&occupied, track, s(3.0), &items).is_err(),
-        "落点压在已有片段上就整组不放，不能只进去一段"
+        place_items(&locked, track, s(5.0), &items, Placement::Overwrite).is_err(),
+        "整组要么全进要么全不进"
     );
-    assert_eq!(occupied.tracks[0].clips.len(), 1, "原序列不受影响");
+    assert_eq!(locked.tracks[0].clips.len(), 1, "原序列不受影响");
+}
 
-    // 换个空位就放得下。
-    let next = place_items(&occupied, track, s(5.0), &items).expect("空白处放得下");
-    assert_eq!(next.tracks[0].clips.len(), 3);
+#[test]
+fn 覆盖与插入在落点压到片段时都能放下() {
+    let base = sequence();
+    let track = base.tracks[0].id;
+    let occupied = place_items(
+        &base,
+        track,
+        Tick::ZERO,
+        &[item(9, 4.0, true, false)],
+        Placement::Overwrite,
+    )
+    .expect("先放一段");
+    let items = vec![item(1, 1.0, true, false), item(2, 1.0, true, false)];
+
+    // 覆盖：压在 0..4 秒的片段上，盖掉 3..5 秒那一段。
+    let covered =
+        place_items(&occupied, track, s(3.0), &items, Placement::Overwrite).expect("覆盖放得下");
+    assert_eq!(covered.tracks[0].clips.len(), 3);
+    assert_eq!(covered.duration(), s(5.0), "覆盖不改变序列长度");
+
+    // 插入：同一组素材把后面整体推开 2 秒。
+    let inserted =
+        place_items(&occupied, track, s(3.0), &items, Placement::Insert).expect("插入放得下");
+    assert_eq!(inserted.tracks[0].clips.len(), 4, "原有片段被切开");
+    assert_eq!(inserted.duration(), s(6.0), "插入让序列变长");
 }
 
 #[test]
 fn 落点离片段边缘近就贴上去() {
     let base = sequence();
     let track_id = base.tracks[0].id;
-    let occupied =
-        place_items(&base, track_id, s(4.0), &[item(1, 2.0, true, false)]).expect("先放一段");
+    let occupied = place_items(
+        &base,
+        track_id,
+        s(4.0),
+        &[item(1, 2.0, true, false)],
+        Placement::Overwrite,
+    )
+    .expect("先放一段");
     let track = &occupied.tracks[0];
 
     assert_eq!(

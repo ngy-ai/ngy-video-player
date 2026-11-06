@@ -44,22 +44,44 @@ impl PlayerApp {
         cx.notify();
     }
 
-    /// 删除选中的片段。校验（锁定轨道、片段还在不在）都交给 `timeline::remove_clips`。
-    pub(crate) fn delete_selected_clips(&mut self, cx: &mut Context<Self>) {
+    /// 删除选中的片段。
+    ///
+    /// `ripple` 为假时留空隙（默认），为真时同轨后面的内容往前补。校验（锁定轨道、
+    /// 片段还在不在）都交给 `timeline::ops`。
+    pub(crate) fn delete_selected_clips(&mut self, ripple: bool, cx: &mut Context<Self>) {
         let Some(project) = self.project.as_ref() else {
             return;
         };
         let clips = project.ui.selected.clone();
-        let outcome = crate::timeline::remove_clips(&project.sequence, &clips);
+        let outcome = if ripple {
+            if clips.is_empty() {
+                Ok(None)
+            } else {
+                crate::timeline::apply(
+                    &project.sequence,
+                    &EditOp::RippleDelete {
+                        clips: clips.clone(),
+                    },
+                )
+                .map(Some)
+            }
+        } else {
+            crate::timeline::remove_clips(&project.sequence, &clips)
+        };
 
         match outcome {
             Ok(Some(sequence)) => {
-                self.commit_edit(sequence, "删除片段");
+                let message = if ripple {
+                    format!("波纹删除 {} 个片段", clips.len())
+                } else {
+                    format!("已删除 {} 个片段", clips.len())
+                };
+                self.commit_edit(sequence, message.clone());
                 if let Some(project) = self.project.as_mut() {
                     // 删掉的 id 不能留在选中集合里，否则下次操作会报「片段不存在」。
                     project.ui.selected.clear();
                 }
-                self.flash(format!("已删除 {} 个片段", clips.len()));
+                self.flash(message);
             }
             Ok(None) => self.flash("没有选中片段"),
             Err(error) => self.flash(format!("删除失败：{error}")),

@@ -199,7 +199,7 @@ impl Render for PlayerApp {
                 if this.project.is_some() {
                     // 全屏时时间线整条让给画面，选中看不见，不能盲删。
                     if !window.is_fullscreen() {
-                        this.delete_selected_clips(cx);
+                        this.delete_selected_clips(false, cx);
                     }
                     return;
                 }
@@ -207,6 +207,12 @@ impl Render for PlayerApp {
                 // 全屏里面板同样不画（见本函数的渲染部分），一个道理。
                 if this.settings.show_playlist && !window.is_fullscreen() {
                     this.remove_selection(cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &RippleDeleteSelected, window, cx| {
+                // 波纹删除只对时间线有意义：播放列表里没有「后面的内容往前补」这回事。
+                if this.project.is_some() && !window.is_fullscreen() {
+                    this.delete_selected_clips(true, cx);
                 }
             }))
             .on_action(

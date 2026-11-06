@@ -144,7 +144,19 @@ impl PlayerApp {
                     cx.listener(|this, _: &ClickEvent, _window, cx| {
                         cx.stop_propagation();
                         this.timeline_menu = None;
-                        this.delete_selected_clips(cx);
+                        this.delete_selected_clips(false, cx);
+                    }),
+                ))
+                // 波纹删除：删掉之后同轨后面的片段往前补，不留空隙。
+                .child(item_menu_entry(
+                    "timeline-menu-ripple-delete",
+                    IconName::Trash,
+                    "波纹删除（后面补齐）",
+                    ui::danger(),
+                    cx.listener(|this, _: &ClickEvent, _window, cx| {
+                        cx.stop_propagation();
+                        this.timeline_menu = None;
+                        this.delete_selected_clips(true, cx);
                     }),
                 ))
                 .child(item_menu_entry(

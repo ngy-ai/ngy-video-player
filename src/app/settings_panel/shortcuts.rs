@@ -38,6 +38,17 @@ impl PlayerApp {
             ("右键列表项", "删除 / 定位文件 / 查看格式"),
             ("Delete", "删除所选项"),
         ];
+        // 工程模式的键位单独一组：它们只在时间线上有效，混进「界面」里会看不出来。
+        let timeline = [
+            ("Ctrl/⌘ Z", "撤销"),
+            ("Ctrl/⌘ Shift Z", "重做"),
+            ("Ctrl/⌘ K", "在播放头处切割"),
+            ("Delete", "删除片段（留空隙）"),
+            ("Shift+Delete", "波纹删除（后面补齐）"),
+            ("Shift I / Shift O", "入点 / 出点"),
+            ("Shift M", "标记"),
+            ("- / = / 0", "缩小 / 放大 / 整条可见"),
+        ];
 
         div()
             .flex()
@@ -46,6 +57,7 @@ impl PlayerApp {
             .child(shortcut_group("播放", &play))
             .child(shortcut_group("界面", &view))
             .child(shortcut_group("播放列表", &list))
+            .child(shortcut_group("时间线", &timeline))
             .into_any_element()
     }
 }

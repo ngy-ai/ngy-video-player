@@ -57,6 +57,11 @@ impl PlayerApp {
                             clip,
                             to_track: track_id,
                             start,
+                            mode: if event.event.modifiers.shift {
+                                Placement::Insert
+                            } else {
+                                Placement::Overwrite
+                            },
                         },
                         cx,
                     );
@@ -76,7 +81,8 @@ impl PlayerApp {
                     let lane_x =
                         lane_offset(f32::from(position.x), f32::from(event.bounds.origin.x));
                     let drag = event.drag(cx).clone();
-                    this.set_asset_drop(track_id, lane_x, &drag, cx);
+                    // 按住 Shift 是「插入」（后面整体后移），不按是「覆盖」。
+                    this.set_asset_drop(track_id, lane_x, &drag, event.event.modifiers.shift, cx);
                 },
             ))
             .on_drop(cx.listener(move |this, drag: &AssetDrag, _window, cx| {
@@ -178,17 +184,31 @@ impl PlayerApp {
             let right = view
                 .x_of((drop.start + clip.duration()).secs())
                 .min(lane_width);
+            let width = (right - left).max(2.0);
+            let label = match drop.mode {
+                Placement::Overwrite => "覆盖",
+                Placement::Insert => "插入",
+            };
             lane = lane.child(
                 div()
                     .absolute()
                     .left(px(left))
                     .top(px(4.0))
                     .bottom(px(4.0))
-                    .w(px((right - left).max(2.0)))
+                    .w(px(width))
                     .rounded(px(4.0))
                     .border_1()
                     .border_color(ui::accent())
-                    .bg(gpui_kit::rgba(0x3f6fd855)),
+                    .bg(gpui_kit::rgba(0x3f6fd855))
+                    .overflow_hidden()
+                    .px(px(5.0))
+                    .flex()
+                    .items_center()
+                    .text_size(px(10.0))
+                    .text_color(text())
+                    .whitespace_nowrap()
+                    // 框太窄时写不下字，宁可空着也不让文字外溢。
+                    .when(width > 44.0, |this| this.child(label)),
             );
         }
 
@@ -228,9 +248,13 @@ impl PlayerApp {
                     .text_size(px(10.0))
                     .text_color(ink)
                     .whitespace_nowrap()
-                    // 框太窄时写不下时长，宁可空着也不让文字外溢压住邻居。
-                    .when(width > 56.0, |this| {
-                        this.child(format_time(drop.duration.secs()))
+                    // 框里写清「覆盖 / 插入」与将放多长；太窄时宁可空着。
+                    .when(width > 72.0, |this| {
+                        let mode = match drop.mode {
+                            Placement::Overwrite => "覆盖",
+                            Placement::Insert => "插入",
+                        };
+                        this.child(format!("{mode} {}", format_time(drop.duration.secs())))
                     }),
             );
         }
@@ -257,10 +281,18 @@ impl PlayerApp {
             return;
         }
 
-        let op = EditOp::Move {
-            clip,
-            to_track: drop.to_track,
-            start: drop.start,
+        // 默认覆盖：拖到别的片段上就把那一段盖掉，而不是弹一句「重叠」拒收。
+        let op = match drop.mode {
+            Placement::Overwrite => EditOp::MoveOverwrite {
+                clip,
+                to_track: drop.to_track,
+                start: drop.start,
+            },
+            Placement::Insert => EditOp::MoveInsert {
+                clip,
+                to_track: drop.to_track,
+                start: drop.start,
+            },
         };
         let outcome = match self.project.as_ref() {
             Some(project) => apply_edit(&project.sequence, &op),

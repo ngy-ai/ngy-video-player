@@ -74,6 +74,7 @@ actions!(
         OpenPictureSettings,
         ExitOverlay,
         DeleteSelected,
+        RippleDeleteSelected,
         SubtitleEarlier,
         SubtitleLater,
         ToggleStats,
@@ -864,6 +865,9 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("delete", DeleteSelected, None),
         // Mac 键盘上的退格键发的是 backspace，和 delete 不是同一个键。
         KeyBinding::new("backspace", DeleteSelected, None),
+        // 按住 Shift 删除是波纹删除：后面的片段往前补，不留空隙。
+        KeyBinding::new("shift-delete", RippleDeleteSelected, None),
+        KeyBinding::new("shift-backspace", RippleDeleteSelected, None),
         // `?` 不在这里绑定：键位串按键帽字符匹配，`?` 得写成 `shift-/`，
         // 且随键盘布局变化。改由视图的 key_down 按实际字符处理。
     ]

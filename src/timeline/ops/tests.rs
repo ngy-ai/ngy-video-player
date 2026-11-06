@@ -729,3 +729,8 @@ fn 锁定或不存在的轨道不能删() {
         Err(EditError::UnknownTrack(Id::new(999)))
     );
 }
+
+// 放置语义（覆盖 / 插入 / 波纹删除）单开一个文件，见 `tests/placement.rs`。
+// `#[path]` 是必须的：`tests.rs` 不是 crate root，`mod` 默认只在本目录下找。
+#[path = "tests/placement.rs"]
+mod placement;

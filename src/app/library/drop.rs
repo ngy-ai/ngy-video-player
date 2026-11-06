@@ -8,7 +8,7 @@ use super::super::timeline_tracks::snap_to_frame;
 use super::super::*;
 use crate::timeline::apply as apply_edit;
 use crate::timeline::{
-    AssetId, ClipSpec, EditError, EditOp, Id, Rational, Sequence, Tick, TrackKind,
+    AssetId, ClipSpec, EditError, EditOp, Id, Placement, Rational, Sequence, Tick, TrackKind,
 };
 
 /// 从素材库拖出来的素材。GPUI 按值类型分发，不会和时间线片段拖动、系统拖入混在一起。
@@ -39,6 +39,8 @@ pub(crate) struct AssetDrop {
     pub(crate) duration: Tick,
     /// 这条轨道收不收得下这组素材。不成立时预览框画成拒绝色，松手也不改序列。
     pub(crate) ok: bool,
+    /// 落点压到已有片段时怎么处理：默认覆盖，按住 `Shift` 是插入。
+    pub(crate) mode: Placement,
 }
 
 /// 素材能不能放在这条轨道上。
@@ -83,28 +85,34 @@ pub(crate) fn reject_reason(kind: TrackKind, items: &[AssetDragItem]) -> String 
     }
 }
 
-/// 把一组素材首尾相接放到 `track` 的 `at` 处。
+/// 把一组素材首尾相接放到 `track` 的 `at` 处，按 `mode` 决定压到东西时怎么处理。
 ///
-/// 在副本上排完再返回：中途有一段放不下（重叠、锁定）就整组放弃，
+/// 在副本上排完再返回：中途有一段放不下（锁定、轨道类型不对）就整组放弃，
 /// 不会留下「拖了三个只进去两个」的半截状态。
 pub(crate) fn place_items(
     sequence: &Sequence,
     track: Id,
     at: Tick,
     items: &[AssetDragItem],
+    mode: Placement,
 ) -> Result<Sequence, EditError> {
     let mut next = sequence.clone();
     let mut cursor = at;
     for item in items {
         let spec = ClipSpec::new(item.id, Tick::ZERO, item.duration).with_name(item.name.clone());
-        next = apply_edit(
-            &next,
-            &EditOp::Insert {
+        let op = match mode {
+            Placement::Overwrite => EditOp::Overwrite {
                 track,
                 at: cursor,
                 clip: spec,
             },
-        )?;
+            Placement::Insert => EditOp::InsertAt {
+                track,
+                at: cursor,
+                clip: spec,
+            },
+        };
+        next = apply_edit(&next, &op)?;
         cursor = cursor + item.duration;
     }
     Ok(next)
@@ -141,6 +149,7 @@ impl PlayerApp {
         track: Id,
         lane_x: f32,
         drag: &AssetDrag,
+        shift: bool,
         cx: &mut Context<Self>,
     ) {
         let Some(project) = self.project.as_ref() else {
@@ -152,18 +161,22 @@ impl PlayerApp {
         let fps = project.sequence.fps;
         let duration = total_duration(&drag.items);
         let start = snap_start(self.timeline.time_at(lane_x), fps);
-        // 先按帧对齐，再往片段边缘贴：差几帧在界面上看不出来，但 `Insert` 会判成重叠。
+        // 先按帧对齐，再往片段边缘贴：差几帧在界面上看不出来，压到片段上就白吸附了。
         let tolerance = Tick::from_secs(f64::from(SNAP_EDGE_PX / self.timeline.zoom().max(1.0)));
         let start = snap_to_clip_edges(start, target, tolerance);
-        // 放不下时预览框就变红：不用等松手弹横幅才知道。
-        let ok = !target.locked
-            && all_fit(target.kind, &drag.items)
-            && target.overlap(start, start + duration, None).is_none();
+        let mode = if shift {
+            Placement::Insert
+        } else {
+            Placement::Overwrite
+        };
+        // 覆盖与插入都能落在有片段的位置上，所以这里只看轨道收不收得下。
+        let ok = !target.locked && all_fit(target.kind, &drag.items);
         let drop = AssetDrop {
             track,
             start,
             duration,
             ok,
+            mode,
         };
         if self.asset_drop == Some(drop) {
             return;
@@ -202,28 +215,26 @@ impl PlayerApp {
             return;
         }
 
-        match place_items(&project.sequence, track, drop.start, &drag.items) {
+        let verb = match drop.mode {
+            Placement::Overwrite => "覆盖",
+            Placement::Insert => "插入",
+        };
+        match place_items(&project.sequence, track, drop.start, &drag.items, drop.mode) {
             Ok(sequence) => {
                 let count = drag.items.len();
-                self.commit_edit(
-                    sequence,
-                    if count == 1 {
-                        "放入素材".to_string()
-                    } else {
-                        format!("放入 {count} 个素材")
-                    },
-                );
-                self.flash(if count == 1 {
-                    "已放入时间线".to_string()
+                let message = if count == 1 {
+                    format!("{verb}素材")
                 } else {
-                    format!("已放入 {count} 个素材")
-                });
+                    format!("{verb} {count} 个素材")
+                };
+                self.commit_edit(sequence, message.clone());
+                self.flash(message);
             }
             Err(error) => {
                 log_warn!("素材放不进时间线：{error}");
                 self.error = Some(Banner::new(
                     "放不进这条轨道",
-                    format!("{error}。\n\n换一段空白处再试，或者先把挡住的片段挪开。"),
+                    format!("{error}。\n\n检查这条轨道有没有被锁定，或者换个落点再试。"),
                 ));
             }
         }

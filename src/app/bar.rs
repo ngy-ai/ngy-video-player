@@ -582,7 +582,7 @@ impl PlayerApp {
             BarAction::DeleteClips => {
                 // 全屏时时间线整条让给画面，选中看不见，不能盲删。
                 if !window.is_fullscreen() {
-                    self.delete_selected_clips(cx);
+                    self.delete_selected_clips(false, cx);
                 }
             }
             BarAction::ToggleMarkerAtPlayhead => self.toggle_marker_at_playhead(cx),
