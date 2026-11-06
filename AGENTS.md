@@ -42,6 +42,7 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  timeline_view / timeline_tracks（工程模式时间线：布局、轨道行与拖动）、
                  library（工程模式左侧素材库：导入 / 后台探测 / 封面 / 试听原片，
                    `library/drop.rs` 是拖到轨道的落点、兼容性与首尾相接排布）、
+                 source_edit（三点编辑：源入出点、`,` / `.` 落位，与试听分成两笔状态）、
                  history（工程模式右侧编辑历史侧栏）、
                  controls、menus、bar、
                  menu_bar、associations、ab_loop（A-B 循环）、
@@ -102,6 +103,7 @@ src/timeline/media.rs  素材元信息、文件指纹与过期判断；不含 ff
 src/timeline/model.rs  序列 → 轨道 → 片段、转场与标记；纯数据，不持有文件路径
 src/timeline/ops.rs    编辑操作纯函数：旧序列进、新序列出，非法操作返回错误
 src/timeline/project.rs  .ngyproj 工程文件：版本迁移、相对素材路径、原子写 + .bak
+src/timeline/three_point.rs  三点编辑的时间换算：源入点 + 源出点 + 时间线入点，缺哪个退化成两点
 src/timeline/undo.rs    撤销 / 重做：状态快照栈，一次操作一步，上限 200 步
 src/timeline/autosave.rs  自动保存（30 秒无操作）与 `.autosave` 崩溃恢复
 src/timeline/view.rs    时间线视图状态：缩放（1 像素 = 1 帧 ~ 10 秒）、滚动、标尺换挡

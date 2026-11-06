@@ -54,6 +54,10 @@ impl PlayerApp {
         } else if self.screenshot_card.is_some() {
             // 卡片是最后一个浮上来的东西，Esc 先收它，再考虑关面板、退全屏。
             self.clear_screenshot_card();
+        } else if !fullscreen && self.audition.is_some() {
+            // 试听也是一层：Esc 回到时间线预览，但源入出点留着——三点编辑刚设好，
+            // 下一步就是按 `,` / `.` 落位。
+            self.stop_audition(cx);
         } else if self.mini.is_some() {
             // 小窗是「从主窗口分出去」的，Esc 表示收回来。
             self.dismiss_mini(cx);

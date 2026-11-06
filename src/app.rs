@@ -75,6 +75,10 @@ actions!(
         ExitOverlay,
         DeleteSelected,
         RippleDeleteSelected,
+        SetSourceIn,
+        SetSourceOut,
+        InsertFromSource,
+        OverwriteFromSource,
         SubtitleEarlier,
         SubtitleLater,
         ToggleStats,
@@ -132,6 +136,7 @@ mod scope;
 mod sequence_dialog;
 mod session;
 mod settings_panel;
+mod source_edit;
 #[cfg(test)]
 mod tests;
 mod timeline_header;
@@ -418,6 +423,12 @@ pub struct PlayerApp {
     library_generation: u64,
     /// 正在试听的素材：预览区暂时放的是原片，不是时间线内容。
     audition: Option<AssetId>,
+    /// 三点编辑的素材：源入出点是它的，试听结束（拖了播放头）也还留着。
+    ///
+    /// 与 `audition` 分开两笔账：`audition` 管「预览区现在放的是不是原片」，
+    /// 只要挪一下播放头就结束；`source_asset` 管「我这一截要从哪个素材里取」，
+    /// 得等真的放上时间线、换素材或者手动取消才清。
+    source_asset: Option<AssetId>,
     /// 时间线的缩放与滚动。关掉工程也留着，下次打开还在原处。
     timeline: ViewState,
     /// 正在拖时间线的播放头。
@@ -460,6 +471,10 @@ pub struct PlayerApp {
     delete_track_confirm: Option<DeleteTrackConfirm>,
     /// 序列规格对话框；`None` 表示没在改。新建工程与改现有序列共用它。
     sequence_dialog: Option<SequenceDialog>,
+    /// 试听原片时设的源入点 / 源出点。只对当前试听的素材有效，换素材或退出试听就清掉。
+    /// 与时间线的工作区入出点（`project.ui.in_point` / `out_point`）是两回事。
+    source_in: Option<Tick>,
+    source_out: Option<Tick>,
     /// 还没打开的序列规格对话框。
     ///
     /// 「新建工程」是从菜单或关闭确认里来的，那两处手上没有 `window`，建不了输入框；
@@ -868,6 +883,13 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         // 按住 Shift 删除是波纹删除：后面的片段往前补，不留空隙。
         KeyBinding::new("shift-delete", RippleDeleteSelected, None),
         KeyBinding::new("shift-backspace", RippleDeleteSelected, None),
+        // 三点编辑：`i` / `o` / `shift-i` / `shift-o` 都已经被占了（统计、打开文件、
+        // 时间线入出点），源入出点用 Alt 组；插入与覆盖用 Premiere 的 `,` / `.`。
+        KeyBinding::new("alt-i", SetSourceIn, None),
+        KeyBinding::new("alt-o", SetSourceOut, None),
+        // 键位串按键帽字符匹配：写成 `comma` / `period` 永远匹配不上。
+        KeyBinding::new(",", InsertFromSource, None),
+        KeyBinding::new(".", OverwriteFromSource, None),
         // `?` 不在这里绑定：键位串按键帽字符匹配，`?` 得写成 `shift-/`，
         // 且随键盘布局变化。改由视图的 key_down 按实际字符处理。
     ]

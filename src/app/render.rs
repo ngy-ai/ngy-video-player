@@ -209,6 +209,18 @@ impl Render for PlayerApp {
                     this.remove_selection(cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &SetSourceIn, _window, cx| {
+                this.set_source_in(cx);
+            }))
+            .on_action(cx.listener(|this, _: &SetSourceOut, _window, cx| {
+                this.set_source_out(cx);
+            }))
+            .on_action(cx.listener(|this, _: &InsertFromSource, _window, cx| {
+                this.place_from_source(crate::timeline::Placement::Insert, cx);
+            }))
+            .on_action(cx.listener(|this, _: &OverwriteFromSource, _window, cx| {
+                this.place_from_source(crate::timeline::Placement::Overwrite, cx);
+            }))
             .on_action(cx.listener(|this, _: &RippleDeleteSelected, window, cx| {
                 // 波纹删除只对时间线有意义：播放列表里没有「后面的内容往前补」这回事。
                 if this.project.is_some() && !window.is_fullscreen() {

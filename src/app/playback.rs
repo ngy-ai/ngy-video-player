@@ -26,9 +26,11 @@ impl PlayerApp {
     }
 
     pub(super) fn seek_by(&mut self, delta: f64, cx: &mut Context<Self>) {
+        // 试听原片时方向键挪的是素材自己的时刻：源入出点要靠它对齐到想要的画面，
+        // 交给时间线会把播放头挪走、顺带结束试听（见 `toggle_play` 的同一条理由）。
         // 工程模式跳的是播放头。发给 mpv 只会挪素材内部的时刻，播放头不动，
         // 松手之后画面又被下一次预览 seek 拉回去。
-        if self.project.is_some() {
+        if self.project.is_some() && self.audition.is_none() {
             self.seek_timeline_by(delta, cx);
             return;
         }
@@ -56,6 +58,18 @@ impl PlayerApp {
     /// 看单帧时用户要的是「停在这一帧」，所以第一次滚轮就顺手暂停；本来就
     /// 暂停着则保持，不做 toggle，免得滚一下来回切。
     pub(super) fn step_frame(&mut self, steps: i32, cx: &mut Context<Self>) {
+        // 试听原片时逐帧也要落在素材上：源入出点常常就差一帧。
+        if self.audition.is_some() {
+            if !self.snapshot.paused {
+                self.snapshot.paused = true;
+                self.send(Command::SetPaused(true));
+            }
+            self.send(Command::StepFrame(steps));
+            let arrow = if steps > 0 { "⏭" } else { "⏮" };
+            self.flash(format!("{arrow} 逐帧"));
+            cx.notify();
+            return;
+        }
         // 工程模式走序列帧率：素材帧率可能和序列不一样，按素材走播放头就对不上
         // 片段边界，切点也会落在半帧上。
         if self.project.is_some() {

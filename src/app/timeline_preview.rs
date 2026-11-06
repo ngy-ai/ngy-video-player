@@ -29,6 +29,8 @@ impl PlayerApp {
     /// 按当前播放头刷新预览画面（拖动、跳转之后）。
     pub(super) fn preview_at_playhead(&mut self, cx: &mut Context<Self>) {
         // 时间线一动，试听就结束：预览区的主语回到序列，而不是双击过的那个原片。
+        // 三点编辑的源区间不跟着走（`source_asset` 另行记账）：用户定完源入出点，
+        // 下一步本来就是点时间线定第三个点，这一步不能把他的源区间一起抹掉。
         self.audition = None;
         let Some(at) = self.project.as_ref().map(|project| project.ui.playhead) else {
             return;
@@ -276,7 +278,7 @@ impl PlayerApp {
     ///
     /// 每帧都居中会让整个画面一直在动，看不清；只在快出界时往前赶一段，
     /// 播放头就可以一直在屏幕上走。
-    fn follow_playhead(&mut self) {
+    pub(super) fn follow_playhead(&mut self) {
         let Some(project) = self.project.as_ref() else {
             return;
         };

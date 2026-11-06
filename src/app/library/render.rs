@@ -155,7 +155,15 @@ impl PlayerApp {
                     .child(note),
             );
         }
-        if let Some(audition) = self.audition {
+        // 条子认 `source_asset` 而不是 `audition`：定完源入出点、点一下时间线定第三个点，
+        // 试听会结束，但这一截还等着 `,` / `.` 放上去，得一直看得见。
+        if let Some(source) = self.source_asset {
+            let source_range = self.source_range_label();
+            let auditioning = self.audition.is_some();
+            let name = project
+                .asset(source)
+                .map(Asset::display_name)
+                .unwrap_or_else(|| "原片".to_string());
             panel = panel.child(
                 div()
                     .flex()
@@ -170,20 +178,44 @@ impl PlayerApp {
                     .bg(gpui_kit::rgba(0x5aa9ff1f))
                     .text_size(px(11.0))
                     .text_color(ui::accent())
-                    .child(ui::ellipsis(
-                        project
-                            .asset(audition)
-                            .map(Asset::display_name)
-                            .unwrap_or_else(|| "原片".to_string()),
-                    ))
-                    .child(settings_button(
-                        "library-back-timeline",
-                        "回到时间线",
-                        true,
-                        cx.listener(|this, _: &ClickEvent, _window, cx| {
-                            this.stop_audition(cx);
-                        }),
-                    )),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .gap(px(1.0))
+                            .child(ui::ellipsis(name))
+                            .when_some(source_range, |this, label| {
+                                this.child(
+                                    div()
+                                        .text_size(px(10.0))
+                                        .text_color(text_muted())
+                                        .whitespace_normal()
+                                        .child(label),
+                                )
+                            }),
+                    )
+                    .child(if auditioning {
+                        settings_button(
+                            "library-back-timeline",
+                            "回到时间线",
+                            true,
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.stop_audition(cx);
+                            }),
+                        )
+                    } else {
+                        // 试听已经结束，这条只剩「取消这一截」一个用途。
+                        settings_button(
+                            "library-clear-source",
+                            "取消源区间",
+                            true,
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.cancel_source(cx);
+                            }),
+                        )
+                    }),
             );
         }
 

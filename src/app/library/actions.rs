@@ -80,6 +80,7 @@ impl PlayerApp {
         self.library_import = None;
         self.library_generation = self.library_generation.wrapping_add(1);
         self.audition = None;
+        self.clear_source();
     }
 
     pub(crate) fn close_library(&mut self, cx: &mut Context<Self>) {
@@ -91,6 +92,8 @@ impl PlayerApp {
             self.timeline_preview = None;
             self.preview_at_playhead(cx);
         }
+        // 三点编辑的源区间也跟着面板走：面板都没了，按 `,` / `.` 也无从确认取的是哪一截。
+        self.clear_source();
         cx.notify();
     }
 
@@ -275,6 +278,9 @@ impl PlayerApp {
         // 时间线预览记的是「mpv 里现在是哪个素材」，试听把它顶掉了，要一起清。
         self.timeline_preview = None;
         self.timeline_loaded_at = Some(Instant::now());
+        // 换素材就是换一截要取的片段，上一段素材的源入出点留着只会误放。
+        self.clear_source();
+        self.source_asset = Some(id);
         self.audition = Some(id);
         self.begin_load(&path);
         self.send(Command::Load {
@@ -287,13 +293,21 @@ impl PlayerApp {
         cx.notify();
     }
 
-    /// 退出试听、回到播放头预览。面板上的按钮与拖播放头都会走到这里。
+    /// 退出试听、回到播放头预览。源入出点**不**跟着作废。
+    ///
+    /// 三点编辑里「回到时间线看结果」和「不要这一截了」是两件事：前者随时会发生
+    /// （按钮、Esc、点一下时间线），后者得用户明说（面板上的「取消源区间」）。
+    /// 混在一起的话，点一下「回到时间线」刚设好的源区间就没了，再按 `,` 还提示去双击素材。
     pub(crate) fn stop_audition(&mut self, cx: &mut Context<Self>) {
         if self.audition.take().is_none() {
             return;
         }
         self.timeline_preview = None;
         self.preview_at_playhead(cx);
-        self.flash("已回到时间线预览");
+        if self.source_asset.is_some() {
+            self.flash("已回到时间线预览；源区间还在，按 `,` 插入、`.` 覆盖");
+        } else {
+            self.flash("已回到时间线预览");
+        }
     }
 }

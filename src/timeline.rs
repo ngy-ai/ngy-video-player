@@ -16,6 +16,7 @@ pub mod pack;
 pub mod preview;
 mod project;
 mod spec;
+mod three_point;
 mod time;
 mod undo;
 mod view;
@@ -31,6 +32,7 @@ pub use project::{
     Asset, AssetRemoveError, PROJECT_EXTENSION, PROJECT_VERSION, Project, ProjectError, UiState,
 };
 pub use spec::{SequenceSpec, SpecError, rate_label};
+pub use three_point::{ThreePoint, ThreePointError, three_point};
 pub use time::{MICROS_PER_SECOND, Rational, Tick};
 pub use undo::{HISTORY_LIMIT, UndoHistory};
 pub use view::{
