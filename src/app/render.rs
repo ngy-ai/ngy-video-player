@@ -18,6 +18,8 @@ impl Render for PlayerApp {
         self.sync_timeline_view(window);
         self.update_render_target(window);
         self.sync_on_top(window, cx);
+        // 工程开关可能由拖放等菜单之外的路径触发，收掉另一套菜单的残留 open 状态。
+        self.sync_menu_bar_mode();
 
         let title = if self.snapshot.media_title.is_empty() {
             "视频播放器".to_string()

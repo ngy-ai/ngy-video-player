@@ -31,6 +31,24 @@ pub(super) enum BarAction {
     ShowHistory,
     /// 退出工程模式，回到纯播放器。
     CloseProject,
+    // -- 剪辑模式专用 ------------------------------------------------------
+    /// 预览播放 / 暂停：走时间线时钟，不能直接发给 mpv。
+    TogglePreview,
+    /// 把当前序列导出成视频文件。
+    ExportSequence,
+    /// 撤销 / 重做一步编辑。
+    Undo,
+    Redo,
+    /// 在播放头处切开片段、删掉选中片段。
+    SplitClip,
+    DeleteClips,
+    /// 播放头附近加 / 删标记，设工作区入 / 出点。
+    ToggleMarkerAtPlayhead,
+    MarkIn,
+    MarkOut,
+    /// 各加一条视频 / 音频轨。
+    AddVideoTrack,
+    AddAudioTrack,
     LoadSubtitle,
     Previous,
     Next,

@@ -127,6 +127,8 @@ mod scenes;
 mod scope;
 mod session;
 mod settings_panel;
+#[cfg(test)]
+mod tests;
 mod timeline_header;
 mod timeline_menu;
 mod timeline_preview;
@@ -523,7 +525,11 @@ enum MenuAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BarMenu {
     File,
+    /// 剪辑模式的编辑命令。
+    Edit,
     Playback,
+    /// 剪辑模式的工程预览控制。
+    Preview,
     Subtitle,
     Audio,
     View,
@@ -532,7 +538,8 @@ enum BarMenu {
 }
 
 impl BarMenu {
-    const ALL: [BarMenu; 7] = [
+    /// 播放模式：文件 + 播放/字幕/音轨 + 视图/设置/帮助。
+    const PLAYBACK: &'static [BarMenu] = &[
         BarMenu::File,
         BarMenu::Playback,
         BarMenu::Subtitle,
@@ -542,10 +549,31 @@ impl BarMenu {
         BarMenu::Help,
     ];
 
+    /// 剪辑模式：字幕 / 音轨切换针对的是播放列表里的片子，工程预览没有这套概念；
+    /// 换成「编辑 / 预览」两组剪辑动作。两套菜单只共享文件、视图、设置、帮助四个标题。
+    const EDITING: &'static [BarMenu] = &[
+        BarMenu::File,
+        BarMenu::Edit,
+        BarMenu::Preview,
+        BarMenu::View,
+        BarMenu::Settings,
+        BarMenu::Help,
+    ];
+
+    fn for_mode(editing: bool) -> &'static [BarMenu] {
+        if editing {
+            Self::EDITING
+        } else {
+            Self::PLAYBACK
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             BarMenu::File => "文件",
+            BarMenu::Edit => "编辑",
             BarMenu::Playback => "播放",
+            BarMenu::Preview => "预览",
             BarMenu::Subtitle => "字幕",
             BarMenu::Audio => "音轨",
             BarMenu::View => "视图",

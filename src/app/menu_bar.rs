@@ -24,8 +24,10 @@ impl PlayerApp {
             .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
                 cx.stop_propagation();
             }))
+            // 两套标题按当前模式切换：播放模式是「文件/播放/字幕/音轨/…」，
+            // 剪辑模式换成「文件/编辑/预览/…」，另一套的标题连画都不画。
             .children(
-                BarMenu::ALL
+                BarMenu::for_mode(self.project.is_some())
                     .iter()
                     .map(|menu| self.render_bar_menu(*menu, window, cx).into_any_element()),
             )

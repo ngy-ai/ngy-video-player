@@ -8,118 +8,55 @@ impl PlayerApp {
         self.snapshot.path.is_some() && self.snapshot.duration > 0.0
     }
 
+    /// 有工程就是剪辑模式：两套菜单只靠这一个状态分流。
+    fn editing(&self) -> bool {
+        self.project.is_some()
+    }
+
+    /// 换模式时收掉另一套菜单里还开着的标题：拖入工程、关闭工程都不一定经过
+    /// 菜单点击，留一个当前模式画不出来的 open 状态会让 hover 切换表现得很怪。
+    pub(super) fn sync_menu_bar_mode(&mut self) {
+        let menus = BarMenu::for_mode(self.editing());
+        if self.menu_bar.is_some_and(|open| !menus.contains(&open)) {
+            self.menu_bar = None;
+        }
+    }
+
+    /// 两套「文件」菜单共用的最近工程列表：前面永远留一条分隔线，有条目时
+    /// 后面再补一条，免得和后面的工具 / 导入项挤在一起。
+    fn recent_projects(&self, items: &mut Vec<BarItem>) {
+        use BarAction::*;
+
+        items.push(BarItem::Separator);
+        // 最近用过的工程：省掉一次文件对话框。菜单里只放前 5 条。
+        for path in self.settings.recent_projects.iter().take(5) {
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string());
+            items.push(BarItem::Entry(BarEntry::new(
+                format!("最近：{name}"),
+                OpenRecentProject(path.clone()),
+            )));
+        }
+        if !self.settings.recent_projects.is_empty() {
+            items.push(BarItem::Separator);
+        }
+    }
+
     pub(super) fn bar_entries(&self, menu: BarMenu, window: &Window) -> Vec<BarItem> {
         use BarAction::*;
 
         let mut items: Vec<BarItem> = Vec::new();
         match menu {
             BarMenu::File => {
-                items.push(BarItem::Entry(
-                    BarEntry::new("打开文件…", OpenFile).hint("O"),
-                ));
-                // 标出「新建列表」：面板里的「添加文件夹」是并进当前这一页，
-                // 两个入口长得像，靠这一句区分。
-                items.push(BarItem::Entry(BarEntry::new(
-                    "打开文件夹（新建列表）…",
-                    OpenFolder,
-                )));
-                items.push(BarItem::Separator);
-                items.push(BarItem::Entry(BarEntry::new("新建工程", NewProject)));
-                items.push(BarItem::Entry(BarEntry::new("打开工程…", OpenProject)));
-                // 最近用过的工程：省掉一次文件对话框。菜单里只放前 5 条。
-                if !self.settings.recent_projects.is_empty() {
-                    items.push(BarItem::Separator);
-                    for path in self.settings.recent_projects.iter().take(5) {
-                        let name = path
-                            .file_name()
-                            .map(|name| name.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| path.display().to_string());
-                        items.push(BarItem::Entry(BarEntry::new(
-                            format!("最近：{name}"),
-                            OpenRecentProject(path.clone()),
-                        )));
-                    }
-                    items.push(BarItem::Separator);
+                // 两套「文件」菜单完全按模式分开：播放模式只管打开片子和单文件工具，
+                // 剪辑模式只管工程。交叉的入口（打开工程 / 关闭工程）各留在自己那一套。
+                if self.editing() {
+                    self.editing_file_entries(&mut items);
+                } else {
+                    self.playback_file_entries(&mut items);
                 }
-                items.push(BarItem::Entry(
-                    BarEntry::new("导入到时间线…", ImportToTimeline)
-                        .enabled(self.project.is_some()),
-                ));
-                // 列表里已经排好的东西直接当素材用：先选列表，再选其中一个视频。
-                let has_playlist_files = self
-                    .playlists
-                    .tabs()
-                    .iter()
-                    .any(|tab| tab.playlist.file_count() > 0);
-                items.push(BarItem::Entry(
-                    BarEntry::new("从播放列表导入…", ImportPlaylistToTimeline)
-                        .enabled(self.project.is_some() && has_playlist_files),
-                ));
-                // 撤销 / 重做只能一格一格挪，右侧历史侧栏能直接跳到任意一步。
-                items.push(BarItem::Entry(
-                    BarEntry::new("编辑历史侧栏", ShowHistory)
-                        .checked(self.show_history)
-                        .enabled(self.project.is_some()),
-                ));
-                // 有未保存改动时，标题栏会挂一个 `*`；这里把保存入口放在最顺手的位置。
-                let save_hint = if cfg!(target_os = "macos") {
-                    "⌘S"
-                } else {
-                    "Ctrl+S"
-                };
-                let save_as_hint = if cfg!(target_os = "macos") {
-                    "⇧⌘S"
-                } else {
-                    "Ctrl+Shift+S"
-                };
-                items.push(BarItem::Entry(
-                    BarEntry::new("保存工程", Save)
-                        .hint(save_hint)
-                        .enabled(self.project.is_some()),
-                ));
-                items.push(BarItem::Entry(
-                    BarEntry::new("工程另存为…", SaveAs)
-                        .hint(save_as_hint)
-                        .enabled(self.project.is_some()),
-                ));
-                // 收集后工程变成自包含的：换机器打开不会缺素材。
-                items.push(BarItem::Entry(
-                    BarEntry::new("收集素材到工程目录", CollectAssets)
-                        .enabled(self.project.is_some() && self.project_path.is_some()),
-                ));
-                items.push(BarItem::Entry(
-                    BarEntry::new("关闭工程", CloseProject).enabled(self.project.is_some()),
-                ));
-                items.push(BarItem::Separator);
-                // 没有片子、或者时长还没读出来时无从编辑。
-                items.push(BarItem::Entry(
-                    BarEntry::new("裁切片段…", Trim).enabled(self.file_editable()),
-                ));
-                // 没有正在播放的文件也能用：面板里可以直接选一个文件夹批量转。
-                items.push(BarItem::Entry(BarEntry::new("格式转换…", Convert)));
-                items.push(BarItem::Entry(
-                    BarEntry::new("替换或删除音轨…", EditAudio).enabled(self.file_editable()),
-                ));
-                items.push(BarItem::Entry(
-                    BarEntry::new("内嵌字幕…", EditSubtitle).enabled(self.file_editable()),
-                ));
-                items.push(BarItem::Entry(
-                    BarEntry::new("编辑章节与元数据…", EditMetadata).enabled(self.file_editable()),
-                ));
-                items.push(BarItem::Entry(
-                    BarEntry::new("生成代理文件…", MakeProxy)
-                        .enabled(self.file_editable() && self.snapshot.has_video()),
-                ));
-                items.push(BarItem::Entry(
-                    BarEntry::new("双机位并排导出…", MulticamExport)
-                        .enabled(self.file_editable() && self.snapshot.has_video()),
-                ));
-                items.push(BarItem::Entry(
-                    BarEntry::new("把列表拼成一个文件…", ConcatExport)
-                        .enabled(self.playlist().file_count() >= 2),
-                ));
-                items.push(BarItem::Separator);
-                items.push(BarItem::Entry(BarEntry::new("退出", Quit)));
             }
             BarMenu::Playback => {
                 items.push(BarItem::Entry(
@@ -208,6 +145,17 @@ impl PlayerApp {
                         .enabled(self.file_editable() && self.snapshot.has_video()),
                 ));
             }
+            // 剪辑模式专用：编辑命令与工程预览控制。
+            BarMenu::Edit => {
+                if self.editing() {
+                    self.edit_entries(&mut items);
+                }
+            }
+            BarMenu::Preview => {
+                if self.editing() {
+                    self.preview_entries(&mut items);
+                }
+            }
             BarMenu::Subtitle => {
                 items.push(BarItem::Entry(
                     BarEntry::new(
@@ -288,11 +236,14 @@ impl PlayerApp {
                 ));
             }
             BarMenu::View => {
-                items.push(BarItem::Entry(
-                    BarEntry::new("播放列表", TogglePlaylist)
-                        .hint("L")
-                        .checked(self.settings.show_playlist),
-                ));
+                // 工程模式右侧通道整条让给编辑历史侧栏，播放列表根本没有可画的地方。
+                if !self.editing() {
+                    items.push(BarItem::Entry(
+                        BarEntry::new("播放列表", TogglePlaylist)
+                            .hint("L")
+                            .checked(self.settings.show_playlist),
+                    ));
+                }
                 items.push(BarItem::Entry(
                     BarEntry::new("全屏", ToggleFullscreen)
                         .hint("F")
@@ -367,6 +318,203 @@ impl PlayerApp {
         items
     }
 
+    /// 播放模式「文件」：打开片子、进入工程的入口，以及只作用于当前文件的工具。
+    /// 工程的导入 / 保存 / 关闭一概不出现——那几个动作在没有工程时点了也没意义。
+    fn playback_file_entries(&self, items: &mut Vec<BarItem>) {
+        use BarAction::*;
+
+        items.push(BarItem::Entry(
+            BarEntry::new("打开文件…", OpenFile).hint("O"),
+        ));
+        // 标出「新建列表」：面板里的「添加文件夹」是并进当前这一页，
+        // 两个入口长得像，靠这一句区分。
+        items.push(BarItem::Entry(BarEntry::new(
+            "打开文件夹（新建列表）…",
+            OpenFolder,
+        )));
+        items.push(BarItem::Separator);
+        items.push(BarItem::Entry(BarEntry::new("新建工程", NewProject)));
+        // 打开工程是播放模式进剪辑模式的入口，也是这套菜单里唯一的工程工作项。
+        items.push(BarItem::Entry(BarEntry::new("打开工程…", OpenProject)));
+        self.recent_projects(items);
+        // 没有片子、或者时长还没读出来时无从编辑。
+        items.push(BarItem::Entry(
+            BarEntry::new("裁切片段…", Trim).enabled(self.file_editable()),
+        ));
+        // 没有正在播放的文件也能用：面板里可以直接选一个文件夹批量转。
+        items.push(BarItem::Entry(BarEntry::new("格式转换…", Convert)));
+        items.push(BarItem::Entry(
+            BarEntry::new("替换或删除音轨…", EditAudio).enabled(self.file_editable()),
+        ));
+        items.push(BarItem::Entry(
+            BarEntry::new("内嵌字幕…", EditSubtitle).enabled(self.file_editable()),
+        ));
+        items.push(BarItem::Entry(
+            BarEntry::new("编辑章节与元数据…", EditMetadata).enabled(self.file_editable()),
+        ));
+        items.push(BarItem::Entry(
+            BarEntry::new("生成代理文件…", MakeProxy)
+                .enabled(self.file_editable() && self.snapshot.has_video()),
+        ));
+        items.push(BarItem::Entry(
+            BarEntry::new("双机位并排导出…", MulticamExport)
+                .enabled(self.file_editable() && self.snapshot.has_video()),
+        ));
+        items.push(BarItem::Entry(
+            BarEntry::new("把列表拼成一个文件…", ConcatExport)
+                .enabled(self.playlist().file_count() >= 2),
+        ));
+        items.push(BarItem::Separator);
+        items.push(BarItem::Entry(BarEntry::new("退出", Quit)));
+    }
+
+    /// 剪辑模式「文件」：工程从新建到关闭的一整套工作项。打开单个片子 / 文件夹、
+    /// 单文件工具都属于播放模式，这里一个都不放，免得把工程预览的素材当成片子换掉。
+    fn editing_file_entries(&self, items: &mut Vec<BarItem>) {
+        use BarAction::*;
+
+        items.push(BarItem::Entry(BarEntry::new("新建工程", NewProject)));
+        items.push(BarItem::Entry(BarEntry::new("打开工程…", OpenProject)));
+        self.recent_projects(items);
+        items.push(BarItem::Entry(BarEntry::new(
+            "导入到时间线…",
+            ImportToTimeline,
+        )));
+        // 列表里已经排好的东西直接当素材用：先选列表，再选其中一个视频。
+        let has_playlist_files = self
+            .playlists
+            .tabs()
+            .iter()
+            .any(|tab| tab.playlist.file_count() > 0);
+        items.push(BarItem::Entry(
+            BarEntry::new("从播放列表导入…", ImportPlaylistToTimeline).enabled(has_playlist_files),
+        ));
+        items.push(BarItem::Separator);
+        // 撤销 / 重做只能一格一格挪，右侧历史侧栏能直接跳到任意一步。
+        items.push(BarItem::Entry(
+            BarEntry::new("编辑历史侧栏", ShowHistory).checked(self.show_history),
+        ));
+        // 有未保存改动时，标题栏会挂一个 `*`；这里把保存入口放在最顺手的位置。
+        let save_hint = if cfg!(target_os = "macos") {
+            "⌘S"
+        } else {
+            "Ctrl+S"
+        };
+        let save_as_hint = if cfg!(target_os = "macos") {
+            "⇧⌘S"
+        } else {
+            "Ctrl+Shift+S"
+        };
+        items.push(BarItem::Entry(
+            BarEntry::new("保存工程", Save).hint(save_hint),
+        ));
+        items.push(BarItem::Entry(
+            BarEntry::new("工程另存为…", SaveAs).hint(save_as_hint),
+        ));
+        // 收集后工程变成自包含的：换机器打开不会缺素材。
+        items.push(BarItem::Entry(
+            BarEntry::new("收集素材到工程目录", CollectAssets).enabled(self.project_path.is_some()),
+        ));
+        items.push(BarItem::Separator);
+        items.push(BarItem::Entry(BarEntry::new(
+            "导出为视频文件…",
+            ExportSequence,
+        )));
+        items.push(BarItem::Separator);
+        items.push(BarItem::Entry(BarEntry::new("关闭工程", CloseProject)));
+        items.push(BarItem::Separator);
+        items.push(BarItem::Entry(BarEntry::new("退出", Quit)));
+    }
+
+    /// 剪辑模式「编辑」：时间线上的编辑命令，复用键盘快捷键对应的那批方法。
+    fn edit_entries(&self, items: &mut Vec<BarItem>) {
+        use BarAction::*;
+
+        let can_undo = self.history.as_ref().is_some_and(UndoHistory::can_undo);
+        let can_redo = self.history.as_ref().is_some_and(UndoHistory::can_redo);
+        items.push(BarItem::Entry(
+            BarEntry::new("撤销", Undo)
+                .hint(if cfg!(target_os = "macos") {
+                    "⌘Z"
+                } else {
+                    "Ctrl+Z"
+                })
+                .enabled(can_undo),
+        ));
+        items.push(BarItem::Entry(
+            BarEntry::new("重做", Redo)
+                .hint(if cfg!(target_os = "macos") {
+                    "⇧⌘Z"
+                } else {
+                    "Ctrl+Shift+Z"
+                })
+                .enabled(can_redo),
+        ));
+        items.push(BarItem::Separator);
+        items.push(BarItem::Entry(
+            BarEntry::new("在播放头处切割", SplitClip).hint(if cfg!(target_os = "macos") {
+                "⌘K"
+            } else {
+                "Ctrl+K"
+            }),
+        ));
+        let has_selection = self
+            .project
+            .as_ref()
+            .is_some_and(|project| !project.ui.selected.is_empty());
+        items.push(BarItem::Entry(
+            BarEntry::new("删除选中片段", DeleteClips)
+                .hint("Delete")
+                .enabled(has_selection),
+        ));
+        items.push(BarItem::Entry(
+            BarEntry::new("标记 / 取消标记", ToggleMarkerAtPlayhead).hint("Shift+M"),
+        ));
+        items.push(BarItem::Entry(
+            BarEntry::new("设工作区入点", MarkIn).hint("Shift+I"),
+        ));
+        items.push(BarItem::Entry(
+            BarEntry::new("设工作区出点", MarkOut).hint("Shift+O"),
+        ));
+        items.push(BarItem::Separator);
+        items.push(BarItem::Entry(BarEntry::new("加视频轨", AddVideoTrack)));
+        items.push(BarItem::Entry(BarEntry::new("加音频轨", AddAudioTrack)));
+    }
+
+    /// 剪辑模式「预览」：只留对工程预览有意义的动作。播放列表换集、循环、A-B
+    /// 循环与镜头分割都作用于单个文件，工程模式下要么无效要么会打乱预览。
+    fn preview_entries(&self, items: &mut Vec<BarItem>) {
+        use BarAction::*;
+
+        items.push(BarItem::Entry(
+            BarEntry::new(
+                if self.timeline_playing {
+                    "暂停预览"
+                } else {
+                    "播放预览"
+                },
+                TogglePreview,
+            )
+            .hint("空格"),
+        ));
+        items.push(BarItem::Separator);
+        items.push(BarItem::Entry(
+            BarEntry::new("快退 5 秒", Seek(-SEEK_STEP)).hint("←"),
+        ));
+        items.push(BarItem::Entry(
+            BarEntry::new("快进 5 秒", Seek(SEEK_STEP)).hint("→"),
+        ));
+        items.push(BarItem::Separator);
+        items.push(BarItem::Entry(
+            BarEntry::new("截图", TakeScreenshot)
+                .hint("S")
+                .enabled(self.snapshot.has_video()),
+        ));
+        items.push(BarItem::Entry(
+            BarEntry::new("示波器…", ShowScope).enabled(self.snapshot.has_video()),
+        ));
+    }
+
     pub(super) fn run_bar_action(
         &mut self,
         action: BarAction,
@@ -396,6 +544,22 @@ impl PlayerApp {
             BarAction::CloseProject => {
                 self.request_project_action(AfterSaveConfirm::CloseProject, cx)
             }
+            BarAction::TogglePreview => self.toggle_play(cx),
+            BarAction::ExportSequence => self.export_sequence(window, cx),
+            BarAction::Undo => self.undo_edit(cx),
+            BarAction::Redo => self.redo_edit(cx),
+            BarAction::SplitClip => self.split_at_playhead(cx),
+            BarAction::DeleteClips => {
+                // 全屏时时间线整条让给画面，选中看不见，不能盲删。
+                if !window.is_fullscreen() {
+                    self.delete_selected_clips(cx);
+                }
+            }
+            BarAction::ToggleMarkerAtPlayhead => self.toggle_marker_at_playhead(cx),
+            BarAction::MarkIn => self.set_in_point(cx),
+            BarAction::MarkOut => self.set_out_point(cx),
+            BarAction::AddVideoTrack => self.add_track(crate::timeline::TrackKind::Video, cx),
+            BarAction::AddAudioTrack => self.add_track(crate::timeline::TrackKind::Audio, cx),
             BarAction::LoadSubtitle => self.pick_subtitle(window, cx),
             BarAction::Previous => self.previous_file(cx),
             BarAction::Next => self.next_file(cx),
