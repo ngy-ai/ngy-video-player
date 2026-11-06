@@ -111,9 +111,10 @@ impl PlayerApp {
         };
         let viewport = window.viewport_size();
         let scale = window.scale_factor();
-        // 面板占掉的那一条不算视频区域，否则缩画面时会被拉伸。
+        // 两侧面板占掉的那两条不算视频区域，否则缩画面时会被拉伸。
         let panel = self.side_panel_width(window);
-        let area_width = (f32::from(viewport.width) - panel).max(2.0) * scale;
+        let library = self.library_width(window);
+        let area_width = (f32::from(viewport.width) - panel - library).max(2.0) * scale;
         // 窗口模式下菜单栏占掉顶部一条、时间线占掉底部一条，渲染目标都要扣掉，
         // 否则画面会被裁掉一截或者在时间线后面白渲染。
         let chrome = if window.is_fullscreen() {
@@ -190,6 +191,7 @@ impl PlayerApp {
         &self,
         top: Pixels,
         panel: f32,
+        library: f32,
         bottom: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -200,8 +202,9 @@ impl PlayerApp {
             .absolute()
             .inset_0()
             .top(top)
-            // 面板是真正的侧边栏：画面让出它那一条，而不是被盖住。
+            // 侧边栏是真正占地方的：画面让出那一条，而不是被盖住。
             .when(panel > 0.0, |this| this.right(px(panel)))
+            .when(library > 0.0, |this| this.left(px(library)))
             // 工程模式下时间线占住窗口底部，画面在剩下的区域里居中。
             .when(bottom > 0.0, |this| this.bottom(px(bottom)))
             .bg(bg())

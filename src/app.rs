@@ -19,7 +19,7 @@ use crate::{
     playlist::{self, DropSpot, Playlist, PlaylistSet},
     settings::{DecodeMode, OnTop, RenderMode, Rotation, Settings, VideoAspect, normalize_speed},
     timeline::{
-        Project, Tick, UndoHistory, ViewState,
+        AssetId, Project, Tick, UndoHistory, ViewState,
         autosave::{self, AutoSave},
         frame_pixels, seek_seconds, snap_to_targets, visible_frames, visible_ticks,
     },
@@ -62,6 +62,7 @@ actions!(
         ToggleFullscreen,
         ToggleMini,
         TogglePlaylist,
+        ToggleLibrary,
         OpenFile,
         NextFile,
         PreviousFile,
@@ -105,6 +106,7 @@ mod export_queue;
 mod format;
 mod history;
 mod import;
+mod library;
 mod menu_bar;
 mod menus;
 mod metadata;
@@ -148,6 +150,7 @@ use self::delete_track_confirm::DeleteTrackConfirm;
 use self::export_queue::QueuedExport;
 use self::format::*;
 use self::import::PlaylistImportDialog;
+use self::library::{LibraryImport, LibraryPanel};
 use self::metadata::MetadataDialog;
 use self::mini::MiniPlayer;
 use self::multicam::MulticamDialog;
@@ -404,6 +407,14 @@ pub struct PlayerApp {
     autosave: AutoSave,
     /// 「从播放列表导入」对话框；`None` 表示没打开。
     playlist_import: Option<PlaylistImportDialog>,
+    /// 素材库面板（工程模式左侧）；`None` 表示没打开。
+    library: Option<LibraryPanel>,
+    /// 后台探测的进度；`None` 表示没有正在跑的导入。
+    library_import: Option<LibraryImport>,
+    /// 探测任务的代数：换工程之后，上一个任务的结果不能再写进新素材表。
+    library_generation: u64,
+    /// 正在试听的素材：预览区暂时放的是原片，不是时间线内容。
+    audition: Option<AssetId>,
     /// 时间线的缩放与滚动。关掉工程也留着，下次打开还在原处。
     timeline: ViewState,
     /// 正在拖时间线的播放头。
@@ -760,6 +771,17 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("t", ToggleMini, None),
         KeyBinding::new("a", OpenPictureSettings, None),
         KeyBinding::new("l", TogglePlaylist, None),
+        // 工程模式的素材库与播放列表不是一回事（前者是工程素材，后者是播放列表），
+        // 键位错开：Ctrl/⌘ + Shift + E，与常见剪辑软件的「项目素材」位置一致。
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "cmd-shift-e"
+            } else {
+                "ctrl-shift-e"
+            },
+            ToggleLibrary,
+            None,
+        ),
         KeyBinding::new("o", OpenFile, None),
         // 保存沿用各平台的习惯键位；macOS 上 Ctrl 是系统修饰键，只能用 ⌘。
         KeyBinding::new(

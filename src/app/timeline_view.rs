@@ -49,6 +49,8 @@ impl PlayerApp {
     pub(super) fn close_project(&mut self, cx: &mut Context<Self>) {
         // 预览播放属于工程：工程关掉了，时钟和 mpv 都不该继续跑。
         self.stop_timeline_playback(cx);
+        // 素材库、导入进度与试听都是上一个工程的：先清掉，再拆工程。
+        self.reset_library();
         if self.project.take().is_some() {
             // 内容已经存过或被用户主动丢弃，`.autosave` 再留着只会下次白问一句。
             self.clear_autosave();
@@ -71,6 +73,7 @@ impl PlayerApp {
     pub(super) fn new_project(&mut self, cx: &mut Context<Self>) {
         // 换工程 = 换播放源：上一个工程的预览时钟和已加载的素材都作废。
         self.stop_timeline_playback(cx);
+        self.reset_library();
         // 普通播放里的上一部片子不属于这个空工程：连画面带播放一起停掉，
         // 否则它的画面会一直挂在预览区，还会随着 mpv 继续解码不停刷新。
         self.stop_and_clear_frame(cx);
@@ -141,6 +144,7 @@ impl PlayerApp {
         let source = recovery.unwrap_or_else(|| path.clone());
         // 换工程 = 换播放源：上一个工程的预览时钟和已加载的素材都作废。
         self.stop_timeline_playback(cx);
+        self.reset_library();
         self.timeline_preview = None;
         self.timeline_loaded_at = None;
         // 上一个工程的菜单指向的片段在这个工程里不存在。

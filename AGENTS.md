@@ -40,6 +40,8 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  session（初始化/事件循环）、playback、window（迷你窗/置顶）、
                  picture、playlist_ops、video_area、
                  timeline_view / timeline_tracks（工程模式时间线：布局、轨道行与拖动）、
+                 library（工程模式左侧素材库：导入 / 后台探测 / 封面 / 试听原片）、
+                 history（工程模式右侧编辑历史侧栏）、
                  controls、menus、bar、
                  menu_bar、associations、ab_loop（A-B 循环）、
                  project_file（工程保存/另存为/未保存确认）、
@@ -115,8 +117,10 @@ src/timeline/view.rs    时间线视图状态：缩放（1 像素 = 1 帧 ~ 10 �
   （`side_panel_width()` 返回 0，`render()` 里那几个面板都不画），
   新面板同样要放进 `!fullscreen` 的分支里。
 - 工程模式（`project.is_some()`）是另一套布局：右侧通道、控制条与进度条都不画，
-  画面底部让出时间线（`timeline_height`）。新加面板/浮层时先想清楚它在工程模式下
-  该不该出现。
+  画面底部让出时间线（`timeline_height`），画面左右再分别让开素材库（`library_width()`）
+  与编辑历史（`side_panel_width()`），两侧面板都只占预览区、不压时间线。
+  新加面板/浮层时先想清楚它在工程模式下该不该出现；画面区与渲染目标（`update_render_target`）
+  都要扣掉对应的宽度，漏一处就是画面被盖住或被拉伸。
 - 模态对话框彼此互斥：新增一个对话框时，在它的 `open_*_dialog` 里把其它对话框
   都 `close_*_dialog` 一遍，并在 `render()` 里把它的 `render_*_dialog` 挂进模态层；
   漏掉的话两个模态会叠在一起抢键盘。

@@ -4,6 +4,14 @@ use super::*;
 
 impl PlayerApp {
     pub(super) fn toggle_play(&mut self, cx: &mut Context<Self>) {
+        // 试听原片时 mpv 里放的就是用户双击的那个文件，空格控制它；
+        // 交给时间线会把画面换成播放头那一刻，试听也就断了。
+        if self.audition.is_some() {
+            self.send(Command::PlayPause);
+            self.poke();
+            cx.notify();
+            return;
+        }
         // 工程模式下「播放」放的是时间线，不是 mpv 里那个文件：mpv 在这里只是
         // 预览的取帧器，让它自己往下放会直接跑过片段的出点、声音还对不上位置。
         if self.project.is_some() {

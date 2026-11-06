@@ -23,8 +23,8 @@ mod thumbnail;
 mod waveform;
 
 pub use thumbnail::{
-    COLUMNS, ROWS, SECONDS_PER_STRIP, ThumbLevel, ThumbnailStrip, ensure_strip, strip_index_of,
-    strip_path,
+    COLUMNS, ROWS, SECONDS_PER_STRIP, ThumbLevel, ThumbnailStrip, cell_rect, ensure_strip,
+    strip_index_of, strip_path,
 };
 pub use waveform::{DEFAULT_CAPACITY, PEAKS_PER_SECOND, WaveformCache, aggregate};
 

@@ -444,6 +444,16 @@ impl PlayerApp {
 
         let can_undo = self.history.as_ref().is_some_and(UndoHistory::can_undo);
         let can_redo = self.history.as_ref().is_some_and(UndoHistory::can_redo);
+        // 素材库是「从零编排」的第一步：先收素材，再往轨道上放。
+        items.push(BarItem::Entry(
+            BarEntry::new("素材库", ToggleLibrary).checked(self.library.is_some()),
+        ));
+        items.push(BarItem::Entry(BarEntry::new("导入素材…", ImportAssets)));
+        items.push(BarItem::Entry(BarEntry::new(
+            "导入素材文件夹…",
+            ImportAssetFolder,
+        )));
+        items.push(BarItem::Separator);
         items.push(BarItem::Entry(
             BarEntry::new("撤销", Undo)
                 .hint(if cfg!(target_os = "macos") {
@@ -546,6 +556,9 @@ impl PlayerApp {
                 self.request_project_action(AfterSaveConfirm::OpenProject(path), cx);
             }
             BarAction::ImportToTimeline => self.import_to_timeline(window, cx),
+            BarAction::ToggleLibrary => self.toggle_library(window, cx),
+            BarAction::ImportAssets => self.pick_assets(window, cx),
+            BarAction::ImportAssetFolder => self.pick_asset_folder(window, cx),
             BarAction::ImportPlaylistToTimeline => self.open_playlist_import_dialog(window, cx),
             BarAction::ShowHistory => self.open_history_panel(cx),
             BarAction::Save => {

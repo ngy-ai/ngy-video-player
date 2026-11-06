@@ -56,6 +56,17 @@ impl PlayerApp {
                     .gap(px(12.0))
                     .text_size(px(11.0))
                     .text_color(text_muted())
+                    // 素材库在左侧，收起之后入口只剩菜单；标题条上留一颗，
+                    // 免得用户以为素材只能从「导入到时间线」一条路进来。
+                    .child(ui::icon_toggle_small(
+                        "timeline-library",
+                        IconName::Folder,
+                        self.library.is_some(),
+                        "素材库（左侧面板）",
+                        cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.toggle_library(window, cx);
+                        }),
+                    ))
                     // 控制条在工程模式下整条不画，播放键只能放在这里；不然空格是
                     // 唯一入口，新用户会以为时间线只能拖着看。
                     .child(ui::icon_toggle_small(

@@ -78,6 +78,35 @@ pub fn strip_index_of(second: u64) -> u64 {
     second / SECONDS_PER_STRIP
 }
 
+/// 图块里某一格的像素矩形 `(x, y, 宽, 高)`。
+///
+/// 图块是一张 `列数 × 行数` 的拼图，格子的宽高由整张图的像素尺寸均分得到。
+/// 素材库只要第一格（第 0 秒的封面），但这里按行列算，时间线上将来要取
+/// 任意一秒的帧时不用再写一份。
+pub fn cell_rect(
+    width: u32,
+    height: u32,
+    columns: u32,
+    rows: u32,
+    column: u32,
+    row: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    if columns == 0 || rows == 0 || column >= columns || row >= rows {
+        return None;
+    }
+    let cell_width = width / columns;
+    let cell_height = height / rows;
+    if cell_width == 0 || cell_height == 0 {
+        return None;
+    }
+    Some((
+        column * cell_width,
+        row * cell_height,
+        cell_width,
+        cell_height,
+    ))
+}
+
 /// 图块在缓存里的路径（不保证已生成）。
 pub fn strip_path(
     input: &Path,
@@ -210,6 +239,21 @@ mod tests {
         assert_eq!(strip.tile(200), None, "下一块的事");
         assert_eq!(strip_index_of(0), 0);
         assert_eq!(strip_index_of(199), 1);
+    }
+
+    #[test]
+    fn 格子按列行均分整张图块() {
+        // 10×10 的 800×800：每格 80×80。
+        assert_eq!(cell_rect(800, 800, 10, 10, 0, 0), Some((0, 0, 80, 80)));
+        assert_eq!(cell_rect(800, 800, 10, 10, 3, 2), Some((240, 160, 80, 80)));
+        // 竖拍：格宽 80、格高 142，第一格是竖着的。
+        assert_eq!(cell_rect(800, 1420, 10, 10, 0, 0), Some((0, 0, 80, 142)));
+        // 越界、空尺寸都当没有这一格。
+        assert_eq!(cell_rect(800, 800, 10, 10, 10, 0), None);
+        assert_eq!(cell_rect(800, 800, 10, 10, 0, 10), None);
+        assert_eq!(cell_rect(800, 800, 0, 10, 0, 0), None);
+        assert_eq!(cell_rect(0, 800, 10, 10, 0, 0), None);
+        assert_eq!(cell_rect(5, 5, 10, 10, 0, 0), None, "分不出格子");
     }
 
     #[test]

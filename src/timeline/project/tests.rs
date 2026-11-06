@@ -430,3 +430,91 @@ fn 保存会去掉指向已删片段的转场() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn 同一路径重复导入只登记一次() {
+    let dir = scratch("dedupe");
+    let file = media(&dir, "a.mp4");
+    let mut project = Project::new();
+
+    let first = project.add_asset(&file);
+    let again = project.add_asset(&file);
+    assert_eq!(first, again, "同一路径必须复用同一条素材");
+    assert_eq!(project.assets.len(), 1);
+
+    // 相对路径写法不同但指向同一个文件，也要认出来。
+    let relative = file
+        .strip_prefix(std::env::current_dir().unwrap_or_default())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| file.clone());
+    assert_eq!(project.add_asset(&relative), first, "写法不同不该新增一条");
+    assert_eq!(project.assets.len(), 1);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn 被片段引用的素材不能移除() {
+    let dir = scratch("remove-in-use");
+    let (mut project, file, asset, _) = sample(&dir);
+
+    assert_eq!(project.asset_clip_count(asset), 1);
+    assert_eq!(
+        project.remove_asset(asset),
+        Err(AssetRemoveError::InUse { clips: 1 }),
+        "删掉会留下悬空引用"
+    );
+    assert!(project.asset(asset).is_some(), "拒绝移除时素材必须还在");
+
+    // 把引用它的片段删掉之后就能移除，文件本身不受影响。
+    project.sequence.tracks[0].clips.clear();
+    assert_eq!(project.remove_asset(asset), Ok(()));
+    assert!(project.asset(asset).is_none());
+    assert!(file.is_file(), "只改素材表，不动磁盘上的文件");
+
+    assert_eq!(
+        project.remove_asset(asset),
+        Err(AssetRemoveError::NotFound(asset)),
+        "重复移除报「没有这一条」而不是静默成功"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn 打开工程之后文件被删掉也报缺失() {
+    let dir = scratch("vanish");
+    let (mut project, file, asset, _) = sample(&dir);
+    {
+        let entry = project
+            .assets
+            .iter_mut()
+            .find(|entry| entry.id == asset)
+            .expect("素材登记");
+        entry.media = Some(MediaInfo {
+            duration: Tick::from_secs(1.0),
+            ..MediaInfo::default()
+        });
+        entry.stamp = MediaStamp::of(&file);
+    }
+    assert_eq!(project.asset(asset).unwrap().state(), AssetState::Ready);
+
+    // 文件在会话期间被删掉：要报「不在了」，而不是含糊的「改动过」。
+    fs::remove_file(&file).expect("删文件");
+    assert_eq!(project.asset(asset).unwrap().state(), AssetState::Missing);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn 移除素材不影响其它素材与片段() {
+    let dir = scratch("remove-other");
+    let (mut project, _, used, _) = sample(&dir);
+    let other = project.add_asset(&media(&dir, "b.mp4"));
+
+    assert_eq!(project.remove_asset(other), Ok(()));
+    assert!(project.asset(used).is_some(), "用着的那个原样留着");
+    assert_eq!(project.asset_clip_count(used), 1);
+
+    let _ = fs::remove_dir_all(&dir);
+}

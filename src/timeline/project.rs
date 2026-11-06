@@ -64,9 +64,12 @@ impl Asset {
         if self.media.is_none() {
             return AssetState::Ready;
         }
-        match self.stamp {
-            Some(stamp) if MediaStamp::of(&self.resolved) == Some(stamp) => AssetState::Ready,
-            _ => AssetState::Changed,
+        // 文件被删掉时 `MediaStamp::of` 给 `None`：那是「不在了」，不是「换过了」。
+        // 两者的下一步完全不同——一个要重新链接，一个要重新探测。
+        match (MediaStamp::of(&self.resolved), self.stamp) {
+            (Some(current), Some(cached)) if current == cached => AssetState::Ready,
+            (Some(_), _) => AssetState::Changed,
+            (None, _) => AssetState::Missing,
         }
     }
 }
@@ -196,6 +199,32 @@ impl Project {
 
     pub fn asset(&self, id: AssetId) -> Option<&Asset> {
         self.assets.iter().find(|asset| asset.id == id)
+    }
+
+    /// 有多少片段引用了这个素材。素材库决定能不能移除时看它。
+    pub fn asset_clip_count(&self, id: AssetId) -> usize {
+        self.sequence
+            .clips()
+            .filter(|(_, clip)| clip.asset_id == id)
+            .count()
+    }
+
+    /// 从素材表里移除一项。
+    ///
+    /// 片段只记 `AssetId`，素材表里那一行没了就等于把所有引用变成悬空指针，
+    /// 而片段本身没有「素材已删除」这种状态——所以还被引用时一律拒绝，
+    /// 由界面告诉用户「还有 N 个片段在用」。没被引用就直接删，不留 tombstone：
+    /// 素材库是「我要剪的东西」的清单，不是历史记录。
+    pub fn remove_asset(&mut self, id: AssetId) -> Result<(), AssetRemoveError> {
+        if !self.assets.iter().any(|asset| asset.id == id) {
+            return Err(AssetRemoveError::NotFound(id));
+        }
+        let clips = self.asset_clip_count(id);
+        if clips > 0 {
+            return Err(AssetRemoveError::InUse { clips });
+        }
+        self.assets.retain(|asset| asset.id != id);
+        Ok(())
     }
 
     /// 素材在当前磁盘上的绝对路径。找不到文件时也返回推算出来的位置，
@@ -354,6 +383,31 @@ impl Project {
         self.ui.selected.retain(|id| sequence.clip(*id).is_some());
     }
 }
+
+/// 从素材表移除一项时会遇到的情况。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AssetRemoveError {
+    /// 素材表里没有这个 id：可能是刚被另一条路径删掉了。
+    NotFound(AssetId),
+    /// 还有片段在用它。删掉会留下悬空引用，所以拒绝并报数量。
+    InUse { clips: usize },
+}
+
+impl fmt::Display for AssetRemoveError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AssetRemoveError::NotFound(id) => {
+                write!(f, "素材表里没有 #{}", id.raw())
+            }
+            AssetRemoveError::InUse { clips } => write!(
+                f,
+                "还有 {clips} 个片段在用这个素材。先把它们从时间线上删掉，再从素材库移除"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AssetRemoveError {}
 
 /// 工程文件的读写错误。文案给出可执行的下一步，而不是只报「失败」。
 #[derive(Debug)]

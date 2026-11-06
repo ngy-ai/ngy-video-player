@@ -28,6 +28,8 @@ const LOAD_GRACE: Duration = Duration::from_millis(300);
 impl PlayerApp {
     /// 按当前播放头刷新预览画面（拖动、跳转之后）。
     pub(super) fn preview_at_playhead(&mut self, cx: &mut Context<Self>) {
+        // 时间线一动，试听就结束：预览区的主语回到序列，而不是双击过的那个原片。
+        self.audition = None;
         let Some(at) = self.project.as_ref().map(|project| project.ui.playhead) else {
             return;
         };

@@ -45,6 +45,8 @@ impl Render for PlayerApp {
         };
         // 面板宽度只算一次：画面、控制条、面板本身都按同一个数让位。
         let panel_width = self.side_panel_width(window);
+        // 工程模式左侧素材库是另一条通道，与右侧面板互不相干。
+        let library_width = self.library_width(window);
         // 工程模式下画面区让出底部这一条，时间线从窗口底边往上铺。
         let timeline_height = self.timeline_height(window);
 
@@ -87,6 +89,11 @@ impl Render for PlayerApp {
             }))
             .on_action(cx.listener(|this, _: &ToggleMini, window, cx| {
                 this.toggle_mini(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ToggleLibrary, window, cx| {
+                this.toggle_library(window, cx);
+                this.poke();
+                cx.notify();
             }))
             .on_action(cx.listener(|this, _: &TogglePlaylist, window, cx| {
                 this.toggle_playlist(window);
@@ -323,11 +330,26 @@ impl Render for PlayerApp {
             }))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _window, cx| {
                 let dropped: Vec<PathBuf> = paths.0.iter().cloned().collect();
-                this.open_paths(dropped, cx);
+                // 工程模式下拖进来的多半是素材：收进素材库，不打断正在看的预览。
+                // 拖进来的是工程文件时仍走「打开工程」那条路（`open_paths` 里判断）。
+                let is_project = dropped
+                    .iter()
+                    .any(|path| !path.is_dir() && formats::is_project(path));
+                if this.project.is_some() && !is_project {
+                    this.import_assets(dropped, cx);
+                } else {
+                    this.open_paths(dropped, cx);
+                }
                 this.poke();
                 cx.notify();
             }))
-            .child(self.render_video_area(video_top, panel_width, timeline_height, cx))
+            .child(self.render_video_area(
+                video_top,
+                panel_width,
+                library_width,
+                timeline_height,
+                cx,
+            ))
             // 转换 / 裁切 / 播放列表互斥，占同一条右侧通道；前两者开着时优先它们。
             //
             // 全屏时这条通道整条不画：全屏要看的是画面本身，不是它旁边那一栏。
@@ -345,14 +367,16 @@ impl Render for PlayerApp {
                         |this| this.child(self.render_playlist(video_top, panel_width, cx)),
                     )
             })
-            // 工程模式的右侧：编辑历史贴着预览区，下边界让开时间线。
+            // 工程模式的两侧：左边素材库、右边编辑历史，都贴着预览区，
+            // 下边界让开时间线（时间线仍然铺满整窗）。
             .when(!fullscreen && self.project.is_some(), |this| {
-                this.children(self.render_history_panel(
-                    video_top,
-                    panel_width,
-                    timeline_height,
-                    cx,
-                ))
+                this.children(self.render_library(video_top, library_width, timeline_height, cx))
+                    .children(self.render_history_panel(
+                        video_top,
+                        panel_width,
+                        timeline_height,
+                        cx,
+                    ))
             })
             .when(self.controls_visible(), |this| {
                 this.child(self.render_controls(panel_width, cx))

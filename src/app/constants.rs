@@ -49,6 +49,8 @@ pub(super) const CLIP_PANEL_WIDTH: f32 = 340.0;
 pub(super) const CONVERT_PANEL_WIDTH: f32 = 360.0;
 /// 工程模式编辑历史侧栏的宽度。一行只放序号、操作说明与状态，不必跟裁切一样宽。
 pub(super) const HISTORY_PANEL_WIDTH: f32 = 260.0;
+/// 工程模式左侧素材库的宽度。一行放封面 + 名字 + 规格，比历史侧栏略宽。
+pub(super) const LIBRARY_PANEL_WIDTH: f32 = 280.0;
 /// 控制条一行排下全部按钮所需的宽度。
 ///
 /// 控制条按「窗口宽 - 面板宽」定宽，面板一旦把这一条压窄，右侧的倍速、
