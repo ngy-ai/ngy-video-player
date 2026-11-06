@@ -150,7 +150,7 @@ use self::delete_track_confirm::DeleteTrackConfirm;
 use self::export_queue::QueuedExport;
 use self::format::*;
 use self::import::PlaylistImportDialog;
-use self::library::{LibraryImport, LibraryPanel};
+use self::library::{AssetDrop, LibraryImport, LibraryPanel};
 use self::metadata::MetadataDialog;
 use self::mini::MiniPlayer;
 use self::multicam::MulticamDialog;
@@ -423,6 +423,8 @@ pub struct PlayerApp {
     timeline_snap: bool,
     /// 拖动片段时算出来的落点；`None` 表示没在拖。
     timeline_drop: Option<TimelineDrop>,
+    /// 从素材库往轨道上拖时算出来的落点；`None` 表示没在拖素材。
+    asset_drop: Option<AssetDrop>,
     /// 时间线片段上的右键菜单；`None` 表示没展开。
     timeline_menu: Option<TimelineMenu>,
     /// 工程模式预览正在放的那个素材文件。同一个文件只 seek，换文件才重新加载。

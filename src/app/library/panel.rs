@@ -4,7 +4,7 @@ use super::super::*;
 use crate::timeline::{AssetId, AssetState};
 use gpui_kit::Subscription;
 use gpui_kit::component::input::InputState;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -20,8 +20,10 @@ pub(crate) struct LibraryPanel {
     pub(crate) search: Entity<InputState>,
     /// 搜索框当前的文本。输入框只会重绘自己，靠观察者同步到这里来过滤列表。
     pub(crate) query: String,
-    /// 选中的素材。移除按钮作用在它上面。
-    pub(crate) selected: Option<AssetId>,
+    /// 选中的素材。移除按钮与拖拽都作用在整组上。
+    pub(crate) selected: BTreeSet<AssetId>,
+    /// 上一次点过的行。Shift 连选从它开始算区间。
+    pub(crate) anchor: Option<AssetId>,
     /// 已经生成好的缩略图。
     pub(crate) thumbs: HashMap<AssetId, ThumbState>,
     /// 已经投递、还没回来的缩略图请求。

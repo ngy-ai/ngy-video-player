@@ -40,7 +40,8 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  session（初始化/事件循环）、playback、window（迷你窗/置顶）、
                  picture、playlist_ops、video_area、
                  timeline_view / timeline_tracks（工程模式时间线：布局、轨道行与拖动）、
-                 library（工程模式左侧素材库：导入 / 后台探测 / 封面 / 试听原片）、
+                 library（工程模式左侧素材库：导入 / 后台探测 / 封面 / 试听原片，
+                   `library/drop.rs` 是拖到轨道的落点、兼容性与首尾相接排布）、
                  history（工程模式右侧编辑历史侧栏）、
                  controls、menus、bar、
                  menu_bar、associations、ab_loop（A-B 循环）、

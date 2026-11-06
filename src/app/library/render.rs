@@ -2,6 +2,7 @@
 
 use super::super::*;
 use super::covers::spec;
+use super::drop::{AssetDrag, AssetDragItem, AssetGhost};
 use super::panel::ThumbState;
 use crate::timeline::{Asset, AssetId, AssetState, MediaInfo};
 use gpui_kit::component::input::Input;
@@ -66,8 +67,7 @@ impl PlayerApp {
             );
         }
 
-        let selected = library.selected;
-        let can_remove = selected.is_some();
+        let can_remove = !library.selected.is_empty();
         let importing = self
             .library_import
             .as_ref()
@@ -210,7 +210,7 @@ impl PlayerApp {
                             .text_size(px(10.0))
                             .text_color(text_faint())
                             .whitespace_normal()
-                            .child("双击试听原片"),
+                            .child("双击试听 · Ctrl/⌘ 多选"),
                     ),
             )
             .into_any_element()
@@ -222,7 +222,7 @@ impl PlayerApp {
         let Some(library) = self.library.as_ref() else {
             return div().into_any_element();
         };
-        let selected = library.selected == Some(asset.id);
+        let selected = library.selected.contains(&asset.id);
         let state = library
             .states
             .get(&asset.id)
@@ -246,6 +246,20 @@ impl PlayerApp {
             AssetState::Changed => Some("文件已改动"),
         };
         let id = asset.id;
+        // 拖出去的内容：拖的是选中项就整组带走，否则只带自己。
+        let drag_items: Vec<AssetDragItem> = if selected {
+            self.selected_assets()
+                .iter()
+                .filter_map(AssetDragItem::from_asset)
+                .collect()
+        } else {
+            AssetDragItem::from_asset(asset).into_iter().collect()
+        };
+        let drag_label: SharedString = if drag_items.len() > 1 {
+            format!("{} 等 {} 个", drag_items[0].name, drag_items.len()).into()
+        } else {
+            name.clone().into()
+        };
 
         div()
             .id(SharedString::from(format!("library-row-{}", id.raw())))
@@ -317,9 +331,24 @@ impl PlayerApp {
                 if event.click_count() >= 2 {
                     this.audition_asset(id, cx);
                 } else {
-                    this.select_library_asset(id, cx);
+                    this.select_library_asset(id, event.modifiers(), cx);
                 }
             }))
+            // 拖到轨道上生成片段。拖的是选中集里的这一行就整组带走，
+            // 否则只带自己——和文件管理器对「拖未选中的项」的处理一致。
+            .when(!drag_items.is_empty(), |this| {
+                this.on_drag(
+                    AssetDrag {
+                        items: drag_items,
+                        label: drag_label,
+                    },
+                    |drag, _, _, cx| {
+                        cx.new(|_| AssetGhost {
+                            name: drag.label.clone(),
+                        })
+                    },
+                )
+            })
             .into_any_element()
     }
 

@@ -1,6 +1,7 @@
 //! 时间线的轨道行与片段：绘制、拖动换轨、静音与锁定开关。
 
 use super::delete_track_confirm::{track_content_detail, track_has_content};
+use super::library::{AssetDrag, lane_offset};
 use super::*;
 use crate::timeline::{EditOp, Id, Rational, apply as apply_edit};
 use gpui_kit::DragMoveEvent;
@@ -109,6 +110,23 @@ impl PlayerApp {
             .on_drop(cx.listener(move |this, drag: &TimelineDrag, _window, cx| {
                 this.drop_timeline_clip(drag.clip, cx);
             }))
+            // 素材库往轨道上拖。与片段拖动是两种拖拽值，GPUI 按类型分开派发，
+            // 各自只收到自己那种。
+            .on_drag_move(cx.listener(
+                move |this, event: &DragMoveEvent<AssetDrag>, _window, cx| {
+                    let position = event.event.position;
+                    if !event.bounds.contains(&position) {
+                        return;
+                    }
+                    let lane_x =
+                        lane_offset(f32::from(position.x), f32::from(event.bounds.origin.x));
+                    let drag = event.drag(cx).clone();
+                    this.set_asset_drop(track_id, lane_x, &drag, cx);
+                },
+            ))
+            .on_drop(cx.listener(move |this, drag: &AssetDrag, _window, cx| {
+                this.drop_assets(track_id, drag, cx);
+            }))
             // 点轨道空白处取消选中；点片段时片段自己截断了事件。
             .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
                 this.clear_selection(cx);
@@ -216,6 +234,49 @@ impl PlayerApp {
                     .border_1()
                     .border_color(ui::accent())
                     .bg(gpui_kit::rgba(0x3f6fd855)),
+            );
+        }
+
+        // 素材拖进来的落点：同样画一个框，放不下时换成拒绝色——
+        // 松手之前就知道「这条轨道不收」，不用等提示。
+        // `has_active_drag` 是必须的：拖出轨道再松手时 `on_drop` 不会触发，
+        // 只看 `asset_drop` 会让框一直留在轨道上。
+        if let Some(drop) = self.asset_drop
+            && drop.track == track_id
+            && cx.has_active_drag()
+        {
+            let left = view.x_of(drop.start.secs()).max(0.0);
+            let right = view
+                .x_of((drop.start + drop.duration).secs())
+                .min(lane_width);
+            let width = (right - left).max(2.0);
+            let (border, fill, ink) = if drop.ok {
+                (ui::accent(), gpui_kit::rgba(0x3f6fd855), text())
+            } else {
+                (ui::danger(), gpui_kit::rgba(0xd03a3a44), ui::danger())
+            };
+            lane = lane.child(
+                div()
+                    .absolute()
+                    .left(px(left))
+                    .top(px(4.0))
+                    .bottom(px(4.0))
+                    .w(px(width))
+                    .rounded(px(4.0))
+                    .border_1()
+                    .border_color(border)
+                    .bg(fill)
+                    .overflow_hidden()
+                    .px(px(5.0))
+                    .flex()
+                    .items_center()
+                    .text_size(px(10.0))
+                    .text_color(ink)
+                    .whitespace_nowrap()
+                    // 框太窄时写不下时长，宁可空着也不让文字外溢压住邻居。
+                    .when(width > 56.0, |this| {
+                        this.child(format_time(drop.duration.secs()))
+                    }),
             );
         }
 
@@ -752,7 +813,7 @@ fn clip_color(kind: crate::timeline::TrackKind) -> gpui_kit::Rgba {
 
 /// 落点对齐到帧：像素换算出来的时间是连续值，不对齐会得到「半帧」的起点，
 /// 导出时那一帧要么重复要么丢掉。
-fn snap_to_frame(tick: Tick, fps: Rational) -> Tick {
+pub(crate) fn snap_to_frame(tick: Tick, fps: Rational) -> Tick {
     Tick::from_frames(tick.round_frames(fps), fps)
 }
 

@@ -16,10 +16,12 @@
 
 mod actions;
 mod covers;
+mod drop;
 mod import;
 mod panel;
 mod render;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use drop::{AssetDrag, AssetDrop, lane_offset};
 pub(crate) use panel::{LibraryImport, LibraryPanel};

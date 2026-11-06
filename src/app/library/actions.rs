@@ -4,7 +4,7 @@ use super::super::*;
 use super::panel::{LibraryPanel, ThumbState, ThumbWorker};
 use crate::timeline::{AssetId, AssetState};
 use gpui_kit::component::input::InputState;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 impl PlayerApp {
@@ -37,7 +37,8 @@ impl PlayerApp {
         self.library = Some(LibraryPanel {
             search,
             query: String::new(),
-            selected: None,
+            selected: BTreeSet::new(),
+            anchor: None,
             thumbs: HashMap::new(),
             requested: HashSet::new(),
             states: HashMap::new(),
@@ -124,39 +125,122 @@ impl PlayerApp {
         library.states = states;
     }
 
-    pub(crate) fn select_library_asset(&mut self, id: AssetId, cx: &mut Context<Self>) {
-        if let Some(library) = self.library.as_mut() {
-            library.selected = Some(id);
+    /// 点素材行。与播放列表同一套多选：普通点击单选，Ctrl/⌘ 切换，Shift 连选一段。
+    pub(crate) fn select_library_asset(
+        &mut self,
+        id: AssetId,
+        modifiers: Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
+        // 顺序按素材表来：拖出去的时候按列表里看到的顺序首尾相接，而不是按 id 排。
+        let order: Vec<AssetId> = project.assets.iter().map(|asset| asset.id).collect();
+        let Some(library) = self.library.as_mut() else {
+            return;
+        };
+        if modifiers.shift {
+            let anchor = library.anchor.unwrap_or(id);
+            let from = order.iter().position(|item| *item == anchor);
+            let to = order.iter().position(|item| *item == id);
+            if let (Some(from), Some(to)) = (from, to) {
+                let (start, end) = if from <= to { (from, to) } else { (to, from) };
+                // 连选替换上一次的区间，否则反复 Shift 点击只会越选越多。
+                library.selected = order[start..=end].iter().copied().collect();
+            }
+            library.anchor.get_or_insert(id);
+        } else if modifiers.secondary(cx) {
+            if !library.selected.remove(&id) {
+                library.selected.insert(id);
+            }
+            library.anchor = Some(id);
+        } else {
+            library.selected.clear();
+            library.selected.insert(id);
+            library.anchor = Some(id);
         }
         cx.notify();
     }
 
+    /// 选中的素材，按它们在本工程素材表里的顺序排好。
+    pub(crate) fn selected_assets(&self) -> Vec<crate::timeline::Asset> {
+        let Some(project) = self.project.as_ref() else {
+            return Vec::new();
+        };
+        let Some(library) = self.library.as_ref() else {
+            return Vec::new();
+        };
+        project
+            .assets
+            .iter()
+            .filter(|asset| library.selected.contains(&asset.id))
+            .cloned()
+            .collect()
+    }
+
     /// 把选中的素材从素材库里移除。还被片段引用时拒绝并说明原因。
     pub(crate) fn remove_selected_asset(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.library.as_ref().and_then(|library| library.selected) else {
+        let ids: Vec<AssetId> = self
+            .library
+            .as_ref()
+            .map(|library| library.selected.iter().copied().collect())
+            .unwrap_or_default();
+        if ids.is_empty() {
             return;
-        };
-        let Some(project) = self.project.as_mut() else {
-            return;
-        };
-        match project.remove_asset(id) {
-            Ok(()) => {
-                if let Some(library) = self.library.as_mut() {
-                    library.selected = None;
-                    library.thumbs.remove(&id);
-                    library.requested.remove(&id);
-                    library.states.remove(&id);
+        }
+        // 整组先查一遍：只要有一个还被片段引用就整组不动，不留「删了一半」的状态。
+        let blocked = {
+            let Some(project) = self.project.as_mut() else {
+                return;
+            };
+            let blocked = ids.iter().find_map(|id| {
+                let clips = project.asset_clip_count(*id);
+                if clips == 0 {
+                    return None;
                 }
-                self.flash("已从素材库移除（磁盘上的文件没删）");
+                let name = project
+                    .asset(*id)
+                    .map(|asset| asset.display_name())
+                    .unwrap_or_default();
+                Some((name, clips))
+            });
+            if blocked.is_none() {
+                for id in &ids {
+                    if let Err(error) = project.remove_asset(*id) {
+                        log_warn!("移除素材失败：{error}");
+                    }
+                }
             }
-            Err(error) => {
-                log_warn!("移除素材失败：{error}");
-                self.error = Some(Banner::new(
-                    "这个素材还在时间线上",
-                    format!("{error}。\n\n移除只改素材库，不会删掉磁盘上的文件。"),
-                ));
+            blocked
+        };
+
+        if let Some((name, clips)) = blocked {
+            self.error = Some(Banner::new(
+                "这个素材还在时间线上",
+                format!(
+                    "「{name}」还有 {clips} 个片段在用。先把它们从时间线上删掉，再从素材库移除。\
+                     \n\n移除只改素材库，不会删掉磁盘上的文件。"
+                ),
+            ));
+            cx.notify();
+            return;
+        }
+
+        if let Some(library) = self.library.as_mut() {
+            library.selected.clear();
+            library.anchor = None;
+            for id in &ids {
+                library.thumbs.remove(id);
+                library.requested.remove(id);
+                library.states.remove(id);
             }
         }
+        self.flash(if ids.len() == 1 {
+            "已从素材库移除（磁盘上的文件没删）".to_string()
+        } else {
+            format!("已移除 {} 个素材（磁盘上的文件没删）", ids.len())
+        });
         cx.notify();
     }
 
