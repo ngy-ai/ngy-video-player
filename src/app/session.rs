@@ -111,6 +111,8 @@ impl PlayerApp {
             dialog_open: false,
             project_confirm: None,
             delete_track_confirm: None,
+            sequence_dialog: None,
+            pending_sequence_dialog: None,
             show_stats: false,
             osd: None,
             screenshot_card: None,

@@ -9,7 +9,9 @@
 //! 素材找不到时工程照常打开：文件不存在只在 [`Asset::missing`] 上打标记，界面据此
 //! 提示重链，而不是让整个工程打不开。
 
-use crate::timeline::{AssetId, AssetState, Id, MediaInfo, MediaStamp, Rational, Sequence, Tick};
+use crate::timeline::{
+    AssetId, AssetState, Id, MediaInfo, MediaStamp, Rational, Sequence, SequenceSpec, Tick,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
@@ -172,6 +174,14 @@ impl Default for Project {
 impl Project {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 按指定规格建一个空工程：分辨率与帧率来自「新建工程」对话框。
+    pub fn new_with(spec: SequenceSpec) -> Self {
+        Self {
+            sequence: Sequence::new("序列 1", spec.fps, spec.width, spec.height),
+            ..Self::default()
+        }
     }
 
     /// 工程文件所在目录。还没保存过时是空路径。

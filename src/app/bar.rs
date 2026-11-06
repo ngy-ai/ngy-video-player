@@ -388,6 +388,8 @@ impl PlayerApp {
         items.push(BarItem::Entry(BarEntry::new("新建工程", NewProject)));
         items.push(BarItem::Entry(BarEntry::new("打开工程…", OpenProject)));
         self.recent_projects(items);
+        // 分辨率与帧率建好之后还要能改：竖拍片子剪完想改回横屏是常事。
+        items.push(BarItem::Entry(BarEntry::new("序列规格…", SequenceSettings)));
         items.push(BarItem::Entry(BarEntry::new(
             "导入到时间线…",
             ImportToTimeline,
@@ -561,6 +563,9 @@ impl PlayerApp {
             BarAction::ImportAssetFolder => self.pick_asset_folder(window, cx),
             BarAction::ImportPlaylistToTimeline => self.open_playlist_import_dialog(window, cx),
             BarAction::ShowHistory => self.open_history_panel(cx),
+            BarAction::SequenceSettings => {
+                self.request_sequence_dialog(SequencePurpose::Edit, Some(window), cx);
+            }
             BarAction::Save => {
                 self.save_project(Some(window), cx, None);
             }

@@ -59,6 +59,9 @@ impl PlayerApp {
             self.history = None;
             self.show_history = false;
             self.delete_track_confirm = None;
+            // 序列规格对话框作用在刚被关掉的工程上，留着就成了悬空入口。
+            self.sequence_dialog = None;
+            self.pending_sequence_dialog = None;
             self.timeline_dragging = false;
             self.timeline_menu = None;
             self.timeline_preview = None;
@@ -69,8 +72,12 @@ impl PlayerApp {
         cx.notify();
     }
 
-    /// 新建一个空工程：默认 1080p30，自带一条视频轨与一条音频轨。
-    pub(super) fn new_project(&mut self, cx: &mut Context<Self>) {
+    /// 新建一个空工程：规格来自「新建工程」对话框，自带一条视频轨与一条音频轨。
+    pub(super) fn new_project(
+        &mut self,
+        spec: crate::timeline::SequenceSpec,
+        cx: &mut Context<Self>,
+    ) {
         // 换工程 = 换播放源：上一个工程的预览时钟和已加载的素材都作废。
         self.stop_timeline_playback(cx);
         self.reset_library();
@@ -81,7 +88,7 @@ impl PlayerApp {
         self.timeline_loaded_at = None;
         // 上一个工程已经被保存或丢弃，它的 `.autosave` 不该跟着新工程活下来。
         self.clear_autosave();
-        let project = Project::new();
+        let project = Project::new_with(spec);
         // 空工程还没落盘，但也没丢任何东西：把当前状态当基准，关掉时不必再问。
         self.project_saved = Some(project.clone());
         self.project_path = None;
@@ -91,7 +98,7 @@ impl PlayerApp {
         self.project = Some(project);
         self.timeline = ViewState::new();
         self.timeline_dragging = false;
-        self.flash("已新建工程");
+        self.flash(format!("已新建工程（{}）", spec.label()));
         self.poke();
         cx.notify();
     }

@@ -34,6 +34,8 @@ pub(super) enum BarAction {
     CollectAssets,
     /// 切换工程预览区右侧的编辑历史侧栏，一步跳到任意操作。
     ShowHistory,
+    /// 改当前序列的分辨率与帧率。
+    SequenceSettings,
     /// 退出工程模式，回到纯播放器。
     CloseProject,
     // -- 剪辑模式专用 ------------------------------------------------------

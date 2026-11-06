@@ -285,7 +285,9 @@ impl PlayerApp {
     fn run_project_action(&mut self, action: AfterSaveConfirm, cx: &mut Context<Self>) -> bool {
         match action {
             AfterSaveConfirm::NewProject => {
-                self.new_project(cx);
+                // 规格对话框要窗口才建得出输入框，这条路径上没有：记一笔，
+                // 下一帧在 `render` 里打开，用户选完规格才真的建工程。
+                self.pending_sequence_dialog = Some(SequencePurpose::New);
                 true
             }
             AfterSaveConfirm::CloseProject => {

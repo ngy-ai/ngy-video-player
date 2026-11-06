@@ -46,7 +46,12 @@ impl PlayerApp {
                         div()
                             .text_size(px(11.0))
                             .text_color(text_faint())
-                            .child(format!("{} fps", sequence.fps)),
+                            .child(format!(
+                                "{}×{} · {} fps",
+                                sequence.width,
+                                sequence.height,
+                                crate::timeline::rate_label(sequence.fps)
+                            )),
                     ),
             )
             .child(

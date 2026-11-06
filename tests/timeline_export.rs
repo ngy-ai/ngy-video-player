@@ -11,7 +11,8 @@ use std::process::Command;
 
 use ngy_video_player::export::{ExportEvent, ExportTask};
 use ngy_video_player::timeline::{
-    AssetId, ClipItem, Id, Project, Tick, TrackKind, Transition, TransitionKind, plan_sequence,
+    AssetId, ClipItem, Id, Project, Rational, SequenceSpec, Tick, TrackKind, Transition,
+    TransitionKind, plan_sequence,
 };
 
 fn scratch(name: &str) -> PathBuf {
@@ -121,6 +122,45 @@ fn assert_duration(output: &Path, expected: &str) {
         text.contains(needle.as_str()),
         "总时长应当是 {expected}：\n{text}"
     );
+}
+
+/// `ffmpeg -i` 的 stderr 里有 `..., 30 fps, ...`，用它读回成片帧率。
+fn assert_frame_rate(output: &Path, expected: &str) {
+    let probe = Command::new("ffmpeg")
+        .args(["-hide_banner", "-i"])
+        .arg(output)
+        .output()
+        .expect("读回输出");
+    let text = String::from_utf8_lossy(&probe.stderr);
+    let needle = format!(", {expected} fps");
+    assert!(
+        text.contains(needle.as_str()),
+        "帧率应当是 {expected} fps：\n{text}"
+    );
+}
+
+/// M9-T03：25fps 建的工程改成 30fps 之后导出，帧率跟新规格走、总时长不变。
+#[test]
+#[ignore = "需要本机 ffmpeg"]
+fn 改帧率之后导出用新规格() {
+    let dir = scratch("export-spec");
+    let clip = make_clip(&dir);
+
+    let mut project = Project::new_with(SequenceSpec::new(320, 240, Rational::FPS_25));
+    let asset = project.add_asset(&clip);
+    let video = project.sequence.tracks[0].id;
+    let audio = project.sequence.tracks[1].id;
+    put(&mut project, video, asset, 0.0, 2.0, 0.0);
+    put(&mut project, audio, asset, 0.0, 2.0, 0.0);
+    assert_eq!(project.sequence.fps, Rational::FPS_25);
+
+    // 只换帧率：片段的时间一个都没动，成片还是两秒。
+    project.sequence.fps = Rational::FPS_30;
+
+    let output = run_export(&dir, &project, "out30.mp4");
+    assert_duration(&output, "00:00:02");
+    assert_frame_rate(&output, "30");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

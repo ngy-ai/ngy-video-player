@@ -20,6 +20,11 @@ impl Render for PlayerApp {
         self.sync_on_top(window, cx);
         // 工程开关可能由拖放等菜单之外的路径触发，收掉另一套菜单的残留 open 状态。
         self.sync_menu_bar_mode();
+        // 新建工程的入口在菜单和关闭确认里，那两处拿不到 window：
+        // 规格对话框的输入框只能在这里建。
+        if let Some(purpose) = self.pending_sequence_dialog.take() {
+            self.open_sequence_dialog(purpose, window, cx);
+        }
 
         let title = if self.snapshot.media_title.is_empty() {
             "视频播放器".to_string()
@@ -212,6 +217,7 @@ impl Render for PlayerApp {
                 // 输入框有焦点时接管键盘的裁切面板，以及各个模态对话框。
                 // 不拦住的话，输入框里的字符会顺带触发播放器的快捷键。
                 if this.on_project_confirm_key(event, cx)
+                    || this.on_sequence_dialog_key(event, cx)
                     || this.on_delete_track_confirm_key(event, cx)
                     || this.on_rename_key(event, cx)
                     || this.on_clip_key(event, cx)
@@ -397,6 +403,7 @@ impl Render for PlayerApp {
             .children(self.render_tab_menu(cx))
             .children(self.render_timeline_menu(cx))
             .children(self.render_settings(window, cx))
+            .children(self.render_sequence_dialog(cx))
             .children(self.render_remux_dialog(cx))
             .children(self.render_metadata_dialog(cx))
             .children(self.render_proxy_dialog(cx))

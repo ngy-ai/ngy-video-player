@@ -16,7 +16,7 @@ pub(crate) fn spec(media: &MediaInfo) -> String {
     if media.has_video() {
         let (width, height) = media.display_size();
         match media.fps {
-            Some(fps) => format!("{width}×{height} · {}fps", fps_label(fps)),
+            Some(fps) => format!("{width}×{height} · {}fps", crate::timeline::rate_label(fps)),
             None => format!("{width}×{height}"),
         }
     } else if media.has_audio() {
@@ -27,18 +27,6 @@ pub(crate) fn spec(media: &MediaInfo) -> String {
         )
     } else {
         "无可用的音视频轨".to_string()
-    }
-}
-
-/// 帧率的短写法：整数帧率不带小数，23.976 这类显示两位。
-///
-/// `Rational` 的 `Display` 是 `"30000/1001"`（存盘与 diff 用），面板上读起来太吵。
-pub(crate) fn fps_label(fps: crate::timeline::Rational) -> String {
-    let value = fps.to_f64();
-    if (value - value.round()).abs() < 0.001 {
-        format!("{}", value.round() as u32)
-    } else {
-        format!("{value:.2}")
     }
 }
 

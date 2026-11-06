@@ -1,7 +1,7 @@
 //! 素材库的纯函数：规格文案、封面尺寸、导入进度、拖到轨道的落点与排布。
 //! 面板本身要靠窗口，不在这里测。
 
-use super::covers::{cover_size, fps_label, render_cover_in, spec};
+use super::covers::{cover_size, render_cover_in, spec};
 use super::drop::{
     AssetDragItem, all_fit, fits, lane_offset, place_items, reject_reason, snap_start,
     snap_to_clip_edges, total_duration,
@@ -19,7 +19,7 @@ fn 规格按有无画面分开写() {
     };
     assert_eq!(spec(&video), "1920×1080 · 30fps");
     assert_eq!(
-        fps_label(crate::timeline::Rational::FPS_29_97),
+        crate::timeline::rate_label(crate::timeline::Rational::FPS_29_97),
         "29.97",
         "23.976 / 29.97 这类不能四舍五入成整数"
     );

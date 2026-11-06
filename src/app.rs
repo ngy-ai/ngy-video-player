@@ -128,6 +128,7 @@ mod remux;
 mod render;
 mod scenes;
 mod scope;
+mod sequence_dialog;
 mod session;
 mod settings_panel;
 #[cfg(test)]
@@ -160,6 +161,7 @@ use self::proxy::ProxyDialog;
 use self::remux::RemuxDialog;
 use self::scenes::ScenesDialog;
 use self::scope::ScopeDialog;
+use self::sequence_dialog::{SequenceDialog, SequencePurpose};
 use self::settings_panel::SettingsTab;
 use self::timeline_menu::TimelineMenu;
 use self::timeline_tracks::TimelineDrop;
@@ -455,6 +457,13 @@ pub struct PlayerApp {
     project_confirm: Option<ProjectConfirm>,
     /// 「删除轨道」确认框；`None` 表示没在问。轨道上有片段时才会弹出来。
     delete_track_confirm: Option<DeleteTrackConfirm>,
+    /// 序列规格对话框；`None` 表示没在改。新建工程与改现有序列共用它。
+    sequence_dialog: Option<SequenceDialog>,
+    /// 还没打开的序列规格对话框。
+    ///
+    /// 「新建工程」是从菜单或关闭确认里来的，那两处手上没有 `window`，建不了输入框；
+    /// 先记一笔，下一帧在 `render` 里开。
+    pending_sequence_dialog: Option<SequencePurpose>,
 
     /// 播放统计浮层（帧率、丢帧计数）是否打开。按 I 切换。
     show_stats: bool,
