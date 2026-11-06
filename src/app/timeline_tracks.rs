@@ -262,6 +262,7 @@ impl PlayerApp {
         } else {
             (IconName::LockOpen, "锁定这一轨（禁止编辑）")
         };
+        let delete_tip = format!("删除这条{}轨「{}」", track.kind.label(), track.name);
 
         div()
             .absolute()
@@ -325,6 +326,16 @@ impl PlayerApp {
                         cx.listener(move |this, _: &ClickEvent, _window, cx| {
                             this.toggle_track_locked(track_id, cx);
                         }),
+                    ))
+                    // 删轨放在轨道头上：视频轨与音频轨同一个入口，不用先选中某一段。
+                    .child(ui::icon_toggle_small(
+                        format!("track-delete-{}", track_id.raw()),
+                        IconName::Trash,
+                        false,
+                        delete_tip,
+                        cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                            this.delete_track(track_id, cx);
+                        }),
                     )),
             )
             .into_any_element()
@@ -353,8 +364,9 @@ impl PlayerApp {
             (_, true) => "隐藏",
             (_, false) => "显示",
         };
-        self.remember_history();
-        self.flash(format!("轨道「{name}」已{action}"));
+        let message = format!("轨道「{name}」已{action}");
+        self.remember_history(message.clone());
+        self.flash(message);
         cx.notify();
     }
 
@@ -374,11 +386,9 @@ impl PlayerApp {
         let locked = track.locked;
         let name = track.name.clone();
 
-        self.remember_history();
-        self.flash(format!(
-            "轨道「{name}」已{}",
-            if locked { "锁定" } else { "解锁" }
-        ));
+        let message = format!("轨道「{name}」已{}", if locked { "锁定" } else { "解锁" });
+        self.remember_history(message.clone());
+        self.flash(message);
         cx.notify();
     }
 
@@ -440,7 +450,7 @@ impl PlayerApp {
                 message = "已加 0.5 秒交叉溶解";
             }
         }
-        self.commit_edit(sequence);
+        self.commit_edit(sequence, message);
         self.flash(message);
         self.poke();
         cx.notify();
@@ -455,8 +465,37 @@ impl PlayerApp {
             return;
         };
         project.sequence.add_track(kind);
-        self.remember_history();
-        self.flash(format!("已添加一条{}轨", kind.label()));
+        let message = format!("添加一条{}轨", kind.label());
+        self.remember_history(message.clone());
+        self.flash(message);
+        self.poke();
+        cx.notify();
+    }
+
+    /// 删掉一条轨道：片段与转场跟着一起走。锁定的轨道要先解锁——锁定拒绝一切编辑。
+    ///
+    /// 删完清空选中集合：被删轨道上的片段 id 已经不在序列里，留着会让下一次操作报错。
+    pub(super) fn delete_track(&mut self, track: Id, cx: &mut Context<Self>) {
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
+        let Some(target) = project.sequence.track(track) else {
+            return;
+        };
+        let message = format!("删除{}轨「{}」", target.kind.label(), target.name);
+        let outcome = apply_edit(&project.sequence, &EditOp::RemoveTrack { track });
+
+        match outcome {
+            Ok(sequence) => {
+                self.commit_edit(sequence, message.clone());
+                if let Some(project) = self.project.as_mut() {
+                    project.ui.selected.clear();
+                }
+                self.timeline_menu = None;
+                self.flash(message);
+            }
+            Err(error) => self.flash(format!("删除轨道失败：{error}")),
+        }
         self.poke();
         cx.notify();
     }
@@ -471,7 +510,7 @@ impl PlayerApp {
 
         match outcome {
             Ok(Some((sequence, cuts))) => {
-                self.commit_edit(sequence);
+                self.commit_edit(sequence, "在播放头处切割");
                 self.flash(format!("已在播放头处切开 {cuts} 个片段"));
             }
             Ok(None) => self.flash("播放头位置没有可切的片段"),
@@ -512,7 +551,7 @@ impl PlayerApp {
 
         match outcome {
             Ok(Some(sequence)) => {
-                self.commit_edit(sequence);
+                self.commit_edit(sequence, "删除片段");
                 if let Some(project) = self.project.as_mut() {
                     // 删掉的 id 不能留在选中集合里，否则下次操作会报「片段不存在」。
                     project.ui.selected.clear();
@@ -638,7 +677,7 @@ impl PlayerApp {
         };
         match outcome {
             Ok(sequence) => {
-                self.commit_edit(sequence);
+                self.commit_edit(sequence, "移动片段");
                 self.flash("已移动片段");
             }
             Err(error) => self.flash(format!("移动失败：{error}")),

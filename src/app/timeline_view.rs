@@ -43,6 +43,7 @@ impl PlayerApp {
             self.project_path = None;
             self.project_saved = None;
             self.history = None;
+            self.show_history = false;
             self.timeline_dragging = false;
             self.timeline_menu = None;
             self.timeline_preview = None;
@@ -69,6 +70,7 @@ impl PlayerApp {
         self.project_saved = Some(project.clone());
         self.project_path = None;
         self.history = Some(UndoHistory::new(project.sequence.clone()));
+        self.show_history = false;
         self.project = Some(project);
         self.timeline = ViewState::new();
         self.timeline_dragging = false;
@@ -162,6 +164,7 @@ impl PlayerApp {
                 self.remember_project(&path);
                 self.project_path = Some(path);
                 self.history = Some(UndoHistory::new(project.sequence.clone()));
+                self.show_history = false;
                 self.project = Some(project);
                 if restored {
                     // 恢复出来的改动也怕再崩一次：重新排上自动保存。
@@ -235,20 +238,27 @@ impl PlayerApp {
     }
 
     /// 把编辑结果写回工程并记入撤销历史。所有改序列的入口都走这里。
-    pub(super) fn commit_edit(&mut self, sequence: crate::timeline::Sequence) {
+    pub(super) fn commit_edit(
+        &mut self,
+        sequence: crate::timeline::Sequence,
+        label: impl Into<String>,
+    ) {
         if let Some(project) = self.project.as_mut() {
             project.sequence = sequence;
         }
-        self.remember_history();
+        self.remember_history(label);
     }
 
     /// 把当前序列快照进撤销栈。轨道开关这类不经 `ops` 的改动，改完手动调一次。
-    pub(super) fn remember_history(&mut self) {
+    ///
+    /// `label` 会显示在历史列表里：快照之间长得几乎一样，没有说明就挑不出要回哪一步。
+    pub(super) fn remember_history(&mut self, label: impl Into<String>) {
+        let label = label.into();
         let Some(history) = self.history.as_mut() else {
             return;
         };
         if let Some(project) = self.project.as_ref() {
-            history.push(project.sequence.clone());
+            history.push_labeled(project.sequence.clone(), label);
         }
         // 编辑路径最后都收敛到这里，自动保存的 30 秒计时也就挂在这一处。
         self.note_edit();
@@ -281,6 +291,20 @@ impl PlayerApp {
         };
         self.apply_history(sequence);
         self.flash("已重做");
+        cx.notify();
+    }
+
+    /// 历史列表点了一行：直接跨到那一步，往前是回退、往后是前进。
+    pub(super) fn jump_to_history_step(&mut self, index: usize, cx: &mut Context<Self>) {
+        let target = self
+            .history
+            .as_mut()
+            .and_then(|history| history.jump_to(index).cloned());
+        let Some(sequence) = target else {
+            return;
+        };
+        self.apply_history(sequence);
+        self.flash(format!("已回到第 {} 步", index + 1));
         cx.notify();
     }
 

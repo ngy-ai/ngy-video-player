@@ -156,4 +156,63 @@ fn 打开新工程时重置历史() {
     assert!(!history.can_undo());
     assert!(!history.can_redo());
     assert_eq!(history.current().tracks[0].clips.len(), 0);
+    assert_eq!(history.labels().collect::<Vec<_>>(), ["初始状态"]);
+}
+
+#[test]
+fn 说明与状态一起入栈并随分支裁剪() {
+    let mut history = UndoHistory::new(seq());
+    let track = history.current().tracks[0].id;
+    let next = apply(history.current(), &insert(track, s(0), s(1))).expect("插入");
+    history.push_labeled(next, "导入素材");
+
+    assert_eq!(
+        history.labels().collect::<Vec<_>>(),
+        ["初始状态", "导入素材"]
+    );
+    assert_eq!(history.current_index(), 1);
+
+    // 撤销后开新分支：旧说明不能留在新状态后面。
+    history.undo().expect("撤销");
+    let next = apply(history.current(), &insert(track, s(3), s(1))).expect("插入");
+    history.push_labeled(next, "切开片段");
+    assert_eq!(
+        history.labels().collect::<Vec<_>>(),
+        ["初始状态", "切开片段"]
+    );
+}
+
+#[test]
+fn 跳到指定步既能回退也能前进() {
+    let mut history = UndoHistory::new(seq());
+    let track = history.current().tracks[0].id;
+    for index in 0..3 {
+        let next = apply(history.current(), &insert(track, s(index), s(1))).expect("插入");
+        history.push_labeled(next, format!("第 {} 步", index + 1));
+    }
+    assert_eq!(history.current_index(), 3);
+
+    assert_eq!(history.jump_to(1).unwrap().tracks[0].clips.len(), 1);
+    assert_eq!(history.current_index(), 1);
+    assert_eq!(history.redo_steps(), 2, "后面的步骤还留着");
+
+    assert_eq!(history.jump_to(3).unwrap().tracks[0].clips.len(), 3);
+    assert_eq!(history.current_index(), 3);
+    assert!(history.jump_to(3).is_none(), "停在原地不算一次操作");
+    assert!(history.jump_to(99).is_none(), "越界不算一次操作");
+}
+
+#[test]
+fn 栈满时说明跟着最旧一步一起丢() {
+    let mut history = UndoHistory::with_limit(seq(), 2);
+    let track = history.current().tracks[0].id;
+    for index in 0..4 {
+        let next = apply(history.current(), &insert(track, s(index), s(1))).expect("插入");
+        history.push_labeled(next, format!("步骤 {index}"));
+    }
+    assert_eq!(
+        history.labels().collect::<Vec<_>>(),
+        ["步骤 1", "步骤 2", "步骤 3"],
+        "最旧的状态连同它的说明一起被丢掉"
+    );
 }

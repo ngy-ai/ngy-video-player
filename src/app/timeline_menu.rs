@@ -1,6 +1,7 @@
 //! 时间线片段的右键菜单：贴在鼠标位置，作用对象是刚点中的那一段片段。
 //!
-//! 只做「手上这一段」相关的四件事：在播放头处切开、删除、把所在轨道关掉、锁住。
+//! 只做「手上这一段」相关的事：在播放头处切开、删除、转场、把所在轨道关掉 /
+//! 锁住，以及删掉整条轨道。
 //! 需要跨轨道批量处理的操作（排序、整体重排）留给菜单栏，这里不堆。
 //!
 //! 外壳复用播放列表行右键菜单的样式（`widgets::item_menu_entry`）：同一个界面上
@@ -184,6 +185,17 @@ impl PlayerApp {
                         cx.stop_propagation();
                         this.timeline_menu = None;
                         this.toggle_track_locked(track_id, cx);
+                    }),
+                ))
+                .child(item_menu_entry(
+                    "timeline-menu-delete-track",
+                    IconName::Trash,
+                    "删除整条轨道（含片段）",
+                    ui::danger(),
+                    cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                        cx.stop_propagation();
+                        this.timeline_menu = None;
+                        this.delete_track(track_id, cx);
                     }),
                 ))
                 .into_any_element(),

@@ -102,6 +102,7 @@ mod controls;
 mod convert;
 mod export_queue;
 mod format;
+mod history;
 mod import;
 mod menu_bar;
 mod menus;
@@ -386,6 +387,8 @@ pub struct PlayerApp {
     project: Option<Project>,
     /// 编辑撤销栈。只在工程模式下有，新建 / 打开工程时重置。
     history: Option<UndoHistory>,
+    /// 编辑历史列表窗口是否打开。它是一个模态，只在工程模式下有意义。
+    show_history: bool,
     /// 当前工程的落点；`None` 表示新建之后还没存过。
     project_path: Option<PathBuf>,
     /// 上一次保存 / 打开 / 新建时的内容快照，用来判断有没有未保存改动。

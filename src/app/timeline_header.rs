@@ -6,7 +6,7 @@
 use super::*;
 
 impl PlayerApp {
-    /// 标题条：左边序列名与帧率，右边播放、撤销 / 重做、切割、加轨与导出。
+    /// 标题条：左边序列名与帧率，右边播放、撤销 / 重做 / 历史、切割、加轨与导出。
     pub(super) fn render_timeline_header(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(project) = &self.project else {
             return div().into_any_element();
@@ -99,6 +99,15 @@ impl PlayerApp {
                         },
                         cx.listener(|this, _: &ClickEvent, _window, cx| {
                             this.redo_edit(cx);
+                        }),
+                    ))
+                    .child(ui::icon_toggle_small(
+                        "timeline-history",
+                        IconName::List,
+                        self.show_history,
+                        "编辑历史（点一步直接回退 / 前进）",
+                        cx.listener(|this, _: &ClickEvent, _window, cx| {
+                            this.open_history_dialog(cx);
                         }),
                     ))
                     .child(ui::icon_toggle_small(

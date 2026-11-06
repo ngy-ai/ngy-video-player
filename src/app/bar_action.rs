@@ -27,6 +27,8 @@ pub(super) enum BarAction {
     SaveAs,
     /// 把素材复制到工程目录旁边，工程变成自包含的。
     CollectAssets,
+    /// 打开编辑历史列表，一步跳到任意操作。
+    ShowHistory,
     /// 退出工程模式，回到纯播放器。
     CloseProject,
     LoadSubtitle,

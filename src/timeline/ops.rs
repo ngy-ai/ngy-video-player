@@ -65,6 +65,8 @@ pub enum EditOp {
     Slide { clip: Id, by: Tick },
     /// 移动片段与后一个片段之间的接缝。
     Roll { clip: Id, by: Tick },
+    /// 删掉整条轨道，连同它上面的片段与转场。锁定的轨道要先解锁。
+    RemoveTrack { track: Id },
 }
 
 /// 编辑被拒绝的原因。文案由这里给出，界面只负责显示。
@@ -124,6 +126,7 @@ pub fn apply(sequence: &Sequence, op: &EditOp) -> Result<Sequence, EditError> {
         EditOp::Slip { clip, by } => slip(&mut next, *clip, *by)?,
         EditOp::Slide { clip, by } => slide(&mut next, *clip, *by)?,
         EditOp::Roll { clip, by } => roll(&mut next, *clip, *by)?,
+        EditOp::RemoveTrack { track } => remove_track(&mut next, *track)?,
     }
     Ok(next)
 }
@@ -461,6 +464,21 @@ fn roll(sequence: &mut Sequence, clip_id: Id, by: Tick) -> Result<(), EditError>
     track.clips[clip_index].source_out = source_out;
     track.clips[clip_index + 1].source_in = after_in;
     track.clips[clip_index + 1].start = after.start + by;
+    Ok(())
+}
+
+/// 删掉整条轨道。片段与转场都挂在轨道上，一起走，不留悬空引用。
+///
+/// 允许删到一条轨道都不剩：序列空着是合法状态，界面有「这条序列还没有轨道」的提示，
+/// 想再导素材时加一条轨道就行。
+fn remove_track(sequence: &mut Sequence, track_id: Id) -> Result<(), EditError> {
+    let index = sequence
+        .track_index(track_id)
+        .ok_or(EditError::UnknownTrack(track_id))?;
+    if sequence.tracks[index].locked {
+        return Err(EditError::TrackLocked(track_id));
+    }
+    sequence.tracks.remove(index);
     Ok(())
 }
 

@@ -464,7 +464,7 @@ impl PlayerApp {
 
         // 整批算一步撤销：按一次「导入」却要按 N 次撤销才能退回去太别扭。
         if imported > 0 {
-            self.remember_history();
+            self.remember_history(format!("导入 {imported} 个素材"));
         }
         self.report_import(imported, failed);
         self.poke();
@@ -550,23 +550,35 @@ impl PlayerApp {
     }
 }
 
-/// 一个素材该落到哪些轨道：有画面进视频轨、有声音进音频轨，锁定的轨道跳过。
+/// 一个素材该落到哪些轨道：有画面进第一条可用视频轨、有声音进第一条可用音频轨。
+///
+/// 多轨叠放是给后期手动摆素材用的，导入不该把同一段复制进每一条同类轨：
+/// 那样加一条视频轨就多一份画面，导出时还以为自己接了多机位。锁定的轨道
+/// 仍然跳过，从剩下的里面挑第一条。
 fn target_tracks(
     sequence: &crate::timeline::Sequence,
     has_video: bool,
     has_audio: bool,
 ) -> Vec<crate::timeline::Id> {
+    let mut targets = Vec::new();
+    if has_video && let Some(track) = first_unlocked(sequence, TrackKind::Video) {
+        targets.push(track);
+    }
+    if has_audio && let Some(track) = first_unlocked(sequence, TrackKind::Audio) {
+        targets.push(track);
+    }
+    targets
+}
+
+fn first_unlocked(
+    sequence: &crate::timeline::Sequence,
+    kind: TrackKind,
+) -> Option<crate::timeline::Id> {
     sequence
         .tracks
         .iter()
-        .filter(|track| !track.locked)
-        .filter(|track| match track.kind {
-            TrackKind::Video => has_video,
-            TrackKind::Audio => has_audio,
-            TrackKind::Subtitle => false,
-        })
+        .find(|track| track.kind == kind && !track.locked)
         .map(|track| track.id)
-        .collect()
 }
 
 #[cfg(test)]
@@ -587,10 +599,25 @@ mod tests {
     }
 
     #[test]
+    fn 多条同类轨道只进第一条() {
+        let mut sequence = Sequence::new("测试", Rational::FPS_25, 1920, 1080);
+        let video = sequence.tracks[0].id;
+        let audio = sequence.tracks[1].id;
+        sequence.add_track(crate::timeline::TrackKind::Video);
+        sequence.add_track(crate::timeline::TrackKind::Audio);
+
+        assert_eq!(target_tracks(&sequence, true, true), vec![video, audio]);
+    }
+
+    #[test]
     fn 锁定的轨道不收素材() {
         let mut sequence = Sequence::new("测试", Rational::FPS_25, 1920, 1080);
         let video = sequence.tracks[0].id;
         sequence.track_mut(video).unwrap().locked = true;
         assert!(target_tracks(&sequence, true, false).is_empty());
+
+        // 第一条锁了就顺延到第二条，而不是整批导入失败。
+        let second = sequence.add_track(crate::timeline::TrackKind::Video);
+        assert_eq!(target_tracks(&sequence, true, false), vec![second]);
     }
 }

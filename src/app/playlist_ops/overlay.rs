@@ -9,7 +9,10 @@ impl PlayerApp {
         // 队伍里，Esc 第一下关掉的就是一个看不见的东西，屏幕上毫无变化——看着像
         // Esc 失灵，退出全屏得按第二下。所以全屏时跳过那几层。
         let fullscreen = window.is_fullscreen();
-        if self.playlist_import.is_some() {
+        if self.show_history {
+            // 历史列表是模态，Esc 先关它，别顺手把下面的时间线状态也改了。
+            self.close_history_dialog(cx);
+        } else if self.playlist_import.is_some() {
             // 选择器是模态，Esc 先关它，别顺手把下面的面板也收掉。
             self.close_playlist_import_dialog(cx);
         } else if self.tab_rename.is_some() {

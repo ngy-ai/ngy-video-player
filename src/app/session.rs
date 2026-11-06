@@ -85,6 +85,7 @@ impl PlayerApp {
             preview_retired: VecDeque::new(),
             project: None,
             history: None,
+            show_history: false,
             project_path: None,
             project_saved: None,
             autosave: AutoSave::new(),

@@ -692,3 +692,40 @@ fn 删除不存在的片段返回错误() {
         Err(EditError::UnknownClip(Id::new(42)))
     );
 }
+
+#[test]
+fn 删除轨道时连片段与转场一起走() {
+    let mut sequence = seq();
+    let video = sequence.tracks[0].id;
+    let audio = sequence.tracks[1].id;
+    push(&mut sequence, video, s(0), s(2), s(0));
+    push(&mut sequence, audio, s(0), s(3), s(0));
+    sequence.add_track(TrackKind::Video);
+
+    let next = applied(&sequence, EditOp::RemoveTrack { track: video });
+    assert_eq!(next.tracks.len(), 2);
+    assert_eq!(next.tracks[0].id, audio, "音频轨留在原处");
+    assert_eq!(next.tracks[1].kind, TrackKind::Video);
+    assert!(next.validate().is_ok());
+    assert_eq!(next.duration(), s(3));
+}
+
+#[test]
+fn 锁定或不存在的轨道不能删() {
+    let mut sequence = seq();
+    let video = sequence.tracks[0].id;
+    sequence.track_mut(video).unwrap().locked = true;
+    assert_eq!(
+        apply(&sequence, &EditOp::RemoveTrack { track: video }),
+        Err(EditError::TrackLocked(video))
+    );
+    assert_eq!(
+        apply(
+            &sequence,
+            &EditOp::RemoveTrack {
+                track: Id::new(999)
+            }
+        ),
+        Err(EditError::UnknownTrack(Id::new(999)))
+    );
+}

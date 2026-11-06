@@ -369,6 +369,7 @@ impl Render for PlayerApp {
             .children(self.render_concat_dialog(cx))
             .children(self.render_playlist_import_dialog(cx))
             .children(self.render_file_info(cx))
+            .children(self.render_history_dialog(cx))
             // 重命名是模态的，压在所有东西上面。
             .children(self.render_tab_rename(cx))
             // 未保存确认比它还靠上一层：它一旦出现，答案决定的是整份工程的去留。
