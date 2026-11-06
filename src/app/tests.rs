@@ -7,12 +7,13 @@ fn playback_and_editing_menus_are_separate() {
     let playback = BarMenu::for_mode(false);
     let editing = BarMenu::for_mode(true);
 
+    assert!(playback.contains(&BarMenu::Edit));
     assert!(playback.contains(&BarMenu::Playback));
     assert!(playback.contains(&BarMenu::Subtitle));
     assert!(playback.contains(&BarMenu::Audio));
-    assert!(!playback.contains(&BarMenu::Edit));
     assert!(!playback.contains(&BarMenu::Preview));
 
+    // 「编辑」两套都有，但内容各自一套（见 `bar.rs` 的 Edit 分支）。
     assert!(editing.contains(&BarMenu::Edit));
     assert!(editing.contains(&BarMenu::Preview));
     assert!(!editing.contains(&BarMenu::Playback));
@@ -24,6 +25,7 @@ fn playback_and_editing_menus_are_separate() {
 fn both_modes_keep_shared_menus() {
     for menu in [
         BarMenu::File,
+        BarMenu::Edit,
         BarMenu::View,
         BarMenu::Settings,
         BarMenu::Help,

@@ -529,7 +529,7 @@ enum MenuAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BarMenu {
     File,
-    /// 剪辑模式的编辑命令。
+    /// 两种模式都有，内容各自一套：播放模式放单文件处理工具，剪辑模式放时间线编辑命令。
     Edit,
     Playback,
     /// 剪辑模式的工程预览控制。
@@ -542,9 +542,10 @@ enum BarMenu {
 }
 
 impl BarMenu {
-    /// 播放模式：文件 + 播放/字幕/音轨 + 视图/设置/帮助。
+    /// 播放模式：文件 + 编辑（单文件工具）+ 播放/字幕/音轨 + 视图/设置/帮助。
     const PLAYBACK: &'static [BarMenu] = &[
         BarMenu::File,
+        BarMenu::Edit,
         BarMenu::Playback,
         BarMenu::Subtitle,
         BarMenu::Audio,
@@ -554,7 +555,8 @@ impl BarMenu {
     ];
 
     /// 剪辑模式：字幕 / 音轨切换针对的是播放列表里的片子，工程预览没有这套概念；
-    /// 换成「编辑 / 预览」两组剪辑动作。两套菜单只共享文件、视图、设置、帮助四个标题。
+    /// 换成「编辑 / 预览」两组剪辑动作。两套菜单只共享文件、编辑、视图、设置、帮助五个
+    /// 标题，其中「编辑」在播放模式放单文件工具、在剪辑模式放时间线命令。
     const EDITING: &'static [BarMenu] = &[
         BarMenu::File,
         BarMenu::Edit,

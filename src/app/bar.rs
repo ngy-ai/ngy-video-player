@@ -50,7 +50,7 @@ impl PlayerApp {
         let mut items: Vec<BarItem> = Vec::new();
         match menu {
             BarMenu::File => {
-                // 两套「文件」菜单完全按模式分开：播放模式只管打开片子和单文件工具，
+                // 两套「文件」菜单完全按模式分开：播放模式只管打开片子和进出工程，
                 // 剪辑模式只管工程。交叉的入口（打开工程 / 关闭工程）各留在自己那一套。
                 if self.editing() {
                     self.editing_file_entries(&mut items);
@@ -145,12 +145,15 @@ impl PlayerApp {
                         .enabled(self.file_editable() && self.snapshot.has_video()),
                 ));
             }
-            // 剪辑模式专用：编辑命令与工程预览控制。
+            // 「编辑」两套内容：播放模式是单文件工具，剪辑模式是时间线命令。
             BarMenu::Edit => {
                 if self.editing() {
                     self.edit_entries(&mut items);
+                } else {
+                    self.playback_edit_entries(&mut items);
                 }
             }
+            // 预览只在剪辑模式有：播放模式的播放控制在「播放」菜单里。
             BarMenu::Preview => {
                 if self.editing() {
                     self.preview_entries(&mut items);
@@ -318,7 +321,8 @@ impl PlayerApp {
         items
     }
 
-    /// 播放模式「文件」：打开片子、进入工程的入口，以及只作用于当前文件的工具。
+    /// 播放模式「文件」：只管打开片子、进出工程和退出。裁切 / 转换这类
+    /// 单文件处理都收在同模式的「编辑」里，文件菜单不再混工具项。
     /// 工程的导入 / 保存 / 关闭一概不出现——那几个动作在没有工程时点了也没意义。
     fn playback_file_entries(&self, items: &mut Vec<BarItem>) {
         use BarAction::*;
@@ -337,12 +341,25 @@ impl PlayerApp {
         // 打开工程是播放模式进剪辑模式的入口，也是这套菜单里唯一的工程工作项。
         items.push(BarItem::Entry(BarEntry::new("打开工程…", OpenProject)));
         self.recent_projects(items);
+        items.push(BarItem::Entry(BarEntry::new("退出", Quit)));
+    }
+
+    /// 播放模式「编辑」：针对当前文件的处理工具。名字沿用「编辑」，是因为
+    /// 这些动作的产物都是编辑后的新文件；时间线编辑在剪辑模式的同名菜单里。
+    fn playback_edit_entries(&self, items: &mut Vec<BarItem>) {
+        use BarAction::*;
+
         // 没有片子、或者时长还没读出来时无从编辑。
         items.push(BarItem::Entry(
             BarEntry::new("裁切片段…", Trim).enabled(self.file_editable()),
         ));
         // 没有正在播放的文件也能用：面板里可以直接选一个文件夹批量转。
         items.push(BarItem::Entry(BarEntry::new("格式转换…", Convert)));
+        items.push(BarItem::Entry(
+            BarEntry::new("生成代理文件…", MakeProxy)
+                .enabled(self.file_editable() && self.snapshot.has_video()),
+        ));
+        items.push(BarItem::Separator);
         items.push(BarItem::Entry(
             BarEntry::new("替换或删除音轨…", EditAudio).enabled(self.file_editable()),
         ));
@@ -352,10 +369,7 @@ impl PlayerApp {
         items.push(BarItem::Entry(
             BarEntry::new("编辑章节与元数据…", EditMetadata).enabled(self.file_editable()),
         ));
-        items.push(BarItem::Entry(
-            BarEntry::new("生成代理文件…", MakeProxy)
-                .enabled(self.file_editable() && self.snapshot.has_video()),
-        ));
+        items.push(BarItem::Separator);
         items.push(BarItem::Entry(
             BarEntry::new("双机位并排导出…", MulticamExport)
                 .enabled(self.file_editable() && self.snapshot.has_video()),
@@ -364,8 +378,6 @@ impl PlayerApp {
             BarEntry::new("把列表拼成一个文件…", ConcatExport)
                 .enabled(self.playlist().file_count() >= 2),
         ));
-        items.push(BarItem::Separator);
-        items.push(BarItem::Entry(BarEntry::new("退出", Quit)));
     }
 
     /// 剪辑模式「文件」：工程从新建到关闭的一整套工作项。打开单个片子 / 文件夹、
