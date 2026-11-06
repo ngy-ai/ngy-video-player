@@ -44,6 +44,7 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                    `library/drop.rs` 是拖到轨道的落点、兼容性与首尾相接排布）、
                  source_edit（三点编辑：源入出点、`,` / `.` 落位，与试听分成两笔状态）、
                  history（工程模式右侧编辑历史侧栏）、
+                 keys（动作 → 键位串，一处集中）、
                  controls、menus、bar、
                  menu_bar、associations、ab_loop（A-B 循环）、
                  project_file（工程保存/另存为/未保存确认）、
