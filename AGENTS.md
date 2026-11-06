@@ -2,10 +2,15 @@
 
 ## 项目概述
 
-跨平台视频播放器：**gpui-kit**（Zed GPUI）做界面，**libmpv** 做解复用/解码/字幕。
-Windows / macOS / Ubuntu 同一套纯 Rust 代码，libmpv 通过 `libloading` 在运行时加载。
+跨平台**视频播放器 + 视频剪辑器**：**gpui-kit**（Zed GPUI）做界面，**libmpv** 做解复用/解码/字幕，
+**ffmpeg** 做多轨合成与编码。Windows / macOS / Ubuntu 同一套纯 Rust 代码，libmpv 通过
+`libloading` 在运行时加载。
 
-裁切片段、格式转换要调用 **ffmpeg** 重编码：release 构建把 ffmpeg 与 libmpv 一起
+剪辑的目标是**从零编排成片**：空工程 → 定序列规格 → 导入素材 → 放上轨道 → 剪接（插入/覆盖/
+修剪/切割）→ 转场与效果 → 关键帧 → 音频与字幕 → 导出。功能差距、阶段任务与任务规则写在
+`TODO.md`，验收判据是它的附录 A（剧本跑不通就不算剪辑器可用）。
+
+裁切片段、格式转换、时间线导出都要调用 **ffmpeg** 重编码：release 构建把 ffmpeg 与 libmpv 一起
 内嵌进 exe，运行时解压到缓存目录再以子进程调用（见 `src/platform/ffmpeg.rs`、`src/embed.rs`）。
 
 ## 常用命令
