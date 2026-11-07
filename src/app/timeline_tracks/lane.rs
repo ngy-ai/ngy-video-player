@@ -173,6 +173,28 @@ impl PlayerApp {
                         },
                     ),
             );
+
+            // 关键帧标记：片段内相对时间换成序列时间，画成贴着片段下沿的小竖条。
+            // 每帧重算一遍，只扫视口内的片段，几万个点的工程也不会卡。
+            for mark in clip.keys.marks() {
+                let x = view.x_of((clip.start + mark).secs());
+                if x < 0.0 || x > lane_width {
+                    continue;
+                }
+                lane = lane.child(
+                    div()
+                        .absolute()
+                        .left(px(x - 1.5))
+                        .bottom(px(4.0))
+                        .w(px(3.0))
+                        .h(px(7.0))
+                        .rounded(px(1.5))
+                        .bg(gpui_kit::rgba(0xffffffff))
+                        .border_1()
+                        .border_color(gpui_kit::rgba(0x00000066))
+                        .opacity(if track.muted { 0.4 } else { 1.0 }),
+                );
+            }
         }
 
         // 接缝上的转场标记：宽按转场时长算、跨在接缝两侧，点一下打开转场面板。

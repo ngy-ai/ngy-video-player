@@ -46,6 +46,7 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  history（工程模式右侧编辑历史侧栏）、
                  keys（动作 → 键位串，一处集中）、
                  timeline_effects（片段效果栈面板：加 / 开关 / 换档 / 调序 / 删）、
+                 timeline_keys（片段关键帧面板：在播放头处记录与删除）、
                  controls、menus、bar、
                  menu_bar、associations、ab_loop（A-B 循环）、
                  project_file（工程保存/另存为/未保存确认）、
@@ -108,6 +109,7 @@ src/timeline/project.rs  .ngyproj 工程文件：版本迁移、相对素材路�
 src/timeline/three_point.rs  三点编辑的时间换算：源入点 + 源出点 + 时间线入点，缺哪个退化成两点
 src/timeline/transition.rs  转场编辑：两侧余量、加 / 改 / 去，时长按余量预钳（导出侧再兜底）
 src/timeline/effect.rs  片段效果栈：去隔行 / 降噪 / 锐化 / 防抖 / 插帧 / 水印的滤镜与增删改
+src/timeline/keyframe.rs  片段关键帧：缩放 / 位置 / 不透明度的曲线、求值与 ffmpeg 表达式
 src/timeline/undo.rs    撤销 / 重做：状态快照栈，一次操作一步，上限 200 步
 src/timeline/autosave.rs  自动保存（30 秒无操作）与 `.autosave` 崩溃恢复
 src/timeline/view.rs    时间线视图状态：缩放（1 像素 = 1 帧 ~ 10 秒）、滚动、标尺换挡

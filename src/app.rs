@@ -142,6 +142,7 @@ mod source_edit;
 mod tests;
 mod timeline_effects;
 mod timeline_header;
+mod timeline_keys;
 mod timeline_menu;
 mod timeline_preview;
 mod timeline_tracks;

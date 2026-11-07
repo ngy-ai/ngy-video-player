@@ -132,6 +132,44 @@ fn 片段效果按顺序进滤镜链() {
     assert!(plan.filter.contains("hqdn3d"), "{}", plan.filter);
 }
 
+/// 关键帧的滤镜排在补边之后、效果之前：先定构图再压噪点，水印不会跟着推近放大。
+#[test]
+fn 关键帧接在补边之后效果之前() {
+    let scratch = Scratch::new("keys");
+    let (mut project, ids) = project_with(&scratch, &[(s(0), s(3), Tick::ZERO)]);
+    let clip = ids[0];
+    {
+        let item = project.sequence.clip_mut(clip).expect("片段存在");
+        item.keys
+            .ensure(crate::timeline::Property::Scale)
+            .insert(Tick::ZERO, 1.0);
+        item.keys
+            .ensure(crate::timeline::Property::Scale)
+            .insert(s(2), 2.0);
+        item.keys
+            .ensure(crate::timeline::Property::Opacity)
+            .insert(Tick::ZERO, 0.0);
+        item.keys
+            .ensure(crate::timeline::Property::Opacity)
+            .insert(s(1), 1.0);
+    }
+    crate::timeline::add_effect(
+        &mut project.sequence,
+        clip,
+        crate::timeline::EffectKind::Sharpen,
+    );
+
+    let plan = plan_sequence(&project).expect("能导出");
+    assert_connected(&plan.filter);
+    let pad = plan.filter.find("pad=").expect("有补边");
+    let zoom = plan.filter.find("zoompan=").expect("有推近");
+    let fade = plan.filter.find("fade=t=in").expect("有淡入");
+    let sharpen = plan.filter.find("unsharp").expect("有锐化");
+    assert!(pad < zoom, "{}", plan.filter);
+    assert!(zoom < fade, "{}", plan.filter);
+    assert!(fade < sharpen, "{}", plan.filter);
+}
+
 #[test]
 fn 空时间线拒绝导出() {
     let project = Project::new();

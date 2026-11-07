@@ -21,6 +21,8 @@ pub(super) enum TimelineMenu {
     Transition(TransitionMenu),
     /// 片段的效果栈面板：加、开关、换档、调序、删。
     Effects(super::timeline_effects::EffectsMenu),
+    /// 片段的关键帧面板：在播放头处记录缩放 / 位置 / 不透明度。
+    Keys(super::timeline_keys::KeysMenu),
 }
 
 /// 转场面板的上下文：接缝右侧的那段片段（转场挂在它身上）与鼠标位置。
@@ -80,6 +82,7 @@ impl PlayerApp {
             TimelineMenu::Ruler { position } => self.render_ruler_menu(position, window, cx),
             TimelineMenu::Transition(menu) => self.render_transition_menu(menu, window, cx),
             TimelineMenu::Effects(menu) => self.render_effects_menu(menu, window, cx),
+            TimelineMenu::Keys(menu) => self.render_keys_menu(menu, window, cx),
         }
     }
 
@@ -281,8 +284,8 @@ impl PlayerApp {
             (true, false) => "与左侧片段加转场…",
         };
         let clip_id = menu.clip;
-        // 片段菜单：8 行 + 1 条分隔线。
-        let origin = menu_origin(menu.position, menu_height(8, 1), window);
+        // 片段菜单：9 行 + 1 条分隔线。
+        let origin = menu_origin(menu.position, menu_height(9, 1), window);
 
         Some(
             div()
@@ -360,6 +363,16 @@ impl PlayerApp {
                     cx.listener(move |this, _: &ClickEvent, _window, cx| {
                         cx.stop_propagation();
                         this.open_effects_menu(clip_id, menu.position, cx);
+                    }),
+                ))
+                .child(item_menu_entry(
+                    "timeline-menu-keys",
+                    IconName::Waypoints,
+                    "关键帧…",
+                    text(),
+                    cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                        cx.stop_propagation();
+                        this.open_keys_menu(clip_id, menu.position, cx);
                     }),
                 ))
                 .child(

@@ -269,13 +269,23 @@ fn video_stream(
         // 效果链排在缩放补边之后、转场之前：构图先定下来，降噪 / 锐化 / 水印
         // 都作用在成片尺寸上，字号与锐化强度才不会随素材分辨率乱跳。
         let effects = crate::timeline::effect_chain(sequence, clip.id);
+        // 关键帧排在最前（缩放 / 位置 → 不透明度 → 效果）：先把画面构图推到该有的
+        // 样子，再压噪点、再盖水印，水印不会跟着推近一起放大。
+        let motion = match crate::timeline::keyframe_motion(&clip.keys, sequence) {
+            filter if filter.is_empty() => String::new(),
+            filter => format!(",{filter}"),
+        };
+        let fades = crate::timeline::keyframe_fades(&clip.keys, clip.duration())
+            .iter()
+            .map(|filter| format!(",{filter}"))
+            .collect::<String>();
         let label = format!("[v{}]", clip.id.raw());
         // 输出标签必须拼在链尾：concat 与 xfade 只认标签，链上没有标签时
         // ffmpeg 会报 "Stream specifier 'v3' ... matches no streams"。
         let chain = format!(
             "[{index}:v]trim=start={:.6}:end={:.6},setpts=PTS-STARTPTS,\
              scale={dims}:force_original_aspect_ratio=decrease,\
-             pad={dims}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}{tonemap}{effects}{label}",
+             pad={dims}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}{tonemap}{motion}{fades}{effects}{label}",
             (clip.source_in - head).secs(),
             clip.source_out.secs()
         );

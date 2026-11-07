@@ -10,6 +10,7 @@
 pub mod autosave;
 mod effect;
 mod export;
+mod keyframe;
 mod media;
 mod model;
 mod ops;
@@ -28,6 +29,10 @@ pub use effect::{
     interpolated_fps, move_effect, remove_effect, sequence_fps, toggle_effect, unknown_effects,
 };
 pub use export::{ExportError, ExportPlan, plan_sequence};
+pub use keyframe::{
+    Animation, Interpolation, Keyframe, Keyframes, Property, fade_filters as keyframe_fades,
+    motion_filter as keyframe_motion,
+};
 pub use media::{AssetState, ColorTags, MediaInfo, MediaStamp};
 pub use model::{
     AssetId, ClipItem, Id, Marker, ModelError, Sequence, Track, TrackKind, Transition,

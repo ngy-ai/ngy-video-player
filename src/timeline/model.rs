@@ -95,6 +95,8 @@ pub struct ClipItem {
     pub name: String,
     /// 效果栈：按顺序串进这条片段的滤镜链（见 [`crate::timeline::effect`]）。
     pub effects: Vec<crate::timeline::Effect>,
+    /// 关键帧：缩放 / 位置 / 不透明度随时间变化的曲线（见 [`crate::timeline::keyframe`]）。
+    pub keys: crate::timeline::Keyframes,
 }
 
 impl ClipItem {
@@ -107,6 +109,7 @@ impl ClipItem {
             start,
             name: String::new(),
             effects: Vec::new(),
+            keys: crate::timeline::Keyframes::default(),
         }
     }
 

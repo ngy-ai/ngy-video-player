@@ -1,0 +1,574 @@
+//! 片段级关键帧：不透明度、缩放、位置随时间变化。
+//!
+//! 关键帧的时间是**片段内相对时间**（0 = 片段起点），不是序列时间：片段往后拖、
+//! 被切开重排，动画都还贴着画面本身，不用跟着改一遍。
+//!
+//! 每个属性各存一条曲线，互不影响：只想推近就不要被迫也给不透明度打两个点。
+//! 一条曲线里 0 个点表示「用静态默认值」，1 个点是「整段保持这个值」，
+//! 2 个点以上才在点之间插值，两端之外保持端点值（不外推）。
+//!
+//! 导出侧的表达式用 `on`（输出帧号）换算时间：`zoompan` / `fade` 都拿不到
+//! `t`，只有帧号，所以插值表达式里一律写 `(on/fps)`。
+
+use crate::timeline::{Sequence, Tick};
+use serde::{Deserialize, Serialize};
+
+/// 能打关键帧的属性。存进工程的是字符串，认不出来的落进 `Unknown`。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(into = "String", from = "String")]
+pub enum Property {
+    /// 不透明度 0–1。导出走 `fade`，只认「由透明变实」或反过来。
+    Opacity,
+    /// 缩放 0.1–4。导出走 `zoompan`，以画面中心为锚点。
+    #[default]
+    Scale,
+    /// 水平位置 -1–1（相对画面宽度的比例，正数往右）。
+    PositionX,
+    /// 垂直位置 -1–1（正数往下）。
+    PositionY,
+    /// 工程里有但这一版不认识的属性。
+    Unknown,
+}
+
+impl Property {
+    pub const ALL: [Property; 4] = [
+        Property::Scale,
+        Property::PositionX,
+        Property::PositionY,
+        Property::Opacity,
+    ];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Property::Opacity => "opacity",
+            Property::Scale => "scale",
+            Property::PositionX => "position_x",
+            Property::PositionY => "position_y",
+            Property::Unknown => "unknown",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Property::Opacity => "不透明度",
+            Property::Scale => "缩放",
+            Property::PositionX => "水平位置",
+            Property::PositionY => "垂直位置",
+            Property::Unknown => "未知属性",
+        }
+    }
+
+    /// 没有关键帧时的取值。
+    pub fn default_value(self) -> f32 {
+        match self {
+            Property::Opacity | Property::Scale => 1.0,
+            _ => 0.0,
+        }
+    }
+
+    pub fn min(self) -> f32 {
+        match self {
+            Property::Opacity => 0.0,
+            Property::Scale => 0.1,
+            _ => -1.0,
+        }
+    }
+
+    pub fn max(self) -> f32 {
+        match self {
+            Property::Opacity => 1.0,
+            Property::Scale => 4.0,
+            _ => 1.0,
+        }
+    }
+
+    /// 面板上调节时的步进。
+    pub fn step(self) -> f32 {
+        match self {
+            Property::Opacity => 0.1,
+            Property::Scale => 0.1,
+            _ => 0.05,
+        }
+    }
+
+    /// 展示用的格式化：百分比 / 倍数 / 比例偏移。
+    pub fn format(self, value: f32) -> String {
+        match self {
+            Property::Opacity => format!("{:.0}%", value * 100.0),
+            Property::Scale => format!("{value:.2}×"),
+            Property::Unknown => format!("{value:.2}"),
+            _ => format!("{:.0}%", value * 100.0),
+        }
+    }
+
+    fn from_id(id: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|property| property.id() == id)
+            .unwrap_or(Property::Unknown)
+    }
+}
+
+impl From<Property> for String {
+    fn from(property: Property) -> Self {
+        property.id().to_string()
+    }
+}
+
+impl From<String> for Property {
+    fn from(id: String) -> Self {
+        Property::from_id(&id)
+    }
+}
+
+/// 两个关键帧之间怎么走。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Interpolation {
+    /// 匀速：推近时速度是恒定的。
+    #[default]
+    Linear,
+    /// 两头慢中间快：起手与收尾都软一点，看起来更自然。
+    EaseInOut,
+}
+
+impl Interpolation {
+    pub const ALL: [Interpolation; 2] = [Interpolation::Linear, Interpolation::EaseInOut];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Interpolation::Linear => "线性",
+            Interpolation::EaseInOut => "缓动",
+        }
+    }
+
+    /// 把 0–1 的进度曲成实际比例。
+    fn ease(self, t: f32) -> f32 {
+        match self {
+            Interpolation::Linear => t,
+            // smoothstep：两端导数为 0，不会有「突然起步」的顿挫。
+            Interpolation::EaseInOut => t * t * (3.0 - 2.0 * t),
+        }
+    }
+}
+
+/// 一个关键帧：片段内相对时间 + 取值。
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Keyframe {
+    pub at: Tick,
+    pub value: f32,
+}
+
+impl Keyframe {
+    pub fn new(at: Tick, value: f32) -> Self {
+        Self { at, value }
+    }
+}
+
+/// 一条属性的曲线。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Animation {
+    pub property: Property,
+    pub interpolation: Interpolation,
+    /// 按 `at` 升序，同一个 `at` 只留一个（后写的覆盖）。
+    pub keys: Vec<Keyframe>,
+}
+
+impl Animation {
+    pub fn new(property: Property) -> Self {
+        Self {
+            property,
+            ..Self::default()
+        }
+    }
+
+    /// 有没有真的在做动画（至少两个点）。
+    pub fn animated(&self) -> bool {
+        self.keys.len() >= 2
+    }
+
+    /// 某个时刻的取值。没打点用默认值，点外钳制到端点。
+    pub fn value_at(&self, at: Tick) -> f32 {
+        self.value_or(at, self.property.default_value())
+    }
+
+    /// 同上，但没打点时用调用方给的静态值。
+    pub fn value_or(&self, at: Tick, fallback: f32) -> f32 {
+        if self.keys.is_empty() {
+            return fallback;
+        }
+        let first = self.keys[0];
+        if at <= first.at {
+            return first.value;
+        }
+        let last = self.keys[self.keys.len() - 1];
+        if at >= last.at {
+            return last.value;
+        }
+        let index = self
+            .keys
+            .partition_point(|key| key.at <= at)
+            .saturating_sub(1);
+        let from = self.keys[index];
+        let to = self.keys[index + 1];
+        let span = (to.at - from.at).micros();
+        if span <= 0 {
+            return to.value;
+        }
+        let progress = (at - from.at).micros() as f32 / span as f32;
+        let eased = self.interpolation.ease(progress.clamp(0.0, 1.0));
+        from.value + (to.value - from.value) * eased
+    }
+
+    /// 在 `at` 处记一个点。同一个时刻已有就覆盖，返回是否新增。
+    pub fn insert(&mut self, at: Tick, value: f32) -> bool {
+        let value = value.clamp(self.property.min(), self.property.max());
+        if let Some(existing) = self.keys.iter_mut().find(|key| key.at == at) {
+            existing.value = value;
+            return false;
+        }
+        self.keys.push(Keyframe::new(at, value));
+        self.keys.sort_by_key(|key| key.at);
+        true
+    }
+
+    /// 删掉 `at` 处的点（时间差在 `tolerance` 以内也算同一个）。
+    pub fn remove_near(&mut self, at: Tick, tolerance: Tick) -> bool {
+        let before = self.keys.len();
+        self.keys
+            .retain(|key| (key.at - at).micros().abs() > tolerance.micros());
+        self.keys.len() != before
+    }
+
+    pub fn clear(&mut self) {
+        self.keys.clear();
+    }
+}
+
+/// 片段上的所有曲线。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Keyframes {
+    pub curves: Vec<Animation>,
+}
+
+impl Keyframes {
+    pub fn is_empty(&self) -> bool {
+        self.curves.iter().all(|curve| curve.keys.is_empty())
+    }
+
+    pub fn curve(&self, property: Property) -> Option<&Animation> {
+        self.curves.iter().find(|curve| curve.property == property)
+    }
+
+    pub fn curve_mut(&mut self, property: Property) -> Option<&mut Animation> {
+        self.curves
+            .iter_mut()
+            .find(|curve| curve.property == property)
+    }
+
+    /// 取（必要时新建）某条曲线。
+    pub fn ensure(&mut self, property: Property) -> &mut Animation {
+        if !self.curves.iter().any(|curve| curve.property == property) {
+            self.curves.push(Animation::new(property));
+        }
+        let index = self
+            .curves
+            .iter()
+            .position(|curve| curve.property == property)
+            .expect("刚插入过");
+        &mut self.curves[index]
+    }
+
+    /// 某个属性在片段内某时刻的值。
+    pub fn value(&self, property: Property, at: Tick) -> f32 {
+        self.curve(property)
+            .map(|curve| curve.value_at(at))
+            .unwrap_or(property.default_value())
+    }
+
+    /// 所有曲线里出现过的时刻（点上画的菱形用），升序去重。
+    pub fn marks(&self) -> Vec<Tick> {
+        let mut marks: Vec<Tick> = self
+            .curves
+            .iter()
+            .flat_map(|curve| curve.keys.iter().map(|key| key.at))
+            .collect();
+        marks.sort();
+        marks.dedup();
+        marks
+    }
+
+    /// 删掉认得出来的曲线之外的东西（未知属性在界面上没法编辑，直接丢掉）。
+    pub fn prune(&mut self) {
+        self.curves
+            .retain(|curve| curve.property != Property::Unknown);
+    }
+
+    /// 认不出来的属性有几个：加载工程时提示一句。
+    pub fn unknown_count(&self) -> usize {
+        self.curves
+            .iter()
+            .filter(|curve| curve.property == Property::Unknown)
+            .count()
+    }
+}
+
+/// 把一条曲线写成 `zoompan` 能用的表达式；`on` 是输出帧号。
+///
+/// 一个点都没有时返回 `None`（不插动画滤镜）；只有一个点时返回常量。
+fn expr(curve: &Animation, fps: f64) -> Option<String> {
+    if curve.keys.is_empty() {
+        return None;
+    }
+    let t = |tick: Tick| format!("{:.6}", tick.secs());
+    // 帧号换时间：`zoompan` 的表达式里没有 `t`，只有输出帧序号 `on`。
+    let time = format!("(on/{fps:.6})");
+    let last = curve.keys[curve.keys.len() - 1];
+    if curve.keys.len() == 1 {
+        return Some(format!("{:.6}", last.value));
+    }
+    // 从最后一段往前套 if：`if(lt(t,a1), 段1, if(lt(t,a2), 段2, 末值))`。
+    let mut expr = format!("{:.6}", last.value);
+    for pair in curve.keys.windows(2).rev() {
+        let (from, to) = (pair[0], pair[1]);
+        let span = (to.at - from.at).secs();
+        if span <= 0.0 {
+            continue;
+        }
+        let progress = format!("(({time}-{})/{:.6})", t(from.at), span);
+        let weight = match curve.interpolation {
+            Interpolation::Linear => progress.clone(),
+            Interpolation::EaseInOut => {
+                format!("(({p})*({p})*(3.0-2.0*({p})))", p = progress)
+            }
+        };
+        expr = format!(
+            "if(lt({time},{:.6}),{:.6}+({:.6})*{weight},{})",
+            t(to.at),
+            from.value,
+            to.value - from.value,
+            expr
+        );
+    }
+    Some(expr)
+}
+
+/// 缩放与位置合成一个 `zoompan`：它输出固定尺寸，正好接在 pad 之后。
+///
+/// 没有缩放 / 位置曲线时返回空串，导出链上不多一个滤镜。
+pub fn motion_filter(keyframes: &Keyframes, sequence: &Sequence) -> String {
+    let scale = keyframes.curve(Property::Scale);
+    let x = keyframes.curve(Property::PositionX);
+    let y = keyframes.curve(Property::PositionY);
+    if scale.is_none_or(|curve| curve.keys.is_empty())
+        && x.is_none_or(|curve| curve.keys.is_empty())
+        && y.is_none_or(|curve| curve.keys.is_empty())
+    {
+        return String::new();
+    }
+
+    let fps = crate::timeline::sequence_fps(sequence);
+    if fps <= 0.0 {
+        return String::new();
+    }
+    let empty = Animation::default();
+    let zoom = expr(scale.unwrap_or(&empty), fps).unwrap_or_else(|| "1.0".to_string());
+    // 位置是「相对画面宽/高的比例」，-1–1；zoompan 的 x/y 是左上角坐标，
+    // 所以先取居中位置，再加上偏移（偏移按画布尺寸算，不随缩放走）。
+    let offset_x = x
+        .and_then(|curve| expr(curve, fps))
+        .unwrap_or_else(|| "0.0".to_string());
+    let offset_y = y
+        .and_then(|curve| expr(curve, fps))
+        .unwrap_or_else(|| "0.0".to_string());
+    let size = format!("{}x{}", sequence.width, sequence.height);
+    let rate = format!("{}/{}", sequence.fps.num(), sequence.fps.den());
+
+    format!(
+        "zoompan=z='{zoom}':x='(iw-iw/zoom)/2+({offset_x})*iw':\
+         y='(ih-ih/zoom)/2+({offset_y})*ih':d=1:s={size}:fps={rate}"
+    )
+}
+
+/// 不透明度写成 `fade` 段：只认「从透明变实」与「从实变透明」。
+///
+/// 任意曲线的通用实现要 `geq`，那是逐像素求值，几分钟的片子会慢到没法用；
+/// 淡入淡出是九成场景，用 fade 串联就够了。多段交替（淡出再淡入）也能表达。
+pub fn fade_filters(keyframes: &Keyframes, duration: Tick) -> Vec<String> {
+    let Some(curve) = keyframes.curve(Property::Opacity) else {
+        return Vec::new();
+    };
+    if curve.keys.len() < 2 {
+        return Vec::new();
+    }
+    let mut filters = Vec::new();
+    for pair in curve.keys.windows(2) {
+        let (from, to) = (pair[0], pair[1]);
+        let end = to.at.min(duration);
+        let start = from.at.max(Tick::ZERO);
+        let span = (end - start).secs();
+        if span <= 0.0 {
+            continue;
+        }
+        // 只在端点值接近 0 / 1 时才认：中间值 fade 表达不了，宁可不做也不错做。
+        let (kind, ok) = if from.value <= 0.01 && to.value >= 0.99 {
+            ("in", true)
+        } else if from.value >= 0.99 && to.value <= 0.01 {
+            ("out", true)
+        } else {
+            ("in", false)
+        };
+        if !ok {
+            continue;
+        }
+        // 不带 `alpha=1`：导出链是 yuv420p，没有 alpha 通道，带 alpha 的 fade 什么也不做。
+        // 所以这里的淡入淡出是「淡到黑」，多轨时下面那条轨也会被一起盖住（已知限制）。
+        filters.push(format!("fade=t={kind}:st={:.6}:d={span:.6}", start.secs()));
+    }
+    filters
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::timeline::Rational;
+
+    fn s(n: f64) -> Tick {
+        Tick::from_micros((n * 1_000_000.0) as i64)
+    }
+
+    #[test]
+    fn 没有点时用默认值() {
+        let curve = Animation::new(Property::Scale);
+        assert_eq!(curve.value_at(s(1.0)), 1.0);
+        assert!(!curve.animated());
+    }
+
+    #[test]
+    fn 两个点之间线性插值两端钳制() {
+        let mut curve = Animation::new(Property::Scale);
+        curve.insert(s(0.0), 1.0);
+        curve.insert(s(2.0), 2.0);
+        assert_eq!(curve.value_at(s(0.0)), 1.0);
+        assert_eq!(curve.value_at(s(1.0)), 1.5);
+        assert_eq!(curve.value_at(s(2.0)), 2.0);
+        // 点外不再外推。
+        assert_eq!(curve.value_at(s(5.0)), 2.0);
+        assert_eq!(curve.value_at(s(-1.0)), 1.0);
+    }
+
+    #[test]
+    fn 缓动在中点相同两端更慢() {
+        let mut curve = Animation::new(Property::Scale);
+        curve.interpolation = Interpolation::EaseInOut;
+        curve.insert(s(0.0), 1.0);
+        curve.insert(s(2.0), 3.0);
+        // smoothstep 在 0.5 处也是 0.5，但在 0.25 处明显低于线性。
+        assert!((curve.value_at(s(1.0)) - 2.0).abs() < 1e-5);
+        assert!(curve.value_at(s(0.5)) < 1.5);
+    }
+
+    #[test]
+    fn 同一时刻只留一个点() {
+        let mut curve = Animation::new(Property::Scale);
+        assert!(curve.insert(s(1.0), 1.2));
+        assert!(!curve.insert(s(1.0), 1.8));
+        assert_eq!(curve.keys.len(), 1);
+        assert_eq!(curve.keys[0].value, 1.8);
+    }
+
+    #[test]
+    fn 取值被夹在属性的量程内() {
+        let mut curve = Animation::new(Property::Opacity);
+        curve.insert(s(0.0), 5.0);
+        assert_eq!(curve.keys[0].value, 1.0);
+        curve.insert(s(1.0), -3.0);
+        assert_eq!(curve.keys[1].value, 0.0);
+    }
+
+    #[test]
+    fn 删点后回到默认值() {
+        let mut keys = Keyframes::default();
+        keys.ensure(Property::Scale).insert(s(0.0), 1.0);
+        keys.ensure(Property::Scale).insert(s(2.0), 2.0);
+        assert!(keys.ensure(Property::Scale).remove_near(s(0.0), Tick::ZERO));
+        keys.ensure(Property::Scale).clear();
+        assert!(keys.is_empty());
+        assert_eq!(keys.value(Property::Scale, s(1.0)), 1.0);
+    }
+
+    #[test]
+    fn 标记按时间升序去重() {
+        let mut keys = Keyframes::default();
+        keys.ensure(Property::Scale).insert(s(2.0), 2.0);
+        keys.ensure(Property::Scale).insert(s(0.0), 1.0);
+        keys.ensure(Property::Opacity).insert(s(0.0), 0.0);
+        assert_eq!(keys.marks(), vec![s(0.0), s(2.0)]);
+    }
+
+    #[test]
+    fn 缩放写成按帧号求值的表达式() {
+        let mut keys = Keyframes::default();
+        keys.ensure(Property::Scale).insert(s(0.0), 1.0);
+        keys.ensure(Property::Scale).insert(s(2.0), 2.0);
+
+        let mut sequence = Sequence::new(
+            "测试",
+            Rational::new(30, 1).expect("30 fps 合法"),
+            1920,
+            1080,
+        );
+        sequence.add_track(crate::timeline::TrackKind::Video);
+        let filter = motion_filter(&keys, &sequence);
+        assert!(filter.starts_with("zoompan="), "{filter}");
+        assert!(filter.contains("s=1920x1080"), "{filter}");
+        assert!(filter.contains("fps=30/1"), "{filter}");
+        assert!(
+            filter.contains("(on/30.000000)"),
+            "用帧号换算时间：{filter}"
+        );
+        assert!(filter.contains("if(lt("), "分段表达式：{filter}");
+    }
+
+    #[test]
+    fn 没有缩放或位置时不出动画滤镜() {
+        let mut sequence =
+            Sequence::new("测试", Rational::new(30, 1).expect("30 fps 合法"), 640, 360);
+        sequence.add_track(crate::timeline::TrackKind::Video);
+        let keys = Keyframes::default();
+        assert_eq!(motion_filter(&keys, &sequence), "");
+
+        // 只有不透明度时也不该插 zoompan。
+        let mut keys = Keyframes::default();
+        keys.ensure(Property::Opacity).insert(s(0.0), 0.0);
+        keys.ensure(Property::Opacity).insert(s(1.0), 1.0);
+        assert_eq!(motion_filter(&keys, &sequence), "");
+    }
+
+    #[test]
+    fn 不透明度写成淡入淡出() {
+        let mut keys = Keyframes::default();
+        keys.ensure(Property::Opacity).insert(s(0.5), 0.0);
+        keys.ensure(Property::Opacity).insert(s(1.5), 1.0);
+        let filters = fade_filters(&keys, s(3.0));
+        assert_eq!(
+            filters,
+            vec!["fade=t=in:st=0.500000:d=1.000000".to_string()]
+        );
+
+        // 中间值 fade 表达不了：宁可不做。
+        let mut keys = Keyframes::default();
+        keys.ensure(Property::Opacity).insert(s(0.0), 0.3);
+        keys.ensure(Property::Opacity).insert(s(1.0), 0.8);
+        assert!(fade_filters(&keys, s(3.0)).is_empty());
+    }
+
+    #[test]
+    fn 认不出来的属性名落进未知() {
+        let property: Property = "hue".to_string().into();
+        assert_eq!(property, Property::Unknown);
+        assert_eq!(String::from(Property::Scale), "scale");
+    }
+}

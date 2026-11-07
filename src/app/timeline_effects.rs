@@ -359,7 +359,10 @@ impl PlayerApp {
 }
 
 /// 片段在面板标题里的名字：自己起过名就用名字，否则退回素材文件名。
-fn clip_title(project: &crate::timeline::Project, clip: &crate::timeline::ClipItem) -> String {
+pub(super) fn clip_title(
+    project: &crate::timeline::Project,
+    clip: &crate::timeline::ClipItem,
+) -> String {
     if !clip.name.trim().is_empty() {
         return clip.name.clone();
     }
