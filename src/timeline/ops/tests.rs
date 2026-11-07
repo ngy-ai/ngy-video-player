@@ -734,3 +734,7 @@ fn 锁定或不存在的轨道不能删() {
 // `#[path]` 是必须的：`tests.rs` 不是 crate root，`mod` 默认只在本目录下找。
 #[path = "tests/placement.rs"]
 mod placement;
+
+// 变速与定格走 `EditOp` 之后的前置校验，见 `tests/speed.rs`。
+#[path = "tests/speed.rs"]
+mod speed;

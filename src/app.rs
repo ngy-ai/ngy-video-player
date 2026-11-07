@@ -145,6 +145,7 @@ mod timeline_header;
 mod timeline_keys;
 mod timeline_menu;
 mod timeline_preview;
+mod timeline_speed;
 mod timeline_tracks;
 mod timeline_view;
 mod video_area;

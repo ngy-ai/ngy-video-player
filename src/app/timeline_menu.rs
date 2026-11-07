@@ -23,6 +23,8 @@ pub(super) enum TimelineMenu {
     Effects(super::timeline_effects::EffectsMenu),
     /// 片段的关键帧面板：在播放头处记录缩放 / 位置 / 不透明度。
     Keys(super::timeline_keys::KeysMenu),
+    /// 片段的变速与定格面板：倍率档位与片尾定格时长。
+    Speed(super::timeline_speed::SpeedMenu),
 }
 
 /// 转场面板的上下文：接缝右侧的那段片段（转场挂在它身上）与鼠标位置。
@@ -83,6 +85,7 @@ impl PlayerApp {
             TimelineMenu::Transition(menu) => self.render_transition_menu(menu, window, cx),
             TimelineMenu::Effects(menu) => self.render_effects_menu(menu, window, cx),
             TimelineMenu::Keys(menu) => self.render_keys_menu(menu, window, cx),
+            TimelineMenu::Speed(menu) => self.render_speed_menu(menu, window, cx),
         }
     }
 
@@ -284,8 +287,8 @@ impl PlayerApp {
             (true, false) => "与左侧片段加转场…",
         };
         let clip_id = menu.clip;
-        // 片段菜单：9 行 + 1 条分隔线。
-        let origin = menu_origin(menu.position, menu_height(9, 1), window);
+        // 片段菜单：10 行 + 1 条分隔线。
+        let origin = menu_origin(menu.position, menu_height(10, 1), window);
 
         Some(
             div()
@@ -373,6 +376,16 @@ impl PlayerApp {
                     cx.listener(move |this, _: &ClickEvent, _window, cx| {
                         cx.stop_propagation();
                         this.open_keys_menu(clip_id, menu.position, cx);
+                    }),
+                ))
+                .child(item_menu_entry(
+                    "timeline-menu-speed",
+                    IconName::Gauge,
+                    "变速 / 定格…",
+                    text(),
+                    cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                        cx.stop_propagation();
+                        this.open_speed_menu(clip_id, menu.position, cx);
                     }),
                 ))
                 .child(

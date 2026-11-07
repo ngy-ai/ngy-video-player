@@ -86,6 +86,10 @@ pub enum EditOp {
     Slide { clip: Id, by: Tick },
     /// 移动片段与后一个片段之间的接缝。
     Roll { clip: Id, by: Tick },
+    /// 改片段倍率。长度按倍率反比变化，同轨后面的片段整体让位（波纹）。
+    SetSpeed { clip: Id, speed: f32 },
+    /// 片尾定格：最后一帧多停 `hold`，`Tick::ZERO` 表示取消。
+    SetHold { clip: Id, hold: Tick },
     /// 删掉整条轨道，连同它上面的片段与转场。锁定的轨道要先解锁。
     RemoveTrack { track: Id },
 }
@@ -109,6 +113,8 @@ pub enum EditError {
     SplitOutside(Id),
     /// 轨道被锁定，不接受编辑。
     TrackLocked(Id),
+    /// 倍率不是有限数，或者定格时长为负。
+    BadRate,
 }
 
 impl fmt::Display for EditError {
@@ -123,6 +129,7 @@ impl fmt::Display for EditError {
             EditError::NotAdjacent => write!(f, "片段两侧没有紧挨着的邻居，无法滑动"),
             EditError::SplitOutside(id) => write!(f, "切点必须落在片段 {id} 内部"),
             EditError::TrackLocked(id) => write!(f, "轨道 {id} 已锁定，先解锁再编辑"),
+            EditError::BadRate => write!(f, "倍率必须是有限数，定格时长不能为负"),
         }
     }
 }
@@ -159,6 +166,8 @@ pub fn apply(sequence: &Sequence, op: &EditOp) -> Result<Sequence, EditError> {
         EditOp::Slip { clip, by } => slip(&mut next, *clip, *by)?,
         EditOp::Slide { clip, by } => slide(&mut next, *clip, *by)?,
         EditOp::Roll { clip, by } => roll(&mut next, *clip, *by)?,
+        EditOp::SetSpeed { clip, speed } => set_speed(&mut next, *clip, *speed)?,
+        EditOp::SetHold { clip, hold } => set_hold(&mut next, *clip, *hold)?,
         EditOp::RemoveTrack { track } => remove_track(&mut next, *track)?,
     }
     Ok(next)
@@ -679,6 +688,28 @@ fn roll(sequence: &mut Sequence, clip_id: Id, by: Tick) -> Result<(), EditError>
     track.clips[clip_index].source_out = source_out;
     track.clips[clip_index + 1].source_in = after_in;
     track.clips[clip_index + 1].start = after.start + by;
+    Ok(())
+}
+
+/// 改倍率。夹取与波纹让位都在 [`crate::timeline::set_speed`] 里，这里只做前置校验。
+///
+/// 值没变不算错误（界面上点同一个档位很常见），返回 `Ok` 但序列原样。
+fn set_speed(sequence: &mut Sequence, clip_id: Id, speed: f32) -> Result<(), EditError> {
+    if !speed.is_finite() {
+        return Err(EditError::BadRate);
+    }
+    locate(sequence, clip_id)?;
+    crate::timeline::set_speed(sequence, clip_id, speed);
+    Ok(())
+}
+
+/// 加 / 取消片尾定格。负数定格没有意义：取消要显式给 `Tick::ZERO`。
+fn set_hold(sequence: &mut Sequence, clip_id: Id, hold: Tick) -> Result<(), EditError> {
+    if hold.is_negative() {
+        return Err(EditError::BadRate);
+    }
+    locate(sequence, clip_id)?;
+    crate::timeline::set_hold(sequence, clip_id, hold);
     Ok(())
 }
 
