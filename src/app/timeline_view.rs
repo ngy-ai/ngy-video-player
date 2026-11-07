@@ -188,6 +188,8 @@ impl PlayerApp {
                 };
                 self.remember_project(&path);
                 self.project_path = Some(path);
+                // 认不出来的效果不阻止打开，但要说一句：否则用户会以为效果丢了。
+                let unknown = crate::timeline::unknown_effects(&project.sequence);
                 self.history = Some(UndoHistory::new(project.sequence.clone()));
                 self.show_history = false;
                 self.delete_track_confirm = None;
@@ -198,7 +200,11 @@ impl PlayerApp {
                     self.flash("已从自动保存恢复，记得保存工程");
                 } else {
                     self.autosave.mark_saved();
-                    self.flash(format!("已打开工程「{name}」"));
+                    let mut message = format!("已打开工程「{name}」");
+                    if unknown > 0 {
+                        message.push_str(&format!("；{unknown} 个不认识的效果已跳过"));
+                    }
+                    self.flash(message);
                 }
                 // 打开就出一帧：进来先看到黑屏，会让人以为工程打不开。
                 self.timeline_preview = None;

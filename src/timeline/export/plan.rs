@@ -266,13 +266,16 @@ fn video_stream(
         };
         // 视频必须用 `trim` + `setpts`：`atrim` 是音频滤镜，它的输出 pad 是 audio，
         // 接到 `setpts` 的 video 输入上会让整张 filter_complex 图连不起来。
+        // 效果链排在缩放补边之后、转场之前：构图先定下来，降噪 / 锐化 / 水印
+        // 都作用在成片尺寸上，字号与锐化强度才不会随素材分辨率乱跳。
+        let effects = crate::timeline::effect_chain(sequence, clip.id);
         let label = format!("[v{}]", clip.id.raw());
         // 输出标签必须拼在链尾：concat 与 xfade 只认标签，链上没有标签时
         // ffmpeg 会报 "Stream specifier 'v3' ... matches no streams"。
         let chain = format!(
             "[{index}:v]trim=start={:.6}:end={:.6},setpts=PTS-STARTPTS,\
              scale={dims}:force_original_aspect_ratio=decrease,\
-             pad={dims}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}{tonemap}{label}",
+             pad={dims}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}{tonemap}{effects}{label}",
             (clip.source_in - head).secs(),
             clip.source_out.secs()
         );

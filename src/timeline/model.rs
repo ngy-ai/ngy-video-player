@@ -93,6 +93,8 @@ pub struct ClipItem {
     pub start: Tick,
     /// 显示名。留空时界面退回素材名，素材改名不会连带改这里。
     pub name: String,
+    /// 效果栈：按顺序串进这条片段的滤镜链（见 [`crate::timeline::effect`]）。
+    pub effects: Vec<crate::timeline::Effect>,
 }
 
 impl ClipItem {
@@ -104,6 +106,7 @@ impl ClipItem {
             source_out,
             start,
             name: String::new(),
+            effects: Vec::new(),
         }
     }
 

@@ -95,6 +95,43 @@ fn project_with(scratch: &Scratch, clips: &[(Tick, Tick, Tick)]) -> (Project, Ve
     (project, ids)
 }
 
+/// 效果栈按加入顺序接在缩放补边之后：先降噪再锐化才有意义，反了只是把噪点放大。
+#[test]
+fn 片段效果按顺序进滤镜链() {
+    let scratch = Scratch::new("effects");
+    let (mut project, ids) = project_with(&scratch, &[(s(0), s(2), Tick::ZERO)]);
+    let clip = ids[0];
+    crate::timeline::add_effect(
+        &mut project.sequence,
+        clip,
+        crate::timeline::EffectKind::Denoise,
+    );
+    crate::timeline::add_effect(
+        &mut project.sequence,
+        clip,
+        crate::timeline::EffectKind::Sharpen,
+    );
+
+    let plan = plan_sequence(&project).expect("能导出");
+    assert_connected(&plan.filter);
+    let denoise = plan.filter.find("hqdn3d").expect("有降噪");
+    let sharpen = plan.filter.find("unsharp").expect("有锐化");
+    assert!(denoise < sharpen, "{}", plan.filter);
+    assert!(
+        plan.filter.contains("setsar=1,fps=30/1"),
+        "效果排在缩放与帧率之后：{}",
+        plan.filter
+    );
+
+    // 关掉的效果不发声，但顺序信息还在工程里。
+    let effect = project.sequence.clip_mut(clip).unwrap().effects[1].id;
+    crate::timeline::toggle_effect(&mut project.sequence, clip, effect);
+    let plan = plan_sequence(&project).expect("能导出");
+    assert_connected(&plan.filter);
+    assert!(!plan.filter.contains("unsharp"), "{}", plan.filter);
+    assert!(plan.filter.contains("hqdn3d"), "{}", plan.filter);
+}
+
 #[test]
 fn 空时间线拒绝导出() {
     let project = Project::new();

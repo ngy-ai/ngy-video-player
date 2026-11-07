@@ -19,6 +19,8 @@ pub(super) enum TimelineMenu {
     Ruler { position: Point<Pixels> },
     /// 接缝上的转场面板：类型与时长都在这里点，改一次落一步撤销。
     Transition(TransitionMenu),
+    /// 片段的效果栈面板：加、开关、换档、调序、删。
+    Effects(super::timeline_effects::EffectsMenu),
 }
 
 /// 转场面板的上下文：接缝右侧的那段片段（转场挂在它身上）与鼠标位置。
@@ -77,6 +79,7 @@ impl PlayerApp {
             TimelineMenu::Clip(menu) => self.render_clip_menu(menu, window, cx),
             TimelineMenu::Ruler { position } => self.render_ruler_menu(position, window, cx),
             TimelineMenu::Transition(menu) => self.render_transition_menu(menu, window, cx),
+            TimelineMenu::Effects(menu) => self.render_effects_menu(menu, window, cx),
         }
     }
 
@@ -278,8 +281,8 @@ impl PlayerApp {
             (true, false) => "与左侧片段加转场…",
         };
         let clip_id = menu.clip;
-        // 片段菜单：7 行 + 1 条分隔线。
-        let origin = menu_origin(menu.position, menu_height(7, 1), window);
+        // 片段菜单：8 行 + 1 条分隔线。
+        let origin = menu_origin(menu.position, menu_height(8, 1), window);
 
         Some(
             div()
@@ -347,6 +350,16 @@ impl PlayerApp {
                     cx.listener(move |this, _: &ClickEvent, _window, cx| {
                         cx.stop_propagation();
                         this.open_transition_menu(clip_id, menu.position, cx);
+                    }),
+                ))
+                .child(item_menu_entry(
+                    "timeline-menu-effects",
+                    IconName::SlidersHorizontal,
+                    "效果…",
+                    text(),
+                    cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                        cx.stop_propagation();
+                        this.open_effects_menu(clip_id, menu.position, cx);
                     }),
                 ))
                 .child(
@@ -477,7 +490,7 @@ const DURATION_CHIP_IDS: [&str; 5] = [
 ];
 
 /// 按行数估算菜单高度，只用来判断在鼠标下方放不放得下。
-fn menu_height(rows: usize, separators: usize) -> f32 {
+pub(super) fn menu_height(rows: usize, separators: usize) -> f32 {
     ITEM_MENU_PADDING * 2.0
         + rows as f32 * ITEM_MENU_ROW_HEIGHT
         + separators as f32 * ITEM_MENU_SEPARATOR_HEIGHT
@@ -488,7 +501,7 @@ fn menu_height(rows: usize, separators: usize) -> f32 {
 ///
 /// 时间线贴窗口底边，右键最下面几条轨道时鼠标离下沿往往不到一个菜单的高度，
 /// 不翻的话后几项（静音、锁定、删轨道）会整条掉到窗口外，点不到也看不见。
-fn menu_origin(position: Point<Pixels>, height: f32, window: &Window) -> Point<Pixels> {
+pub(super) fn menu_origin(position: Point<Pixels>, height: f32, window: &Window) -> Point<Pixels> {
     menu_origin_in(position, height, window.viewport_size())
 }
 

@@ -8,6 +8,7 @@
 //! 禁止用 `f64` 秒做累加、比较或存盘——错一帧的 bug 在时间线上无法调试。
 
 pub mod autosave;
+mod effect;
 mod export;
 mod media;
 mod model;
@@ -22,6 +23,10 @@ mod transition;
 mod undo;
 mod view;
 
+pub use effect::{
+    Effect, EffectKind, EffectParams, Knob, add_effect, cycle_knob, filter_chain as effect_chain,
+    interpolated_fps, move_effect, remove_effect, sequence_fps, toggle_effect, unknown_effects,
+};
 pub use export::{ExportError, ExportPlan, plan_sequence};
 pub use media::{AssetState, ColorTags, MediaInfo, MediaStamp};
 pub use model::{

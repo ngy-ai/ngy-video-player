@@ -140,6 +140,7 @@ mod settings_panel;
 mod source_edit;
 #[cfg(test)]
 mod tests;
+mod timeline_effects;
 mod timeline_header;
 mod timeline_menu;
 mod timeline_preview;

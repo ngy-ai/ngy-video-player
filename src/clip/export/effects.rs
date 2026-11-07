@@ -102,7 +102,10 @@ impl Watermark {
     ///
     /// `shadowx/shadowy` 给一层淡淡的黑影：白色文字压在明亮的画面上时，
     /// 没有描边就完全看不清，而画一个不透明底框又太难看。
-    pub(super) fn filter(&self) -> Option<String> {
+    ///
+    /// 对外可见：时间线的片段效果栈也用它拼水印（`timeline::effect`），文字滤镜
+    /// 只该有一份实现。
+    pub fn filter(&self) -> Option<String> {
         if !self.active() {
             return None;
         }
