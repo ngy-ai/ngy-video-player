@@ -170,6 +170,72 @@ fn 关键帧接在补边之后效果之前() {
     assert!(fade < sharpen, "{}", plan.filter);
 }
 
+/// 变速：视频压时间戳、音频串 `atempo`；`atempo` 一档只认 0.5–2.0，超出的要串起来。
+#[test]
+fn 变速改时间戳并串联音频速率() {
+    let scratch = Scratch::new("speed");
+    let (mut project, ids) = project_with(&scratch, &[(s(0), s(4), Tick::ZERO)]);
+    let clip = ids[0];
+    project.sequence.clip_mut(clip).unwrap().speed = 4.0;
+    // 声音也要跟着变速率：同一条素材再往音频轨放一段（两条轨上的片段各设各的倍率）。
+    let asset = project.assets[0].id;
+    let audio = project.sequence.tracks[1].id;
+    let audio_id = project.sequence.alloc_id();
+    project
+        .sequence
+        .track_mut(audio)
+        .expect("音频轨存在")
+        .clips
+        .push(ClipItem::new(audio_id, asset, s(0), s(4), Tick::ZERO));
+    project.sequence.clip_mut(audio_id).unwrap().speed = 4.0;
+
+    let plan = plan_sequence(&project).expect("能导出");
+    assert_connected(&plan.filter);
+    assert!(
+        plan.filter.contains("setpts=(PTS-STARTPTS)/4.000000"),
+        "{}",
+        plan.filter
+    );
+    assert!(
+        plan.filter.contains("atempo=2.0,atempo=2.000000"),
+        "4x 要串两档：{}",
+        plan.filter
+    );
+}
+
+/// 定格：视频端 `tpad` 克隆最后一帧，音频端补等长静音。
+#[test]
+fn 片尾定格克隆最后一帧并补静音() {
+    let scratch = Scratch::new("hold");
+    let (mut project, ids) = project_with(&scratch, &[(s(0), s(2), Tick::ZERO)]);
+    let clip = ids[0];
+    project.sequence.clip_mut(clip).unwrap().hold = s(3);
+    let asset = project.assets[0].id;
+    let audio = project.sequence.tracks[1].id;
+    let audio_id = project.sequence.alloc_id();
+    project
+        .sequence
+        .track_mut(audio)
+        .expect("音频轨存在")
+        .clips
+        .push(ClipItem::new(audio_id, asset, s(0), s(2), Tick::ZERO));
+    project.sequence.clip_mut(audio_id).unwrap().hold = s(3);
+
+    let plan = plan_sequence(&project).expect("能导出");
+    assert_connected(&plan.filter);
+    assert!(
+        plan.filter
+            .contains("tpad=stop_mode=clone:stop_duration=3.000000"),
+        "{}",
+        plan.filter
+    );
+    assert!(
+        plan.filter.contains("apad=pad_dur=3.000000"),
+        "{}",
+        plan.filter
+    );
+}
+
 #[test]
 fn 空时间线拒绝导出() {
     let project = Project::new();

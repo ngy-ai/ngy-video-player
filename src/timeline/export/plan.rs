@@ -242,8 +242,12 @@ fn video_stream(
         // 前一段没有余量就退化成硬切——宁可切得生硬，也不要 ffmpeg 因缺帧把时长算错。
         let mut head = Tick::ZERO;
         let mut kind = None;
+        // 变速片段不接转场：`xfade` 的时长按时间线算，而多取的素材按素材时间算，
+        // 两头一换算就容易错帧。宁可退化成硬切，也不要成片时长对不上。
+        let rate = clip.rate();
         if let Some(previous) = pieces.last()
             && previous.end == clip.start
+            && (rate - 1.0).abs() < 1e-6
             && let Some(previous_id) = previous.clip
             && let Some(transition) = track
                 .transitions
@@ -282,8 +286,23 @@ fn video_stream(
         let label = format!("[v{}]", clip.id.raw());
         // 输出标签必须拼在链尾：concat 与 xfade 只认标签，链上没有标签时
         // ffmpeg 会报 "Stream specifier 'v3' ... matches no streams"。
+        // 变速：`setpts` 按倍率压缩 / 拉伸时间戳，音轨那边用 `atempo` 对齐。
+        let setpts = if (rate - 1.0).abs() < 1e-6 {
+            "setpts=PTS-STARTPTS".to_string()
+        } else {
+            format!("setpts=(PTS-STARTPTS)/{rate:.6}")
+        };
+        // 片尾定格：克隆最后一帧停 `hold` 秒，音轨补等长静音。
+        let freeze = if clip.hold > Tick::ZERO {
+            format!(
+                ",tpad=stop_mode=clone:stop_duration={:.6}",
+                clip.hold.secs()
+            )
+        } else {
+            String::new()
+        };
         let chain = format!(
-            "[{index}:v]trim=start={:.6}:end={:.6},setpts=PTS-STARTPTS,\
+            "[{index}:v]trim=start={:.6}:end={:.6},{setpts}{freeze},\
              scale={dims}:force_original_aspect_ratio=decrease,\
              pad={dims}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}{tonemap}{motion}{fades}{effects}{label}",
             (clip.source_in - head).secs(),
@@ -353,6 +372,28 @@ fn video_stream(
     Ok(stream)
 }
 
+/// 倍率 → `atempo` 链。
+///
+/// `atempo` 一档只认 0.5–2.0，更极端的倍率要串联：4x 是 `atempo=2.0,atempo=2.0`，
+/// 0.25x 是 `atempo=0.5,atempo=0.5`。串起来乘起来必须正好等于目标倍率。
+fn atempo_chain(rate: f32) -> String {
+    if (rate - 1.0).abs() < 1e-6 || !rate.is_finite() || rate <= 0.0 {
+        return String::new();
+    }
+    let mut rest = f64::from(rate);
+    let mut parts: Vec<String> = Vec::new();
+    while rest > 2.0 {
+        parts.push("atempo=2.0".to_string());
+        rest /= 2.0;
+    }
+    while rest < 0.5 {
+        parts.push("atempo=0.5".to_string());
+        rest /= 0.5;
+    }
+    parts.push(format!("atempo={rest:.6}"));
+    parts.iter().map(|part| format!(",{part}")).collect()
+}
+
 /// 转场类型 → `xfade` 的 `transition` 取值。
 fn xfade_name(kind: crate::timeline::TransitionKind) -> &'static str {
     match kind {
@@ -389,11 +430,18 @@ fn audio_stream(
 
         let index = input_index(inputs, project, clip.asset_id)?;
         let label = format!("[a{}]", clip.id.raw());
+        // 变速片段的声音跟着改速率；定格段补静音，好和视频那边的 `tpad` 对齐。
+        let tempo = atempo_chain(clip.rate());
+        let pad = if clip.hold > Tick::ZERO {
+            format!(",apad=pad_dur={:.6}", clip.hold.secs())
+        } else {
+            String::new()
+        };
         stream.push(
             format!(
-                "[{index}:a]atrim=start={:.6}:end={:.6},asetpts=PTS-STARTPTS,\
+                "[{index}:a]atrim=start={:.6}:end={:.6},asetpts=PTS-STARTPTS{tempo},\
                  aresample={AUDIO_RATE},\
-                 aformat=sample_fmts=fltp:channel_layouts=stereo",
+                 aformat=sample_fmts=fltp:channel_layouts=stereo{pad}",
                 clip.source_in.secs(),
                 clip.source_out.secs()
             ),

@@ -18,6 +18,7 @@ pub mod pack;
 pub mod preview;
 mod project;
 mod spec;
+mod speed;
 mod three_point;
 mod time;
 mod transition;
@@ -43,6 +44,7 @@ pub use project::{
     Asset, AssetRemoveError, PROJECT_EXTENSION, PROJECT_VERSION, Project, ProjectError, UiState,
 };
 pub use spec::{SequenceSpec, SpecError, rate_label};
+pub use speed::{set_hold, set_speed};
 pub use three_point::{ThreePoint, ThreePointError, three_point};
 pub use time::{MICROS_PER_SECOND, Rational, Tick};
 pub use transition::{

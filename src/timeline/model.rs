@@ -87,10 +87,15 @@ pub struct ClipItem {
     pub asset_id: AssetId,
     /// 素材入点：这一段从素材的第几微秒开始。
     pub source_in: Tick,
-    /// 素材出点（不含）：`source_out - source_in` 就是片段时长。
+    /// 素材出点（不含）：`source_out - source_in` 是**素材里**的跨度，
+    /// 变速后片段在时间线上的时长要除以 [`ClipItem::speed`]。
     pub source_out: Tick,
     /// 序列上的起点。
     pub start: Tick,
+    /// 播放倍率，0.25–4.0。1.0 是原速；改动会连带改片段在时间线上的长度。
+    pub speed: f32,
+    /// 片尾定格：最后一帧再多停这么久（音频补等长的静音）。
+    pub hold: Tick,
     /// 显示名。留空时界面退回素材名，素材改名不会连带改这里。
     pub name: String,
     /// 效果栈：按顺序串进这条片段的滤镜链（见 [`crate::timeline::effect`]）。
@@ -100,6 +105,12 @@ pub struct ClipItem {
 }
 
 impl ClipItem {
+    /// 倍率量程。0.25x 以下是「一帧看四秒」，已经该用定格而不是变速。
+    pub const MIN_SPEED: f32 = 0.25;
+    pub const MAX_SPEED: f32 = 4.0;
+    /// 面板上的档位。
+    pub const SPEEDS: [f32; 6] = [0.25, 0.5, 1.0, 1.5, 2.0, 4.0];
+
     pub fn new(id: Id, asset_id: AssetId, source_in: Tick, source_out: Tick, start: Tick) -> Self {
         Self {
             id,
@@ -107,6 +118,8 @@ impl ClipItem {
             source_in,
             source_out,
             start,
+            speed: 1.0,
+            hold: Tick::ZERO,
             name: String::new(),
             effects: Vec::new(),
             keys: crate::timeline::Keyframes::default(),
@@ -118,9 +131,29 @@ impl ClipItem {
         self
     }
 
-    /// 片段时长。模型里恒为正；读到坏数据时贴到 0，不让负时长流进界面。
-    pub fn duration(&self) -> Tick {
+    /// 变速前的素材跨度。
+    pub fn span(&self) -> Tick {
         (self.source_out - self.source_in).max(Tick::ZERO)
+    }
+
+    /// 落到量程里的倍率。坏值（0、负、NaN）按原速处理，不让一条坏数据把时长算成 0。
+    pub fn rate(&self) -> f32 {
+        if self.speed.is_finite() && self.speed > 0.0 {
+            self.speed.clamp(Self::MIN_SPEED, Self::MAX_SPEED)
+        } else {
+            1.0
+        }
+    }
+
+    /// 变速后的运动时长（不含片尾定格）。
+    pub fn motion(&self) -> Tick {
+        let scaled = f64::from(self.rate());
+        Tick::from_micros((self.span().micros() as f64 / scaled).round() as i64)
+    }
+
+    /// 片段时长（变速 + 定格）。模型里恒为正；读到坏数据时贴到 0，不让负时长流进界面。
+    pub fn duration(&self) -> Tick {
+        (self.motion() + self.hold.max(Tick::ZERO)).max(Tick::ZERO)
     }
 
     /// 片段在序列上的终点（不含）。
@@ -135,13 +168,25 @@ impl ClipItem {
 
     /// 素材时间 → 序列时间。片段不覆盖该时刻时返回 `None`。
     pub fn timeline_at(&self, source: Tick) -> Option<Tick> {
-        (source >= self.source_in && source < self.source_out)
-            .then(|| self.start + (source - self.source_in))
+        (source >= self.source_in && source < self.source_out).then(|| {
+            let offset = (source - self.source_in).micros() as f64 / f64::from(self.rate());
+            self.start + Tick::from_micros(offset.round() as i64)
+        })
     }
 
     /// 序列时间 → 素材时间。片段不覆盖该时刻时返回 `None`。
+    ///
+    /// 定格段里返回最后一帧：那一帧被重复了 `hold` 那么久。
     pub fn source_at(&self, at: Tick) -> Option<Tick> {
-        self.covers(at).then(|| self.source_in + (at - self.start))
+        if !self.covers(at) {
+            return None;
+        }
+        let elapsed = at - self.start;
+        if elapsed >= self.motion() {
+            return Some((self.source_out - Tick::from_micros(1)).max(self.source_in));
+        }
+        let offset = elapsed.micros() as f64 * f64::from(self.rate());
+        Some(self.source_in + Tick::from_micros(offset.round() as i64))
     }
 }
 

@@ -254,6 +254,75 @@ fn 片段在素材时间与序列时间之间换算() {
     assert_eq!(clip.timeline_at(Tick::from_micros(15_000_000)), None);
 }
 
+/// 变速改的是片段在时间线上的长度，素材跨度不动。
+#[test]
+fn 倍率压缩片段在时间线上的长度() {
+    let mut clip = ClipItem::new(
+        Id::new(1),
+        AssetId::new(1),
+        Tick::ZERO,
+        Tick::from_micros(4_000_000),
+        Tick::from_micros(10_000_000),
+    );
+    assert_eq!(clip.span(), Tick::from_micros(4_000_000));
+    assert_eq!(clip.duration(), Tick::from_micros(4_000_000));
+
+    clip.speed = 2.0;
+    assert_eq!(clip.motion(), Tick::from_micros(2_000_000));
+    assert_eq!(clip.end(), Tick::from_micros(12_000_000));
+    // 序列上 1 秒对应素材 2 秒。
+    assert_eq!(
+        clip.source_at(Tick::from_micros(11_000_000)),
+        Some(Tick::from_micros(2_000_000))
+    );
+    assert_eq!(
+        clip.timeline_at(Tick::from_micros(2_000_000)),
+        Some(Tick::from_micros(11_000_000))
+    );
+
+    clip.speed = 0.5;
+    assert_eq!(clip.duration(), Tick::from_micros(8_000_000));
+}
+
+/// 片尾定格：视频多停 `hold`，那段里取到的永远是最后一帧。
+#[test]
+fn 定格把时长拉长且落在最后一帧() {
+    let mut clip = ClipItem::new(
+        Id::new(1),
+        AssetId::new(1),
+        Tick::ZERO,
+        Tick::from_micros(2_000_000),
+        Tick::ZERO,
+    );
+    clip.hold = Tick::from_micros(3_000_000);
+    assert_eq!(clip.motion(), Tick::from_micros(2_000_000));
+    assert_eq!(clip.duration(), Tick::from_micros(5_000_000));
+    assert_eq!(
+        clip.source_at(Tick::from_micros(4_000_000)),
+        Some(Tick::from_micros(1_999_999)),
+        "定格段重复最后一帧"
+    );
+}
+
+/// 坏倍率（0、负、NaN）按原速算：一条坏数据不该让片段变成 0 长。
+#[test]
+fn 坏倍率退回原速() {
+    let mut clip = ClipItem::new(
+        Id::new(1),
+        AssetId::new(1),
+        Tick::ZERO,
+        Tick::from_micros(2_000_000),
+        Tick::ZERO,
+    );
+    for bad in [0.0, -1.0, f32::NAN] {
+        clip.speed = bad;
+        assert_eq!(clip.rate(), 1.0);
+        assert_eq!(clip.duration(), Tick::from_micros(2_000_000));
+    }
+    clip.speed = 100.0;
+    assert_eq!(clip.rate(), ClipItem::MAX_SPEED);
+}
+
 #[test]
 fn 编号由序列统一分配且存盘后继续增长() {
     let sequence = sample();
