@@ -49,6 +49,9 @@ impl PlayerApp {
             return false;
         };
         let Some(frame) = preview::resolve(&project.sequence, at) else {
+            // 空档的黑场由画面那一层压黑（`preview::overlay_dim`），这里只负责别出声：
+            // 不暂停的话 mpv 会接着放上一段的声音，播放头走过空档时听着像窜了音。
+            self.send(Command::SetPaused(true));
             return false;
         };
         let Some(path) = project.asset_path(frame.asset).map(Path::to_path_buf) else {
@@ -70,7 +73,8 @@ impl PlayerApp {
             self.timeline_loaded_at = Some(Instant::now());
         }
         // 拖播放头要看的是「这一帧」，不是从这儿接着放；播放时则要从这里接着走。
-        self.send(Command::SetPaused(!playing));
+        // 定格段没有「接着走」这回事：停在最后一帧，等播放头走出定格再放。
+        self.send(Command::SetPaused(!playing || frame.frozen));
         true
     }
 
@@ -213,7 +217,17 @@ impl PlayerApp {
                 url: path.to_string_lossy().into_owned(),
                 start: Some(source),
             });
-            self.send(Command::SetPaused(false));
+            self.send(Command::SetPaused(!frame.frozen));
+            return;
+        }
+        // 定格段：mpv 自己会一路播到文件末尾，不按住它就会在定格里继续放后面的素材。
+        // 只在它还走着的时候补一次 seek + 暂停；暂停生效之后每个节拍什么都不做。
+        if frame.frozen {
+            if !self.snapshot.paused {
+                self.send(Command::SeekAbsolute(source));
+                self.send(Command::SetPaused(true));
+                self.timeline_loaded_at = Some(Instant::now());
+            }
             return;
         }
         // 上一段空档里把它停住了（或者刚按下播放）：放行。

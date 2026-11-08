@@ -197,6 +197,19 @@ impl PlayerApp {
     ) -> impl IntoElement {
         // 工程模式的预览靠时间线喂帧，空序列保持黑屏，不套播放器模式的引导语。
         let placeholder = show_placeholder(&self.frame, &self.snapshot, self.project.is_some());
+        // 单路预览演不出两幅画面叠在一起：空档整块压黑，转场窗口里淡到黑再淡回来
+        // （形状与导出侧的过渡一致）。播放器模式没有时间线，永远是 0；
+        // 试听原片时画面与播放头无关，也不能拿时间线的空档去压黑它。
+        let dim = if self.audition.is_some() {
+            0.0
+        } else {
+            self.project
+                .as_ref()
+                .map(|project| {
+                    crate::timeline::preview::overlay_dim(&project.sequence, project.ui.playhead)
+                })
+                .unwrap_or(0.0)
+        };
         div()
             .id("video-area")
             .absolute()
@@ -209,6 +222,16 @@ impl PlayerApp {
             .when(bottom > 0.0, |this| this.bottom(px(bottom)))
             .bg(bg())
             .child(ui::video_surface(self.frame.clone()))
+            // 黑场 / 转场压黑。`rgba` 的字节序是 RRGGBBAA，RGB 全 0 就是纯黑。
+            .when(dim > 0.0, |this| {
+                let alpha = (dim.clamp(0.0, 1.0) * 255.0).round() as u8;
+                this.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .bg(gpui_kit::rgba(u32::from(alpha))),
+                )
+            })
             // 空状态只看「有没有帧」，不看 mpv 上报的宽高：width/height 属性在
             // 视频解码前是 0，用它会在一段正常播放的画面上盖一层「正在加载」。
             // 纯音频例外：它永远不会有帧，也不该一直挂着占位文字，黑屏即可。

@@ -32,6 +32,10 @@ pub struct PreviewFrame {
     pub source: Tick,
     /// 这段画面来自哪条轨（调试与界面提示用）。
     pub track: Id,
+    /// 来自哪个片段。转场过渡区间要按它找接缝。
+    pub clip: Id,
+    /// 落在片尾定格里：画面被冻在最后一帧，不要再让 mpv 往下播。
+    pub frozen: bool,
 }
 
 /// 参与输出的视频轨，按叠放顺序（先上后下）。静音 / 隐藏的、空轨都跳过。
@@ -43,18 +47,83 @@ pub fn enabled_video_tracks(sequence: &Sequence) -> impl Iterator<Item = &Track>
 }
 
 /// 播放头在 `at` 时该显示哪一帧。`None` 表示这一刻没有任何画面（空档）。
+///
+/// 素材内时刻走 [`crate::timeline::ClipItem::source_at`]，倍率与片尾定格都在那里算：
+/// 2 倍速的片段在 0.5 秒处要取素材的 1.0 秒，定格段则一直取最后一帧。
 pub fn resolve(sequence: &Sequence, at: Tick) -> Option<PreviewFrame> {
     enabled_video_tracks(sequence).find_map(|track| {
-        track
-            .clips
-            .iter()
-            .find(|clip| clip.covers(at))
-            .map(|clip| PreviewFrame {
+        track.clips.iter().find_map(|clip| {
+            let source = clip.source_at(at)?;
+            Some(PreviewFrame {
                 asset: clip.asset_id,
-                source: clip.source_in + (at - clip.start),
+                source,
                 track: track.id,
+                clip: clip.id,
+                // 定格段里 `source_at` 一直给最后一帧；播放器要知道「别再往下走了」。
+                frozen: at - clip.start >= clip.motion(),
             })
+        })
     })
+}
+
+/// 这一刻画面上该压多厚的黑（0 = 不用压，1 = 全黑）。
+///
+/// 用来把两件预览做不到的事近似掉：
+///
+/// - **空档**：没有任何画面时整块压黑，而不是把上一帧留在屏幕上；
+/// - **转场**：预览一次只解一路画面，混不出两幅画面的交叉溶解，所以在转场窗口里
+///   先淡到黑再淡回来（中点最暗）。形状与导出侧的过渡一致，看起来是一次对切溶暗。
+///
+/// 变速 / 定格片段之间的转场在导出里会退化成硬切（见 `export::plan`），这里同样
+/// 不压黑，免得预览里看到的过渡成片里没有。
+pub fn overlay_dim(sequence: &Sequence, at: Tick) -> f32 {
+    let Some(frame) = resolve(sequence, at) else {
+        return 1.0;
+    };
+    transition_dim(sequence, frame.track, frame.clip, at)
+}
+
+/// 转场窗口 `[after.start - duration, after.start)` 里的黑度。
+///
+/// 窗口整个落在**前一段**的尾巴上（导出侧的 `xfade` 也是从那里开始溶的），所以
+/// 从当前片段往后找接缝，而不是往前找：窗口里正在显示的是前一段。
+fn transition_dim(sequence: &Sequence, track: Id, clip: Id, at: Tick) -> f32 {
+    let Some(track) = sequence.track(track) else {
+        return 0.0;
+    };
+    let Some(index) = track.clip_index(clip) else {
+        return 0.0;
+    };
+    let Some(after) = track.clips.get(index + 1) else {
+        return 0.0;
+    };
+    let before = &track.clips[index];
+    if before.end() != after.start {
+        return 0.0;
+    }
+    let plain = |clip: &crate::timeline::ClipItem| {
+        (clip.rate() - 1.0).abs() < 1e-6 && clip.hold <= Tick::ZERO
+    };
+    if !plain(before) || !plain(after) {
+        return 0.0;
+    }
+    let Some(transition) = track
+        .transitions
+        .iter()
+        .find(|transition| transition.before == before.id && transition.after == after.id)
+    else {
+        return 0.0;
+    };
+    let duration = transition.duration;
+    if duration <= Tick::ZERO {
+        return 0.0;
+    }
+    let start = after.start - duration;
+    if at < start || at >= after.start {
+        return 0.0;
+    }
+    let progress = (at - start).micros() as f32 / duration.micros() as f32;
+    1.0 - (2.0 * progress - 1.0).abs()
 }
 
 /// 预览播放停在哪儿：有工作区就用出点，否则到序列总长。
@@ -185,6 +254,114 @@ mod tests {
             Some(AssetId::new(1))
         );
         assert_eq!(resolve(&sequence, s(1.5)), None);
+    }
+
+    #[test]
+    fn 倍速片段按倍率取素材时刻() {
+        let mut sequence = sequence();
+        let video = sequence.tracks[0].id;
+        put(&mut sequence, video, 1, 0.0, 2.0, 0.0);
+        // 2 倍速：时间线上的 0.5 秒对应素材的 1.0 秒，片段只占 1 秒。
+        sequence.tracks[0].clips[0].speed = 2.0;
+        assert_eq!(resolve(&sequence, s(0.5)).unwrap().source, s(1.0));
+        assert_eq!(resolve(&sequence, s(1.0)), None, "1 秒之后已经出片段");
+
+        // 0.5 倍速：时间线上的 1 秒只走到素材的 0.5 秒。
+        sequence.tracks[0].clips[0].speed = 0.5;
+        assert_eq!(resolve(&sequence, s(1.0)).unwrap().source, s(0.5));
+        assert_eq!(resolve(&sequence, s(3.9)).unwrap().source, s(1.95));
+    }
+
+    #[test]
+    fn 定格段停在最后一帧() {
+        let mut sequence = sequence();
+        let video = sequence.tracks[0].id;
+        put(&mut sequence, video, 1, 0.0, 2.0, 0.0);
+        sequence.tracks[0].clips[0].hold = s(2.0);
+
+        assert!(
+            !resolve(&sequence, s(0.5)).unwrap().frozen,
+            "运动段不是定格"
+        );
+        let frame = resolve(&sequence, s(3.0)).expect("定格段里也有画面");
+        assert_eq!(
+            frame.source,
+            s(2.0) - Tick::from_micros(1),
+            "定格是把最后一帧重复出来"
+        );
+        assert!(frame.frozen, "定格段要告诉播放器别再往下播");
+        assert_eq!(resolve(&sequence, s(4.0)), None, "定格结束后才是空档");
+    }
+
+    // -- 黑场与转场 --------------------------------------------------------
+
+    /// 两段紧挨着的片段 + 一条 1 秒的转场，返回后一段的起点。
+    fn seam(sequence: &mut Sequence) -> (Id, Id, Tick) {
+        let video = sequence.tracks[0].id;
+        let first = sequence.alloc_id();
+        sequence.track_mut(video).unwrap().clips.push(ClipItem::new(
+            first,
+            AssetId::new(1),
+            s(0.0),
+            s(2.0),
+            s(0.0),
+        ));
+        let second = sequence.alloc_id();
+        sequence.track_mut(video).unwrap().clips.push(ClipItem::new(
+            second,
+            AssetId::new(2),
+            s(1.0),
+            s(3.0),
+            s(2.0),
+        ));
+        let transition = sequence.alloc_id();
+        sequence
+            .track_mut(video)
+            .unwrap()
+            .transitions
+            .push(crate::timeline::Transition::new(
+                transition,
+                first,
+                second,
+                crate::timeline::TransitionKind::CrossDissolve,
+                s(1.0),
+            ));
+        (first, second, s(2.0))
+    }
+
+    #[test]
+    fn 空档整块压黑() {
+        let mut sequence = sequence();
+        let video = sequence.tracks[0].id;
+        put(&mut sequence, video, 1, 0.0, 1.0, 0.0);
+        assert_eq!(overlay_dim(&sequence, s(0.5)), 0.0, "有画面时不许压黑");
+        assert_eq!(overlay_dim(&sequence, s(1.5)), 1.0, "空档是黑场");
+    }
+
+    #[test]
+    fn 转场中点最暗两端透明() {
+        let mut sequence = sequence();
+        let (_, _, seam) = seam(&mut sequence);
+
+        assert_eq!(overlay_dim(&sequence, s(0.9)), 0.0, "窗口之前正常显示");
+        assert_eq!(overlay_dim(&sequence, seam - s(1.0)), 0.0, "刚进窗口全亮");
+        let middle = overlay_dim(&sequence, seam - s(0.5));
+        assert!((middle - 1.0).abs() < 1e-6, "中点全黑：{middle}");
+        let quarter = overlay_dim(&sequence, seam - s(0.75));
+        assert!((quarter - 0.5).abs() < 1e-6, "四分之一点半黑：{quarter}");
+        assert_eq!(overlay_dim(&sequence, seam), 0.0, "接缝之后是下一段画面");
+    }
+
+    #[test]
+    fn 变速片段之间的转场不演过渡() {
+        // 导出侧对变速片段退化成硬切，预览不能演一个成片里没有的过渡。
+        let mut sequence = sequence();
+        let (_, second, seam) = seam(&mut sequence);
+        let track = &mut sequence.tracks[0];
+        let index = track.clip_index(second).unwrap();
+        track.clips[index].speed = 2.0;
+
+        assert_eq!(overlay_dim(&sequence, seam - s(0.5)), 0.0);
     }
 
     // -- 播放时钟 ----------------------------------------------------------
