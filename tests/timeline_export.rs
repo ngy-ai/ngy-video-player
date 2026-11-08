@@ -28,7 +28,12 @@ fn second(n: f64) -> Tick {
 
 /// 2 秒彩条 + 1kHz 音调：够切好几个片段，也够读回时长。
 fn make_clip(dir: &Path) -> PathBuf {
-    let clip = dir.join("clip.mp4");
+    make_clip_seconds(dir, "clip.mp4", 2.0)
+}
+
+/// 指定秒数的素材。变速用例要一段够长的片子，才看得出「时长变一半」。
+fn make_clip_seconds(dir: &Path, name: &str, seconds: f64) -> PathBuf {
+    let clip = dir.join(name);
     let status = Command::new("ffmpeg")
         .args([
             "-hide_banner",
@@ -38,11 +43,11 @@ fn make_clip(dir: &Path) -> PathBuf {
             "-f",
             "lavfi",
             "-i",
-            "testsrc2=size=320x240:rate=30:duration=2",
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=1000:duration=2",
+        ])
+        .arg(format!("testsrc2=size=320x240:rate=30:duration={seconds}"))
+        .args(["-f", "lavfi", "-i"])
+        .arg(format!("sine=frequency=1000:duration={seconds}"))
+        .args([
             "-c:v",
             "libx264",
             "-pix_fmt",
@@ -232,5 +237,135 @@ fn 多轨转场与空档一起导出() {
     assert_eq!(project.sequence.duration(), second(4.0));
     let output = run_export(&dir, &project, "complex.mp4");
     assert_duration(&output, "00:00:04");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 两个时刻的画面相似度（PSNR，dB，越大越像）。
+///
+/// 不用逐字节相同来判定定格：编码器对重复帧会调整 QP / 帧类型，同一个画面解出来
+/// 能差几十分之一 dB（实测 60–80 dB），而运动中的画面只有 20 dB 上下。差异足够大，
+/// 用 50 dB 当分界既不会误判，也不会漏判。
+fn frame_psnr(output: &Path, a: &str, b: &str) -> f64 {
+    let filter = format!(
+        "[0:v]trim=start={a}:duration=0.04,setpts=PTS-STARTPTS[x];\
+         [1:v]trim=start={b}:duration=0.04,setpts=PTS-STARTPTS[y];[x][y]psnr"
+    );
+    let probe = Command::new("ffmpeg")
+        .args(["-hide_banner", "-i"])
+        .arg(output)
+        .arg("-i")
+        .arg(output)
+        .arg("-filter_complex")
+        .arg(&filter)
+        .args(["-f", "null", "-"])
+        .output()
+        .expect("比对画面");
+    let text = String::from_utf8_lossy(&probe.stderr);
+    text.split("average:")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| panic!("读不到 PSNR：\n{text}"))
+}
+
+/// 某个区间的最大音量（dB）。定格段应当接近数字静音。
+fn max_volume_db(output: &Path, from: &str, to: &str) -> f64 {
+    let filter = format!("atrim=start={from}:end={to},volumedetect");
+    let probe = Command::new("ffmpeg")
+        .args(["-hide_banner", "-i"])
+        .arg(output)
+        .args(["-vn", "-af"])
+        .arg(&filter)
+        .args(["-f", "null", "-"])
+        .output()
+        .expect("测音量");
+    let text = String::from_utf8_lossy(&probe.stderr);
+    text.split("max_volume:")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|value| match value {
+            // 纯静音时 volumedetect 给的是 `-inf`，直接 parse 会失败。
+            "-inf" => Some(f64::NEG_INFINITY),
+            value => value.parse().ok(),
+        })
+        .unwrap_or_else(|| panic!("读不到音量：\n{text}"))
+}
+
+/// M9-T09：10 秒素材 2× 导出应当正好 5 秒，音轨跟着 `atempo` 一起缩短。
+#[test]
+#[ignore = "需要本机 ffmpeg"]
+fn 变速导出时长按倍率缩短() {
+    let dir = scratch("export-speed");
+    let clip = make_clip_seconds(&dir, "long.mp4", 10.0);
+
+    let mut project = Project::new_with(SequenceSpec::new(320, 240, Rational::FPS_30));
+    let asset = project.add_asset(&clip);
+    let video = project.sequence.tracks[0].id;
+    let audio = project.sequence.tracks[1].id;
+    let picture = put(&mut project, video, asset, 0.0, 10.0, 0.0);
+    let sound = put(&mut project, audio, asset, 0.0, 10.0, 0.0);
+
+    // 画面与声音都改成 2 倍速：只改一边的话两条轨会不等长，成片被短的那条截断。
+    for id in [picture, sound] {
+        let ok = ngy_video_player::timeline::apply(
+            &project.sequence,
+            &ngy_video_player::timeline::EditOp::SetSpeed {
+                clip: id,
+                speed: 2.0,
+            },
+        )
+        .expect("变速");
+        project.sequence = ok;
+    }
+    assert_eq!(project.sequence.duration(), second(5.0), "序列自己先算对");
+
+    let output = run_export(&dir, &project, "speed.mp4");
+    assert_duration(&output, "00:00:05");
+    assert_frame_rate(&output, "30");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// M9-T09：片尾定格把最后一帧拉长，成片变长且定格段是**同一幅**画面。
+#[test]
+#[ignore = "需要本机 ffmpeg"]
+fn 片尾定格延长成片且最后一段静止() {
+    let dir = scratch("export-hold");
+    let clip = make_clip(&dir);
+
+    let mut project = Project::new();
+    project.sequence.width = 320;
+    project.sequence.height = 240;
+    let asset = project.add_asset(&clip);
+    let video = project.sequence.tracks[0].id;
+    let audio = project.sequence.tracks[1].id;
+    let picture = put(&mut project, video, asset, 0.0, 2.0, 0.0);
+    let sound = put(&mut project, audio, asset, 0.0, 2.0, 0.0);
+
+    // 定格 2 秒：画面 `tpad` 克隆最后一帧，声音 `apad` 补等长静音。
+    for id in [picture, sound] {
+        let ok = ngy_video_player::timeline::apply(
+            &project.sequence,
+            &ngy_video_player::timeline::EditOp::SetHold {
+                clip: id,
+                hold: Tick::from_secs(2.0),
+            },
+        )
+        .expect("定格");
+        project.sequence = ok;
+    }
+    assert_eq!(project.sequence.duration(), second(4.0));
+
+    let output = run_export(&dir, &project, "hold.mp4");
+    assert_duration(&output, "00:00:04");
+
+    // 定格从 2 秒开始：2.5 秒与 3.5 秒必须是同一幅画面。
+    let still = frame_psnr(&output, "2.5", "3.5");
+    assert!(still > 50.0, "定格段应当视觉静止，实测 {still:.1} dB");
+    // 对照：运动段（0.5 ↔ 0.7 秒）必须明显不同，否则上面的阈值毫无意义。
+    let moving = frame_psnr(&output, "0.5", "0.7");
+    assert!(moving < 30.0, "运动段应当明显不同，实测 {moving:.1} dB");
+    // 声音进定格段之后是 `apad` 补的静音，不能还在播原片的声音。
+    let quiet = max_volume_db(&output, "2.4", "3.9");
+    assert!(quiet < -60.0, "定格段应当静音，实测 {quiet:.1} dB");
     let _ = std::fs::remove_dir_all(&dir);
 }
