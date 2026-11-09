@@ -6,6 +6,10 @@ use std::path::{Path, PathBuf};
 use super::*;
 use crate::timeline::{AssetId, ClipItem, Id, Project, Tick, TrackKind};
 
+// 区间导出单开一个文件，见 `tests/range.rs`。
+#[path = "tests/range.rs"]
+mod range;
+
 fn s(n: i64) -> Tick {
     Tick::from_micros(n * 1_000_000)
 }

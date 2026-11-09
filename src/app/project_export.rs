@@ -15,15 +15,25 @@ impl PlayerApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        let plan = match crate::timeline::plan_sequence(project) {
+        // 有入出点就只导工作区：这是「先粗剪一遍，再只导那一段」的入口。
+        let range = project.ui.range();
+        let plan = match crate::timeline::plan_sequence_range(project, range) {
             Ok(plan) => plan,
             Err(error) => {
                 self.flash(format!("无法导出：{error}"));
                 return;
             }
         };
-        let total = project.sequence.duration();
-        let default_name = format!("{}.mp4", safe_file_stem(&project.sequence.name, "导出"));
+        let total = match range {
+            Some((start, end)) => end - start,
+            None => project.sequence.duration(),
+        };
+        let stem = safe_file_stem(&project.sequence.name, "导出");
+        let default_name = if range.is_some() {
+            format!("{stem} 工作区.mp4")
+        } else {
+            format!("{stem}.mp4")
+        };
         // 优先落在工程旁边；没有工程路径就沿用上次打开文件的目录。
         let directory = self
             .project_path
@@ -54,6 +64,13 @@ impl PlayerApp {
             let _ = this.update(cx, |this, cx| {
                 this.dialog_open = false;
                 if let Some(path) = picked {
+                    if let Some((start, end)) = range {
+                        this.flash(format!(
+                            "只导出工作区 {:.2}–{:.2} 秒",
+                            start.secs(),
+                            end.secs()
+                        ));
+                    }
                     this.enqueue_export(plan, path, total, cx);
                 }
                 cx.notify();

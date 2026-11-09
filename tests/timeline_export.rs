@@ -11,8 +11,8 @@ use std::process::Command;
 
 use ngy_video_player::export::{ExportEvent, ExportTask};
 use ngy_video_player::timeline::{
-    AssetId, ClipItem, Id, Project, Rational, SequenceSpec, Tick, TrackKind, Transition,
-    TransitionKind, plan_sequence,
+    AssetId, ClipItem, ExportPlan, Id, Project, Rational, SequenceSpec, Tick, TrackKind,
+    Transition, TransitionKind, plan_sequence, plan_sequence_range,
 };
 
 fn scratch(name: &str) -> PathBuf {
@@ -91,11 +91,15 @@ fn put(
 /// 跑完一条导出任务；失败时把 ffmpeg 的最后几行带出来。
 fn run_export(dir: &Path, project: &Project, name: &str) -> PathBuf {
     let plan = plan_sequence(project).expect("生成计划");
+    run_plan(dir, plan, name, project.sequence.duration())
+}
+
+/// 跑一条已经算好的计划。区间导出要先自己生成计划（带工作区）。
+fn run_plan(dir: &Path, plan: ExportPlan, name: &str, total: Tick) -> PathBuf {
     let output = dir.join(name);
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
-    let _task = ExportTask::start(plan, output.clone(), project.sequence.duration(), tx)
-        .expect("启动 ffmpeg");
+    let _task = ExportTask::start(plan, output.clone(), total, tx).expect("启动 ffmpeg");
 
     // 事件流会在 `Finished` / `Failed` 之后结束，直接阻塞读到第一个终态即可。
     let outcome = loop {
@@ -246,15 +250,20 @@ fn 多轨转场与空档一起导出() {
 /// 能差几十分之一 dB（实测 60–80 dB），而运动中的画面只有 20 dB 上下。差异足够大，
 /// 用 50 dB 当分界既不会误判，也不会漏判。
 fn frame_psnr(output: &Path, a: &str, b: &str) -> f64 {
+    psnr_between(output, a, output, b)
+}
+
+/// 两个文件里各取一帧比对：区间导出要确认「成片的头」对得上「素材的入点」。
+fn psnr_between(first: &Path, a: &str, second: &Path, b: &str) -> f64 {
     let filter = format!(
         "[0:v]trim=start={a}:duration=0.04,setpts=PTS-STARTPTS[x];\
          [1:v]trim=start={b}:duration=0.04,setpts=PTS-STARTPTS[y];[x][y]psnr"
     );
     let probe = Command::new("ffmpeg")
         .args(["-hide_banner", "-i"])
-        .arg(output)
+        .arg(first)
         .arg("-i")
-        .arg(output)
+        .arg(second)
         .arg("-filter_complex")
         .arg(&filter)
         .args(["-f", "null", "-"])
@@ -367,5 +376,33 @@ fn 片尾定格延长成片且最后一段静止() {
     // 声音进定格段之后是 `apad` 补的静音，不能还在播原片的声音。
     let quiet = max_volume_db(&output, "2.4", "3.9");
     assert!(quiet < -60.0, "定格段应当静音，实测 {quiet:.1} dB");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// M9-T13：有入出点时只导那一段，时长与标尺一致，画面从入点接着走。
+#[test]
+#[ignore = "需要本机 ffmpeg"]
+fn 只导出工作区那一段() {
+    let dir = scratch("export-range");
+    let clip = make_clip_seconds(&dir, "long.mp4", 10.0);
+
+    let mut project = Project::new_with(SequenceSpec::new(320, 240, Rational::FPS_30));
+    let asset = project.add_asset(&clip);
+    let video = project.sequence.tracks[0].id;
+    let audio = project.sequence.tracks[1].id;
+    put(&mut project, video, asset, 0.0, 10.0, 0.0);
+    put(&mut project, audio, asset, 0.0, 10.0, 0.0);
+
+    let (start, end) = (second(3.0), second(5.0));
+    let plan = plan_sequence_range(&project, Some((start, end))).expect("生成计划");
+    let output = run_plan(&dir, plan, "range.mp4", end - start);
+
+    assert_duration(&output, "00:00:02");
+    // 成片的 0.5 秒应当就是素材的 3.5 秒：入点对齐，而不是从头开始导。
+    let aligned = psnr_between(&output, "0.5", &clip, "3.5");
+    assert!(aligned > 35.0, "成片与入点对不上，实测 {aligned:.1} dB");
+    // 对照：成片 0.5 秒与素材 0.5 秒（另一个位置）必须明显不同，否则上面的相近毫无意义。
+    let wrong = psnr_between(&output, "0.5", &clip, "0.5");
+    assert!(wrong < 30.0, "对照帧应当不同，实测 {wrong:.1} dB");
     let _ = std::fs::remove_dir_all(&dir);
 }

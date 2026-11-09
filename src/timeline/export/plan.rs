@@ -26,6 +26,21 @@ zscale=t=bt709:m=bt709:r=tv,format=yuv420p";
 
 /// 生成整条序列的导出计划。
 pub fn plan_sequence(project: &Project) -> Result<ExportPlan, ExportError> {
+    plan_sequence_range(project, None)
+}
+
+/// 生成导出计划。`range` 有值时只导这一段（工作区入 / 出点）。
+///
+/// 做法是在拼好的成片上再切一刀，而不是逐段裁剪：滤镜图里的段、空档、转场都按
+/// 序列时间算好了，最后 `trim` / `atrim` 一次既不会漏段，也不会把转场切坏——
+/// 切点落在转场中间时就是半截转场，与「只导这一段」的直觉一致。
+///
+/// 代价是要从头解到入点：导一条长片尾部的几秒，前面那些片也得先解一遍。要优化
+/// 再改成逐段裁剪（先把 `range` 传进 `video_stream` / `audio_stream`）。
+pub fn plan_sequence_range(
+    project: &Project,
+    range: Option<(Tick, Tick)>,
+) -> Result<ExportPlan, ExportError> {
     let sequence = &project.sequence;
     if sequence.tracks.iter().all(|track| track.clips.is_empty()) {
         return Err(ExportError::Empty);
@@ -45,6 +60,18 @@ pub fn plan_sequence(project: &Project) -> Result<ExportPlan, ExportError> {
         .collect();
 
     let duration = sequence.duration();
+    // 工作区先夹到序列范围内；夹完是空的就没得导。
+    let range = match range {
+        Some((start, end)) => {
+            let start = start.clamp(Tick::ZERO, duration);
+            let end = end.clamp(Tick::ZERO, duration);
+            if end <= start {
+                return Err(ExportError::EmptyRange);
+            }
+            Some((start, end))
+        }
+        None => None,
+    };
     let mut inputs = Vec::new();
     let mut video_layers = Vec::new();
     for track in &video_tracks {
@@ -62,7 +89,7 @@ pub fn plan_sequence(project: &Project) -> Result<ExportPlan, ExportError> {
     }
 
     let mut parts: Vec<String> = Vec::new();
-    let video_label = Some("[outv]".to_string());
+    let mut video_label = Some("[outv]".to_string());
 
     // 视频：一层直接出 `[outv]`，多层自下而上叠。
     let layer_count = video_layers.len();
@@ -96,7 +123,7 @@ pub fn plan_sequence(project: &Project) -> Result<ExportPlan, ExportError> {
         }
     }
 
-    let audio_label = if audio_layers.is_empty() {
+    let mut audio_label = if audio_layers.is_empty() {
         None
     } else {
         let count = audio_layers.len();
@@ -121,6 +148,21 @@ pub fn plan_sequence(project: &Project) -> Result<ExportPlan, ExportError> {
         }
         Some("[outa]".to_string())
     };
+
+    // 只导工作区：在拼好的成片上切一刀，重新从 0 起算。
+    if let Some((start, end)) = range {
+        let (start, end) = (start.secs(), end.secs());
+        parts.push(format!(
+            "[outv]trim=start={start:.6}:end={end:.6},setpts=PTS-STARTPTS[rangev]"
+        ));
+        video_label = Some("[rangev]".to_string());
+        if let Some(label) = audio_label.take() {
+            parts.push(format!(
+                "{label}atrim=start={start:.6}:end={end:.6},asetpts=PTS-STARTPTS[rangea]"
+            ));
+            audio_label = Some("[rangea]".to_string());
+        }
+    }
 
     let mut output_args: Vec<String> = vec![
         "-c:v".into(),

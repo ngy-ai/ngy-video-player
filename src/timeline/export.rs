@@ -8,7 +8,7 @@ mod plan;
 use std::fmt;
 use std::path::PathBuf;
 
-pub use plan::plan_sequence;
+pub use plan::{plan_sequence, plan_sequence_range};
 
 /// 一条导出计划：喂给 ffmpeg 的全部素材与滤镜。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,6 +59,8 @@ pub enum ExportError {
     UnknownAsset(u64),
     /// 素材文件在打开工程时就已经找不到了。
     MissingAsset(String),
+    /// 工作区（入点 / 出点）夹到序列范围之后是空的。
+    EmptyRange,
 }
 
 impl fmt::Display for ExportError {
@@ -70,6 +72,7 @@ impl fmt::Display for ExportError {
             Self::MissingAsset(name) => {
                 write!(f, "素材「{name}」找不到了，先把它放回原处或重新链接")
             }
+            Self::EmptyRange => write!(f, "工作区是空的：入点要早于出点"),
         }
     }
 }
