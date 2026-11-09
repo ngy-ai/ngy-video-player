@@ -575,7 +575,7 @@ impl PlayerApp {
                 self.request_project_action(AfterSaveConfirm::CloseProject, cx)
             }
             BarAction::TogglePreview => self.toggle_play(cx),
-            BarAction::ExportSequence => self.export_sequence(window, cx),
+            BarAction::ExportSequence => self.open_export_dialog(window, cx),
             BarAction::Undo => self.undo_edit(cx),
             BarAction::Redo => self.redo_edit(cx),
             BarAction::SplitClip => self.split_at_playhead(cx),

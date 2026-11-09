@@ -19,7 +19,7 @@ use crate::{
     playlist::{self, DropSpot, Playlist, PlaylistSet},
     settings::{DecodeMode, OnTop, RenderMode, Rotation, Settings, VideoAspect, normalize_speed},
     timeline::{
-        AssetId, Project, Tick, UndoHistory, ViewState,
+        AssetId, ExportSettings, Project, Tick, UndoHistory, ViewState,
         autosave::{self, AutoSave},
         frame_pixels, seek_seconds, snap_to_targets, visible_frames, visible_ticks,
     },
@@ -107,6 +107,7 @@ mod constants;
 mod controls;
 mod convert;
 mod delete_track_confirm;
+mod export_dialog;
 mod export_queue;
 mod format;
 mod history;
@@ -158,6 +159,7 @@ use self::concat::ConcatDialog;
 use self::constants::*;
 use self::convert::ConvertDialog;
 use self::delete_track_confirm::DeleteTrackConfirm;
+use self::export_dialog::ExportDialog;
 use self::export_queue::QueuedExport;
 use self::format::*;
 use self::import::PlaylistImportDialog;
@@ -462,10 +464,17 @@ pub struct PlayerApp {
     timeline_audio_file: Option<PathBuf>,
     /// 是否正压着主画面自带的声音（音频轨片段优先）。
     timeline_audio_solo: bool,
+    /// 导出面板；`None` 表示没打开。
+    export_dialog: Option<ExportDialog>,
+    /// 上一次确认过的导出参数。只在本次会话里记着，不随工程存盘；
+    /// 要跨会话复用就存成预设（`render-presets.json`）。
+    export_settings: ExportSettings,
     /// 正在跑的导出任务；`None` 表示空闲。
     export_task: Option<ExportTask>,
     /// 导出进度 0..=1，仅在 `export_task` 存在时有意义。
     export_progress: Option<f32>,
+    /// 正在跑的那条用的是哪个预设；进度旁与完成提示都要说出来。
+    export_preset: Option<String>,
     /// 排队等着导出的任务。一次只跑一条，失败不阻塞后面的。
     export_queue: VecDeque<QueuedExport>,
 

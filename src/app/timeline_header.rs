@@ -162,26 +162,31 @@ impl PlayerApp {
                         "timeline-export",
                         IconName::FileDown,
                         false,
-                        "导出为视频文件",
+                        "导出为视频文件（选编码参数与预设）",
                         cx.listener(|this, _: &ClickEvent, window, cx| {
-                            this.export_sequence(window, cx);
+                            this.open_export_dialog(window, cx);
                         }),
                     ))
                     // 还在排队的条数：不然连着点几次，看不出后面还压着活。
                     .when_some(self.export_queue_note(), |this, note| this.child(note))
                     // 导出跑起来之后原地显示进度与取消，不另开一个面板。
                     .when_some(self.export_progress, |this, progress| {
-                        this.child(format!("导出 {:.0}%", progress * 100.0)).child(
-                            ui::icon_toggle_small(
-                                "timeline-export-cancel",
-                                IconName::X,
-                                false,
-                                "取消导出",
-                                cx.listener(|this, _: &ClickEvent, _window, cx| {
-                                    this.cancel_export(cx);
-                                }),
-                            ),
-                        )
+                        // 连着导几条时，进度旁边得说清楚跑的是哪个预设。
+                        let text = match self.export_preset.as_deref() {
+                            Some(preset) => {
+                                format!("导出 {:.0}% · {preset}", progress * 100.0)
+                            }
+                            None => format!("导出 {:.0}%", progress * 100.0),
+                        };
+                        this.child(text).child(ui::icon_toggle_small(
+                            "timeline-export-cancel",
+                            IconName::X,
+                            false,
+                            "取消导出",
+                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                this.cancel_export(cx);
+                            }),
+                        ))
                     })
                     // 工作区读数：只有一端时也要说出来。单边入点 / 出点在标尺上
                     // 只是一条线，不给读数的话用户会以为快捷键没生效。

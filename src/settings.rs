@@ -500,6 +500,12 @@ pub fn presets_path() -> Option<PathBuf> {
     config_path().map(|path| path.with_file_name("presets.json"))
 }
 
+/// 序列导出预设的位置。名字带 `render-` 前缀：它和裁切面板的 `presets.json`
+/// 描述的是两件事（整条序列的编码参数 vs 单文件裁切的输出参数），不能互相覆盖。
+pub fn render_presets_path() -> Option<PathBuf> {
+    config_path().map(|path| path.with_file_name("render-presets.json"))
+}
+
 impl Serialize for LoopMode {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(match self {

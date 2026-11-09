@@ -4,11 +4,15 @@
 //! 后续任务。第一版只处理「一条视频轨 + 一条音频轨」，多轨叠加与转场在后面加。
 
 mod plan;
+mod presets;
+mod settings;
 
 use std::fmt;
 use std::path::PathBuf;
 
-pub use plan::{plan_sequence, plan_sequence_range};
+pub use plan::{plan_sequence, plan_sequence_range, plan_sequence_with};
+pub use presets::{PRESET_NAME_CHARS, RenderPreset, RenderPresetStore, normalize_name};
+pub use settings::{EncodeSpeed, ExportSettings, Quality, VideoCodec};
 
 /// 一条导出计划：喂给 ffmpeg 的全部素材与滤镜。
 #[derive(Clone, Debug, PartialEq, Eq)]

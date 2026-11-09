@@ -1,5 +1,6 @@
-//! 导出时间线到视频文件：计划校验、另存为对话框、后台任务与进度。
+//! 导出时间线到视频文件：另存为对话框、后台任务与进度。
 //!
+//! 参数与预设先由 [`PlayerApp::open_export_dialog`] 收齐，这里从「选文件名」开始：
 //! 计划先生成再弹对话框：素材缺失、没有启用的视频轨这类问题，不该等用户选完
 //! 路径才告诉他。
 
@@ -7,17 +8,32 @@ use std::path::{Path, PathBuf};
 
 use super::project_file::{file_name, safe_file_stem};
 use super::*;
+use crate::timeline::{ExportSettings, Tick};
 
 impl PlayerApp {
-    /// 标题条上的导出按钮。
-    pub(super) fn export_sequence(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // 任务跑着的时候照样能点：新的一次排到队尾（见 `app/export_queue.rs`）。
+    /// 选文件名并把这次导出排进队列。
+    ///
+    /// `settings` 是面板上确认过的编码参数；`preset` 是它与哪份预设完全一致，
+    /// 队列项与进度提示会把它显示出来（改了参数就是 `None`，即「自定义」）。
+    pub(super) fn pick_export_path(
+        &mut self,
+        settings: ExportSettings,
+        preset: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // 原生选择框一次只开一个：连按 O / 连点导出不会叠出多个。
+        if self.dialog_open {
+            self.flash("已经有一个文件选择框开着，先把它处理掉");
+            cx.notify();
+            return;
+        }
         let Some(project) = self.project.as_ref() else {
             return;
         };
         // 有入出点就只导工作区：这是「先粗剪一遍，再只导那一段」的入口。
         let range = project.ui.range();
-        let plan = match crate::timeline::plan_sequence_range(project, range) {
+        let plan = match crate::timeline::plan_sequence_with(project, range, &settings) {
             Ok(plan) => plan,
             Err(error) => {
                 self.flash(format!("无法导出：{error}"));
@@ -41,9 +57,6 @@ impl PlayerApp {
             .and_then(|path| path.parent().map(Path::to_path_buf))
             .or_else(|| self.settings.last_dir.clone());
 
-        if self.dialog_open {
-            return;
-        }
         self.dialog_open = true;
 
         let mut picker = rfd::FileDialog::new()
@@ -71,7 +84,7 @@ impl PlayerApp {
                             end.secs()
                         ));
                     }
-                    this.enqueue_export(plan, path, total, cx);
+                    this.enqueue_export(plan, path, total, preset, cx);
                 }
                 cx.notify();
             });
@@ -91,6 +104,7 @@ impl PlayerApp {
         self.export_queue.clear();
         self.export_task = None;
         self.export_progress = None;
+        self.export_preset = None;
         self.flash(if queued == 0 {
             "正在取消导出…".to_string()
         } else {
@@ -103,7 +117,8 @@ impl PlayerApp {
         &mut self,
         plan: crate::timeline::ExportPlan,
         path: PathBuf,
-        total: crate::timeline::Tick,
+        total: Tick,
+        preset: Option<String>,
         cx: &mut Context<Self>,
     ) {
         let (tx, rx) = futures::channel::mpsc::unbounded();
@@ -111,6 +126,7 @@ impl PlayerApp {
             Ok(task) => {
                 self.export_task = Some(task);
                 self.export_progress = Some(0.0);
+                self.export_preset = preset;
                 cx.spawn(async move |this, cx| {
                     let mut rx = rx;
                     while let Some(event) = rx.next().await {
@@ -134,19 +150,25 @@ impl PlayerApp {
             ExportEvent::Finished(path) => {
                 self.export_task = None;
                 self.export_progress = None;
-                self.flash(format!("已导出「{}」", file_name(&path)));
+                let name = file_name(&path);
+                match self.export_preset.take() {
+                    Some(preset) => self.flash(format!("已导出「{name}」（预设「{preset}」）")),
+                    None => self.flash(format!("已导出「{name}」")),
+                }
                 self.start_next_export(cx);
             }
             ExportEvent::Failed(message) => {
                 // 一条失败不阻塞后面：横幅留着说明原因，队列继续。
                 self.export_task = None;
                 self.export_progress = None;
+                self.export_preset = None;
                 self.error = Some(Banner::new("导出失败", message));
                 self.start_next_export(cx);
             }
             ExportEvent::Cancelled => {
                 self.export_task = None;
                 self.export_progress = None;
+                self.export_preset = None;
                 self.flash("已取消导出");
             }
         }

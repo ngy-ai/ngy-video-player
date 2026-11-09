@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use crate::timeline::{AssetId, Project, Sequence, Tick, Track, TrackKind};
 
-use super::{ExportError, ExportPlan};
+use super::{ExportError, ExportPlan, ExportSettings};
 
 /// 音频统一到 48kHz 立体声。导出链里混采样率是最常见的「声音变调」来源。
 const AUDIO_RATE: u32 = 48_000;
@@ -24,9 +24,17 @@ const HDR_TO_SDR: &str = "zscale=t=linear:npl=100,format=gbrpf32le,\
 zscale=p=bt709,tonemap=hable:desat=0,\
 zscale=t=bt709:m=bt709:r=tv,format=yuv420p";
 
-/// 生成整条序列的导出计划。
+/// 生成整条序列的导出计划（默认编码参数）。
 pub fn plan_sequence(project: &Project) -> Result<ExportPlan, ExportError> {
-    plan_sequence_range(project, None)
+    plan_sequence_with(project, None, &ExportSettings::default())
+}
+
+/// 生成整条序列的导出计划，编码参数走一套自定义设置。
+pub fn plan_sequence_range(
+    project: &Project,
+    range: Option<(Tick, Tick)>,
+) -> Result<ExportPlan, ExportError> {
+    plan_sequence_with(project, range, &ExportSettings::default())
 }
 
 /// 生成导出计划。`range` 有值时只导这一段（工作区入 / 出点）。
@@ -37,9 +45,13 @@ pub fn plan_sequence(project: &Project) -> Result<ExportPlan, ExportError> {
 ///
 /// 代价是要从头解到入点：导一条长片尾部的几秒，前面那些片也得先解一遍。要优化
 /// 再改成逐段裁剪（先把 `range` 传进 `video_stream` / `audio_stream`）。
-pub fn plan_sequence_range(
+///
+/// 编码参数只影响 `output_args`：滤镜图与输入列表与设置无关，所以自定义设置不会
+/// 改变成片的内容（画质与体积除外）。
+pub fn plan_sequence_with(
     project: &Project,
     range: Option<(Tick, Tick)>,
+    settings: &ExportSettings,
 ) -> Result<ExportPlan, ExportError> {
     let sequence = &project.sequence;
     if sequence.tracks.iter().all(|track| track.clips.is_empty()) {
@@ -164,22 +176,7 @@ pub fn plan_sequence_range(
         }
     }
 
-    let mut output_args: Vec<String> = vec![
-        "-c:v".into(),
-        "libx264".into(),
-        "-preset".into(),
-        "medium".into(),
-        "-crf".into(),
-        "18".into(),
-        "-pix_fmt".into(),
-        "yuv420p".into(),
-    ];
-    if audio_label.is_some() {
-        output_args.extend(["-c:a".into(), "aac".into(), "-b:a".into(), "192k".into()]);
-    } else {
-        output_args.push("-an".into());
-    }
-    output_args.extend(["-movflags".into(), "+faststart".into()]);
+    let output_args = settings.output_args(audio_label.is_some());
 
     Ok(ExportPlan {
         inputs,
