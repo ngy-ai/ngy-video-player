@@ -11,6 +11,8 @@ pub(crate) mod frame;
 pub mod probe;
 // 进度条悬停预览（独立的第二个 mpv 实例）。
 pub(crate) mod thumbnail;
+// 时间线预览里音频轨上的片段：同样是独立的纯音频实例。
+pub(crate) mod audio_preview;
 
 pub use engine::{
     Chapter, Command, EndReason, Engine, EngineOptions, LoopMode, PlayerEvent, Snapshot, Track,

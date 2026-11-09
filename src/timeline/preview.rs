@@ -66,6 +66,41 @@ pub fn resolve(sequence: &Sequence, at: Tick) -> Option<PreviewFrame> {
     })
 }
 
+/// 序列某一时刻该放的声音。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreviewAudio {
+    /// 该放哪段素材。
+    pub asset: AssetId,
+    /// 素材内部的时刻。
+    pub source: Tick,
+    /// 来自哪条轨（调试与界面提示用）。
+    pub track: Id,
+    /// 来自哪个片段。
+    pub clip: Id,
+}
+
+/// 播放头在 `at` 时音频轨上该放哪个片段的哪一刻。`None` 表示没有音频片段。
+///
+/// 多条音频轨同时有内容时取轨道列表里靠上的那条：预览一次只能放一路声音（导出才
+/// 用 `amix` 混），挑「先看到的那条」至少是可预期的，界面上也看得见是哪条在响。
+pub fn resolve_audio(sequence: &Sequence, at: Tick) -> Option<PreviewAudio> {
+    sequence
+        .tracks
+        .iter()
+        .filter(|track| track.kind == TrackKind::Audio && !track.muted)
+        .find_map(|track| {
+            track.clips.iter().find_map(|clip| {
+                let source = clip.source_at(at)?;
+                Some(PreviewAudio {
+                    asset: clip.asset_id,
+                    source,
+                    track: track.id,
+                    clip: clip.id,
+                })
+            })
+        })
+}
+
 /// 这一刻画面上该压多厚的黑（0 = 不用压，1 = 全黑）。
 ///
 /// 用来把两件预览做不到的事近似掉：
@@ -291,6 +326,57 @@ mod tests {
         );
         assert!(frame.frozen, "定格段要告诉播放器别再往下播");
         assert_eq!(resolve(&sequence, s(4.0)), None, "定格结束后才是空档");
+    }
+
+    // -- 音频轨 ------------------------------------------------------------
+
+    #[test]
+    fn 音频轨片段按时刻取素材() {
+        let mut sequence = sequence();
+        let audio = sequence.tracks[1].id;
+        put(&mut sequence, audio, 7, 1.0, 3.0, 2.0);
+
+        assert_eq!(resolve_audio(&sequence, s(1.0)), None, "片段之前没有声音");
+        let frame = resolve_audio(&sequence, s(2.5)).expect("片段之内有声");
+        assert_eq!(frame.asset, AssetId::new(7));
+        assert_eq!(frame.source, s(1.5), "素材 1 秒处的片段，2.5 秒对应 1.5 秒");
+        assert_eq!(resolve_audio(&sequence, s(4.0)), None, "片段之后没有声音");
+    }
+
+    #[test]
+    fn 音频轨片段也认倍率() {
+        let mut sequence = sequence();
+        let audio = sequence.tracks[1].id;
+        put(&mut sequence, audio, 7, 0.0, 4.0, 0.0);
+        sequence.tracks[1].clips[0].speed = 2.0;
+
+        assert_eq!(resolve_audio(&sequence, s(0.5)).unwrap().source, s(1.0));
+        assert_eq!(resolve_audio(&sequence, s(2.0)), None, "2 倍速只占 2 秒");
+    }
+
+    #[test]
+    fn 静音的音频轨不出声() {
+        let mut sequence = sequence();
+        let audio = sequence.tracks[1].id;
+        put(&mut sequence, audio, 7, 0.0, 2.0, 0.0);
+        sequence.track_mut(audio).unwrap().muted = true;
+
+        assert_eq!(resolve_audio(&sequence, s(0.5)), None);
+    }
+
+    #[test]
+    fn 多条音频轨取靠上的那条() {
+        let mut sequence = sequence();
+        let first = sequence.tracks[1].id;
+        let second = sequence.add_track(TrackKind::Audio);
+        put(&mut sequence, first, 1, 0.0, 2.0, 0.0);
+        put(&mut sequence, second, 2, 0.0, 2.0, 0.0);
+
+        assert_eq!(
+            resolve_audio(&sequence, s(0.5)).unwrap().asset,
+            AssetId::new(1),
+            "预览一次只放一路声音，取列表靠上的"
+        );
     }
 
     // -- 黑场与转场 --------------------------------------------------------

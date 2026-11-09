@@ -456,6 +456,12 @@ pub struct PlayerApp {
     timeline_loaded_at: Option<Instant>,
     /// 播放时钟的代数。每次开始播放加一，旧的那条循环看到代数变了就自己退出。
     timeline_clock: u64,
+    /// 音频轨预览的第二个 mpv 实例。第一次真的有音频片段时才创建。
+    timeline_audio: Option<crate::player::audio_preview::AudioPreview>,
+    /// 音频实例里已经装着哪个文件；`None` 表示没装。
+    timeline_audio_file: Option<PathBuf>,
+    /// 是否正压着主画面自带的声音（音频轨片段优先）。
+    timeline_audio_solo: bool,
     /// 正在跑的导出任务；`None` 表示空闲。
     export_task: Option<ExportTask>,
     /// 导出进度 0..=1，仅在 `export_task` 存在时有意义。

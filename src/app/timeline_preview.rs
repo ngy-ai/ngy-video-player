@@ -45,6 +45,8 @@ impl PlayerApp {
     /// 返回这一刻有没有画面：空档、素材缺失时是 `false`。没有画面时什么命令都不发，
     /// 让 mpv 留着上一帧——突然黑屏比停在上一帧更像「这里什么都没有」。
     fn preview_frame(&mut self, at: Tick, playing: bool) -> bool {
+        // 声音和画面各走一路实例：音频轨上有片段时，这里也要跟着对位。
+        self.sync_timeline_audio(at, playing, false);
         let Some(project) = self.project.as_ref() else {
             return false;
         };
@@ -132,6 +134,10 @@ impl PlayerApp {
         if self.timeline_preview.is_some() {
             self.send(Command::SetPaused(true));
         }
+        // 音频轨那一路是独立实例，主画面暂停管不到它。
+        if let Some(player) = self.timeline_audio.as_ref() {
+            player.pause();
+        }
         cx.notify();
     }
 
@@ -194,6 +200,8 @@ impl PlayerApp {
     /// 每个节拍都 seek 一次是最省事的写法，但 mpv 每次精确 seek 都要重新解码，
     /// 声音会一直打嗝。正常播放时它自己就在正确的速度上走，没有必要纠正。
     fn preview_follow(&mut self, at: Tick) {
+        // 播放中的声音跟随：只在换进程内的片段时动手，不逐节拍 seek。
+        self.sync_timeline_audio(at, true, true);
         let Some(project) = self.project.as_ref() else {
             return;
         };
@@ -247,6 +255,98 @@ impl PlayerApp {
         if preview::out_of_sync(frame.source, self.snapshot.position) {
             self.send(Command::SeekAbsolute(source));
             self.timeline_loaded_at = Some(Instant::now());
+        }
+    }
+
+    /// 让音频轨上的片段出声。
+    ///
+    /// 预览一次只放一路声音：音频轨上有内容时就把主画面自带的声音压住，否则两路叠在
+    /// 一起（原声 + 音乐各走各的）比没有音乐更难受。走出音频片段再还回去。
+    ///
+    /// `follow` 为真表示这是播放中的常规节拍：只在换片段时动手——同一个文件每个节拍
+    /// 都下命令，会让它一直重新 seek，听着就是不停打嗝。
+    fn sync_timeline_audio(&mut self, at: Tick, playing: bool, follow: bool) {
+        let target = self.project.as_ref().and_then(|project| {
+            let frame = preview::resolve_audio(&project.sequence, at)?;
+            let path = project.asset_path(frame.asset)?.to_path_buf();
+            Some((path, frame.source.secs()))
+        });
+        // 全局静音时音频轨也不该漏声，交给下面的「安静」分支处理。
+        if self.settings.muted {
+            self.silence_timeline_audio();
+            return;
+        }
+        let Some((path, source)) = target else {
+            self.silence_timeline_audio();
+            return;
+        };
+
+        if self.timeline_audio.is_none() {
+            let Some(engine) = self.engine.as_ref() else {
+                return;
+            };
+            let api = std::sync::Arc::clone(engine.api());
+            match crate::player::audio_preview::AudioPreview::spawn(api) {
+                Ok(player) => {
+                    player.set_volume(self.settings.volume);
+                    player.set_speed(self.snapshot.speed);
+                    self.timeline_audio = Some(player);
+                }
+                Err(error) => {
+                    // 起不来就当没有这一路声音，主画面照旧。
+                    log_warn!("音频轨预览不可用: {error:#}");
+                    return;
+                }
+            }
+        }
+
+        let switched = self.timeline_audio_file.as_deref() != Some(path.as_path());
+        if follow && !switched {
+            return;
+        }
+        // 音频轨优先：压住主画面的自有声音。
+        if !self.timeline_audio_solo {
+            self.timeline_audio_solo = true;
+            self.send(Command::SetMuted(true));
+        }
+        let Some(player) = self.timeline_audio.as_ref() else {
+            return;
+        };
+        player.set_volume(self.settings.volume);
+        player.set_speed(self.snapshot.speed);
+        self.timeline_audio_file = Some(path.clone());
+        player.play(&path, source, playing);
+    }
+
+    /// 这一刻没有音频片段：停住音频实例，把主画面的声音还回去。
+    ///
+    /// 重复调用是安全的（播放中每个节拍都会走一遍空档），这里先看有没有事可做，
+    /// 免得每 33 毫秒往通道里塞一条 `Pause`。
+    fn silence_timeline_audio(&mut self) {
+        let idle = self.timeline_audio_file.is_none() && !self.timeline_audio_solo;
+        if idle {
+            return;
+        }
+        if let Some(player) = self.timeline_audio.as_ref() {
+            player.pause();
+        }
+        // 清掉标记：下次再走进同一个片段时要重新对位，不能因为「文件没换」而跳过。
+        self.timeline_audio_file = None;
+        if self.timeline_audio_solo {
+            self.timeline_audio_solo = false;
+            self.send(Command::SetMuted(self.settings.muted));
+        }
+    }
+
+    /// 工程关掉 / 换工程：音频实例卸载文件，别在后台抱着上一个工程的素材。
+    pub(super) fn stop_timeline_audio(&mut self) {
+        if let Some(player) = self.timeline_audio.as_ref() {
+            player.stop();
+        }
+        self.timeline_audio_file = None;
+        if self.timeline_audio_solo {
+            self.timeline_audio_solo = false;
+            self.send(Command::SetMuted(self.settings.muted));
         }
     }
 
