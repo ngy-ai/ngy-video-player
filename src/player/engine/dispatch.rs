@@ -30,6 +30,22 @@ impl PendingStart {
         self.target = None;
     }
 
+    /// 收到 `END_FILE` 时的处理。
+    ///
+    /// `loadfile replace` 会先给被替换掉的旧文件发一条 `reason = STOP` 的
+    /// `END_FILE`，新的 `FILE_LOADED` 还在后面。这条事件不属于新文件，把刚登记
+    /// 的起点清掉会同时坏两件事：起点的延时 seek 永远不会发生（画面从 0 开始），
+    /// 加载窗口内的 `SeekAbsolute` 也不再被接管，直接落到尚未打开文件的 mpv 上，
+    /// 日志里就是 `seek ... absolute exact` 失败。
+    ///
+    /// 真正的加载失败走 `reason = ERROR`，那条必须清（失败不会有 `FILE_LOADED`）。
+    pub(super) fn end_file(&mut self, reason: i32) {
+        if reason == ffi::end_file::STOP {
+            return;
+        }
+        self.reset();
+    }
+
     /// `loadfile` 成功后才登记起点，避免载入失败留下脏值。
     pub(super) fn begin(&mut self, start: Option<f64>) {
         self.loading = true;
@@ -99,7 +115,12 @@ pub(super) fn dispatch(
                     state.chapters.clear();
                 }
                 shared.reset_frame();
-                api.run_command(handle, &["loadfile", &url, "replace"])?;
+                // 命令都没排上就别登记加载窗口：新文件不会起来，标志挂着会让
+                // 之后所有 seek 被当成「还在加载」吞掉，画面彻底不动。
+                if let Err(error) = api.run_command(handle, &["loadfile", &url, "replace"]) {
+                    pending_start.reset();
+                    return Err(error);
+                }
                 // 起点等 `FILE_LOADED` 再 seek，理由见 [`PendingStart`]。
                 pending_start.begin(start);
                 // 必须用命令、不能用 `set_property`：
@@ -142,7 +163,12 @@ pub(super) fn dispatch(
                 }
                 // 引擎空闲（还没打开文件，或刚 Stop）：没有可跳的片子。这不是
                 // 用户的错，也不该每拖一下就在日志里刷一条「命令执行失败」。
-                if shared.state().path.is_none() {
+                // `idle` 单独判断是因为加载失败后 `path` 的快照可能还慢半拍。
+                let idle = {
+                    let state = shared.state();
+                    state.path.is_none() || state.idle
+                };
+                if idle {
                     return Ok(());
                 }
                 let ended = api.property_flag(handle, "eof-reached").unwrap_or(false);
@@ -280,8 +306,20 @@ mod tests {
     fn 加载失败后不再吞掉后续的seek() {
         let mut pending = PendingStart::default();
         pending.begin(None);
-        // 加载失败只会来 `END_FILE`，不会来 `FILE_LOADED`。
-        pending.reset();
+        // 加载失败只会来一条 reason = ERROR 的 `END_FILE`，不会来 `FILE_LOADED`。
+        pending.end_file(ffi::end_file::ERROR);
         assert!(!pending.defer(2.0));
+    }
+
+    #[test]
+    fn 换片时旧文件的end_file不能清掉新起点() {
+        let mut pending = PendingStart::default();
+        pending.begin(Some(8.0));
+
+        // `loadfile replace` 先给旧文件发 STOP，随后才是新文件的 `FILE_LOADED`。
+        pending.end_file(ffi::end_file::STOP);
+        assert!(pending.is_loading(), "换片窗口还没结束，起点必须留着");
+        assert!(pending.defer(9.5), "加载窗口内的 seek 仍要被接管");
+        assert_eq!(pending.take_loaded(), Some(9.5));
     }
 }

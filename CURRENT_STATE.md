@@ -12,11 +12,16 @@ M9-T09 变速与定格已完成（模型 / 导出 / 界面 / 端到端核对都�
 M9-T13 做了**区间导出**：有入出点时只导工作区（`plan_sequence_range`，成片上再切一刀），
 导出按钮、默认文件名与进度分母都跟着工作区走；**预设还没做**（`render-presets.json`）。
 进度：M9-T12 功能齐了（音频那一路还没听过），M9-T13 差预设那一半。
+另外修了换片窗口里的一个时序 bug：`loadfile replace` 触发的 `END_FILE(STOP)` 会把刚登记的
+起点一起清掉，导致换素材后画面停在 0 秒、且日志刷 `seek ... absolute exact` 失败。
 
 ## 已验证
 
-- `cargo test` 全绿（lib 485 通过、5 条 ignored；`cargo fmt`、`cargo clippy --all-targets`
+- `cargo test` 全绿（lib 486 通过、5 条 ignored；`cargo fmt`、`cargo clippy --all-targets`
   无告警）。
+- 单测 `player::engine::dispatch` 4 条：起点只在 `FILE_LOADED` 消费一次且 `Command::Stop`
+  时作废、加载窗口里的连续拖动只留最后一个目标、`END_FILE(ERROR)` 之后不再吞 seek、
+  **换片的 `END_FILE(STOP)` 不清起点且窗口内的 seek 继续被接管**。
 - 单测 `timeline::export::tests::range` 5 条：只导工作区（`[outv]trim=3–5` 并改标签）、
   音频 `atrim` 一起切并重新起算、范围超出序列夹到结尾、空 / 反向工作区报 `EmptyRange`、
   没有工作区时与整条导出逐字段相等。
@@ -77,12 +82,19 @@ M9-T13 做了**区间导出**：有入出点时只导工作区（`plan_sequence_
 - 关键帧没有产物核对：跑一次 5 秒推近的导出，逐秒抽帧确认画面确实在放大
   （TODO 里这条 `#[ignore]` 端到端测试还没写）。
 - 效果与转场、三点编辑的遗留项照旧（面板 chip 点击、`ffprobe` 时长核对、`D.wav` 等）。
+- **换片起点修复没在窗口里复现验证**：`END_FILE(STOP)` 不再清 `PendingStart` 只有单测；
+  「切到另一个素材后画面停在播放头位置」这条要看真实窗口（关键帧面板、播放头、素材库）确认。
 - macOS / Ubuntu 未复验。
 
 ## 本轮踩到的坑
 
 - 强杀实例后工程目录里留下 `.ngyproj.autosave`，下次启动会弹「发现自动保存」模态框，
   把后续的点击全部吃掉。跑 UI 自动化前先把它删掉，否则现象是「点哪儿都没反应」。
+- `loadfile replace` 换片时 mpv **先给被替换的旧文件发一条 `END_FILE(reason=STOP)`**，
+  再发新文件的 `FILE_LOADED`。原来在 `END_FILE` 里一律清空 `PendingStart`，于是起点
+  跟着丢了，加载窗口内的 `SeekAbsolute` 也不再被接管，直接落到还没打开文件的 mpv 上，
+  日志里就是一串 `seek ... absolute exact` 失败。现在只有 `reason != STOP` 才清，
+  并用 `idle-active` 变真兜底（`loadfile` 失败不会来 `FILE_LOADED`）。
 - **逐字节 md5 不能当「画面是否静止」的判据**：x264 对重复帧会换 QP / 帧类型，同一幅
   画面解出来带一点点量化噪声（实测 PSNR 67 dB，肉眼完全一致），但 md5 每次都不同。
   判定定格要用 PSNR 阈值（静止 > 50 dB、运动 < 30 dB），别用哈希相等。

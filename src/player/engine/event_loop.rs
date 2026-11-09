@@ -93,6 +93,12 @@ pub(super) fn event_loop(
                         let mut state = shared.state();
                         apply_property(&mut state, &change, &mut dirty);
                         drop(state);
+                        // 引擎真空下来了（既没有文件、也没有在加载的新文件）：
+                        // 这是 `loadfile` 失败后唯一可靠的收尾信号——那种情况不会来
+                        // `FILE_LOADED`，标志一直挂着会让之后所有 seek 都被吞掉。
+                        if change.id == 7 && flag(&change) {
+                            pending_start.reset();
+                        }
                         if dirty {
                             // 进度更新很频繁，但界面本来就要为每一帧重绘；
                             // 只在暂停/空闲等场景才需要额外节流。
@@ -122,14 +128,11 @@ pub(super) fn event_loop(
                     shared.confirm_video();
                 }
                 event::END_FILE => {
-                    // 加载失败时不会有 `FILE_LOADED`，不清掉的话这个标志会一直
-                    // 挂着，之后所有 seek 都被当成「还在加载」吞掉。
-                    pending_start.reset();
-                    let reason = if event.data.is_null() {
-                        EndReason::Eof
+                    let (code, reason) = if event.data.is_null() {
+                        (ffi::end_file::EOF, EndReason::Eof)
                     } else {
                         let data = &*(event.data as *const MpvEventEndFile);
-                        match data.reason {
+                        let reason = match data.reason {
                             ffi::end_file::EOF => EndReason::Eof,
                             ffi::end_file::STOP => EndReason::Stopped,
                             ffi::end_file::QUIT => EndReason::Quit,
@@ -143,8 +146,12 @@ pub(super) fn event_loop(
                                 EndReason::Error
                             }
                             _ => EndReason::Eof,
-                        }
+                        };
+                        (data.reason, reason)
                     };
+                    // 换片时这条 STOP 属于被替换的旧文件，起点要留给新文件；
+                    // 加载失败的 ERROR 才需要清（不会有 `FILE_LOADED` 来接管）。
+                    pending_start.end_file(code);
                     shared.notify(PlayerEvent::Ended(reason));
                     shared.notify(PlayerEvent::Dirty);
                 }
