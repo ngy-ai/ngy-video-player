@@ -13,7 +13,7 @@
 //! 素材长度不在这里校验：片段只知道 `AssetId`，素材时长要等 M1-T07 登记进工程。
 //! 这里只保证「素材入点不为负、时长为正、同轨不重叠」这三件模型能自己判断的事。
 
-use crate::timeline::{AssetId, ClipItem, Id, Sequence, Tick};
+use crate::timeline::{AssetId, ClipItem, ColorGrade, Id, Sequence, Tick};
 use std::collections::HashSet;
 use std::fmt;
 
@@ -90,6 +90,9 @@ pub enum EditOp {
     SetSpeed { clip: Id, speed: f32 },
     /// 片尾定格：最后一帧多停 `hold`，`Tick::ZERO` 表示取消。
     SetHold { clip: Id, hold: Tick },
+    /// 改调色。整套参数一起换：面板每次改动都是一份完整的 `ColorGrade`，
+    /// 单个字段的增删在界面层算好，落一步撤销。
+    SetColor { clip: Id, color: ColorGrade },
     /// 删掉整条轨道，连同它上面的片段与转场。锁定的轨道要先解锁。
     RemoveTrack { track: Id },
 }
@@ -168,6 +171,7 @@ pub fn apply(sequence: &Sequence, op: &EditOp) -> Result<Sequence, EditError> {
         EditOp::Roll { clip, by } => roll(&mut next, *clip, *by)?,
         EditOp::SetSpeed { clip, speed } => set_speed(&mut next, *clip, *speed)?,
         EditOp::SetHold { clip, hold } => set_hold(&mut next, *clip, *hold)?,
+        EditOp::SetColor { clip, color } => set_color(&mut next, *clip, color)?,
         EditOp::RemoveTrack { track } => remove_track(&mut next, *track)?,
     }
     Ok(next)
@@ -710,6 +714,13 @@ fn set_hold(sequence: &mut Sequence, clip_id: Id, hold: Tick) -> Result<(), Edit
     }
     locate(sequence, clip_id)?;
     crate::timeline::set_hold(sequence, clip_id, hold);
+    Ok(())
+}
+
+/// 改调色。值没变时序列与原样相等，界面据此不落撤销。
+fn set_color(sequence: &mut Sequence, clip_id: Id, color: &ColorGrade) -> Result<(), EditError> {
+    let (track, index) = locate(sequence, clip_id)?;
+    sequence.tracks[track].clips[index].color = color.clone();
     Ok(())
 }
 

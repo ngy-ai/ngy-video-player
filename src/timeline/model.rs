@@ -102,6 +102,8 @@ pub struct ClipItem {
     pub effects: Vec<crate::timeline::Effect>,
     /// 关键帧：缩放 / 位置 / 不透明度随时间变化的曲线（见 [`crate::timeline::keyframe`]）。
     pub keys: crate::timeline::Keyframes,
+    /// 调色：亮度 / 对比度 / 饱和度 / 色温与 3D LUT（见 [`crate::timeline::color`]）。
+    pub color: crate::timeline::ColorGrade,
 }
 
 impl ClipItem {
@@ -123,6 +125,7 @@ impl ClipItem {
             name: String::new(),
             effects: Vec::new(),
             keys: crate::timeline::Keyframes::default(),
+            color: crate::timeline::ColorGrade::default(),
         }
     }
 

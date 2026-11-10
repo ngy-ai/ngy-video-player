@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use super::*;
 use crate::timeline::{AssetId, ClipItem, Id, Project, Tick, TrackKind};
 
-// 区间导出单开一个文件，见 `tests/range.rs`。
+// 区间导出单开一个文件，见 `tests/range.rs`；调色的链顺序见 `tests/color.rs`。
+#[path = "tests/color.rs"]
+mod color;
 #[path = "tests/range.rs"]
 mod range;
 

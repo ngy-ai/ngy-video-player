@@ -738,3 +738,7 @@ mod placement;
 // 变速与定格走 `EditOp` 之后的前置校验，见 `tests/speed.rs`。
 #[path = "tests/speed.rs"]
 mod speed;
+
+// 调色走 `EditOp` 之后的前置校验，见 `tests/color.rs`。
+#[path = "tests/color.rs"]
+mod color;

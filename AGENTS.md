@@ -110,6 +110,8 @@ src/timeline/three_point.rs  三点编辑的时间换算：源入点 + 源出点
 src/timeline/transition.rs  转场编辑：两侧余量、加 / 改 / 去，时长按余量预钳（导出侧再兜底）
 src/timeline/effect.rs  片段效果栈：去隔行 / 降噪 / 锐化 / 防抖 / 插帧 / 水印的滤镜与增删改
 src/timeline/keyframe.rs  片段关键帧：缩放 / 位置 / 不透明度的曲线、求值与 ffmpeg 表达式
+src/timeline/color.rs  片段调色：亮度 / 对比度 / 饱和度 / 色温与 3D LUT 的滤镜映射
+src/timeline/export.rs  序列导出：`ExportPlan`、`ExportSettings` 与 `render-presets.json` 预设
 src/timeline/undo.rs    撤销 / 重做：状态快照栈，一次操作一步，上限 200 步
 src/timeline/autosave.rs  自动保存（30 秒无操作）与 `.autosave` 崩溃恢复
 src/timeline/view.rs    时间线视图状态：缩放（1 像素 = 1 帧 ~ 10 秒）、滚动、标尺换挡

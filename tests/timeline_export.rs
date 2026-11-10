@@ -379,6 +379,107 @@ fn 片尾定格延长成片且最后一段静止() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 某一时刻画面的平均亮度（`signalstats` 的 `YAVG`，0–255）。
+fn average_luma(output: &Path, at: &str) -> f64 {
+    let probe = Command::new("ffmpeg")
+        .args(["-hide_banner", "-ss", at, "-i"])
+        .arg(output)
+        .args([
+            "-frames:v",
+            "1",
+            "-vf",
+            "signalstats,metadata=print",
+            "-f",
+            "null",
+            "-",
+        ])
+        .output()
+        .expect("测亮度");
+    let text = String::from_utf8_lossy(&probe.stderr);
+    text.split("lavfi.signalstats.YAVG=")
+        .nth(1)
+        .and_then(|rest| {
+            rest.chars()
+                .take_while(|ch| ch.is_ascii_digit() || *ch == '.')
+                .collect::<String>()
+                .parse()
+                .ok()
+        })
+        .unwrap_or_else(|| panic!("读不到亮度：\n{text}"))
+}
+
+/// 生成一个 2 级 identity LUT：套上去画面不该变，但能证明滤镜链真的读到了文件。
+fn identity_lut(dir: &Path) -> PathBuf {
+    let path = dir.join("identity.cube");
+    let mut text = String::from("LUT_3D_SIZE 2\n");
+    // .cube 的行顺序是 R 变化最快。
+    for b in 0..=1 {
+        for g in 0..=1 {
+            for r in 0..=1 {
+                text.push_str(&format!("{r} {g} {b}\n"));
+            }
+        }
+    }
+    std::fs::write(&path, text).expect("写 LUT");
+    path
+}
+
+/// M9-T11：亮度调高之后成片确实变亮，不是「参数存下来了但没进滤镜链」。
+#[test]
+#[ignore = "需要本机 ffmpeg"]
+fn 调色导出确实改变画面亮度() {
+    let dir = scratch("export-color");
+    let clip = make_clip(&dir);
+
+    let mut project = Project::new();
+    project.sequence.width = 320;
+    project.sequence.height = 240;
+    let asset = project.add_asset(&clip);
+    let video = project.sequence.tracks[0].id;
+    let audio = project.sequence.tracks[1].id;
+    let picture = put(&mut project, video, asset, 0.0, 2.0, 0.0);
+    put(&mut project, audio, asset, 0.0, 2.0, 0.0);
+
+    let plain = run_export(&dir, &project, "plain.mp4");
+    project.sequence.clip_mut(picture).unwrap().color.brightness = 80;
+    let bright = run_export(&dir, &project, "bright.mp4");
+
+    let before = average_luma(&plain, "1.0");
+    let after = average_luma(&bright, "1.0");
+    assert!(
+        after > before + 20.0,
+        "亮度应当明显上升：{before:.1} → {after:.1}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// M9-T11：LUT 文件真的被 `lut3d` 读进去。identity LUT 不改变画面，
+/// 所以只要与不套 LUT 的成片足够像，就说明路径（含 Windows 盘符转义）没写错。
+#[test]
+#[ignore = "需要本机 ffmpeg"]
+fn lut_文件能真正读进滤镜链() {
+    let dir = scratch("export-lut");
+    let clip = make_clip(&dir);
+    let lut = identity_lut(&dir);
+
+    let mut project = Project::new();
+    project.sequence.width = 320;
+    project.sequence.height = 240;
+    let asset = project.add_asset(&clip);
+    let video = project.sequence.tracks[0].id;
+    let audio = project.sequence.tracks[1].id;
+    let picture = put(&mut project, video, asset, 0.0, 2.0, 0.0);
+    put(&mut project, audio, asset, 0.0, 2.0, 0.0);
+
+    let plain = run_export(&dir, &project, "plain.mp4");
+    project.sequence.clip_mut(picture).unwrap().color.lut = Some(lut);
+    let graded = run_export(&dir, &project, "lut.mp4");
+
+    let psnr = psnr_between(&graded, "0.5", &plain, "0.5");
+    assert!(psnr > 30.0, "identity LUT 不该改变画面，实测 {psnr:.1} dB");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// M9-T13：有入出点时只导那一段，时长与标尺一致，画面从入点接着走。
 #[test]
 #[ignore = "需要本机 ffmpeg"]

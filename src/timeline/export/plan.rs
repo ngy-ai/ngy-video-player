@@ -318,6 +318,12 @@ fn video_stream(
             filter if filter.is_empty() => String::new(),
             filter => format!(",{filter}"),
         };
+        // 调色排在构图之后、淡入淡出之前：先定画面尺寸与位移，再统一色彩，
+        // 最后才做不透明度。水印在 `effects` 里，排在后面，不会被调色一起染上。
+        let color = match clip.color.filter_chain(project.base_dir()) {
+            chain if chain.is_empty() => String::new(),
+            chain => format!(",{chain}"),
+        };
         let fades = crate::timeline::keyframe_fades(&clip.keys, clip.duration())
             .iter()
             .map(|filter| format!(",{filter}"))
@@ -343,7 +349,7 @@ fn video_stream(
         let chain = format!(
             "[{index}:v]trim=start={:.6}:end={:.6},{setpts}{freeze},\
              scale={dims}:force_original_aspect_ratio=decrease,\
-             pad={dims}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}{tonemap}{motion}{fades}{effects}{label}",
+             pad={dims}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}{tonemap}{motion}{color}{fades}{effects}{label}",
             (clip.source_in - head).secs(),
             clip.source_out.secs()
         );

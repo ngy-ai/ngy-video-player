@@ -25,6 +25,8 @@ pub(super) enum TimelineMenu {
     Keys(super::timeline_keys::KeysMenu),
     /// 片段的变速与定格面板：倍率档位与片尾定格时长。
     Speed(super::timeline_speed::SpeedMenu),
+    /// 片段的调色面板：亮度 / 对比度 / 饱和度 / 色温与 LUT。
+    Color(super::timeline_color::ColorMenu),
 }
 
 /// 转场面板的上下文：接缝右侧的那段片段（转场挂在它身上）与鼠标位置。
@@ -86,6 +88,7 @@ impl PlayerApp {
             TimelineMenu::Effects(menu) => self.render_effects_menu(menu, window, cx),
             TimelineMenu::Keys(menu) => self.render_keys_menu(menu, window, cx),
             TimelineMenu::Speed(menu) => self.render_speed_menu(menu, window, cx),
+            TimelineMenu::Color(menu) => self.render_color_menu(menu, window, cx),
         }
     }
 
@@ -386,6 +389,16 @@ impl PlayerApp {
                     cx.listener(move |this, _: &ClickEvent, _window, cx| {
                         cx.stop_propagation();
                         this.open_speed_menu(clip_id, menu.position, cx);
+                    }),
+                ))
+                .child(item_menu_entry(
+                    "timeline-menu-color",
+                    IconName::Palette,
+                    "调色…",
+                    text(),
+                    cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                        cx.stop_propagation();
+                        this.open_color_menu(clip_id, menu.position, cx);
                     }),
                 ))
                 .child(

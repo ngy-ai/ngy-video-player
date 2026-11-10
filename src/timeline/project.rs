@@ -299,8 +299,11 @@ impl Project {
         })?;
 
         // 内存里的状态跟着落盘结果更新：保存之后立刻再存一次，不该写回旧路径。
+        let old_base = self.base_dir.clone();
         self.version = PROJECT_VERSION;
         self.base_dir = dir;
+        // LUT 与素材同一套规则：另存到别的目录后，相对路径要按新位置重算。
+        self.repath_luts(&old_base, &self.base_dir.clone());
         for asset in &mut self.assets {
             let absolute = if asset.resolved.as_os_str().is_empty() {
                 absolute_path(&asset.path)
@@ -333,6 +336,7 @@ impl Project {
             asset.resolved.clear();
             asset.missing = false;
         }
+        snapshot.repath_luts(&self.base_dir.clone(), dir);
         serde_json::to_string_pretty(&snapshot).map_err(ProjectError::Json)
     }
 
@@ -369,6 +373,43 @@ impl Project {
     /// 素材相对工程目录的存放形式；跨盘符时退回绝对路径。
     fn stored_path(&self, absolute: &Path) -> PathBuf {
         relative_to(absolute, &self.base_dir).unwrap_or_else(|| absolute.to_path_buf())
+    }
+
+    /// 工程外部的文件（LUT）在工程里的存放形式：相对工程目录，跨盘符才存绝对。
+    pub fn portable_path(&self, absolute: &Path) -> PathBuf {
+        self.stored_path(absolute)
+    }
+
+    /// 工程里记录的路径 → 磁盘上的绝对路径。相对路径按工程目录解析。
+    ///
+    /// 还没保存过的工程没有基准目录，相对路径原样返回：那种工程里通常也只会有
+    /// 从别处拷来的绝对路径。
+    pub fn resolve_path(&self, path: &Path) -> PathBuf {
+        if path.is_absolute() || self.base_dir.as_os_str().is_empty() {
+            path.to_path_buf()
+        } else {
+            self.base_dir.join(path)
+        }
+    }
+
+    /// 把全部片段的 LUT 路径从「相对 `from`」重写成「相对 `dir`」。
+    ///
+    /// 与素材路径一样：工程被拷到别的目录后，相对路径要跟着新位置走，
+    /// 否则「另存为」会把 LUT 指回旧目录。
+    fn repath_luts(&mut self, from: &Path, dir: &Path) {
+        for track in &mut self.sequence.tracks {
+            for clip in &mut track.clips {
+                let Some(lut) = clip.color.lut.clone() else {
+                    continue;
+                };
+                let absolute = if lut.is_absolute() {
+                    lut
+                } else {
+                    from.join(lut)
+                };
+                clip.color.lut = Some(relative_to(&absolute, dir).unwrap_or(absolute));
+            }
+        }
     }
 
     /// 读盘后的自愈：排序、清掉指向已删片段的转场、修 id 计数器。

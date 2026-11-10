@@ -518,3 +518,75 @@ fn 移除素材不影响其它素材与片段() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn lut_路径随工程相对化并在另存后跟着新目录() {
+    let dir = scratch("lut-path");
+    let (mut project, _, _, clip) = sample(&dir);
+    let lut = media(&dir, "luts/warm.cube");
+    project.sequence.clip_mut(clip).unwrap().color.lut = Some(lut.clone());
+
+    let path = dir.join("p.ngyproj");
+    project.save(&path).expect("保存工程");
+    let text = fs::read_to_string(&path).expect("读工程");
+    assert!(
+        !text.contains(&dir.to_string_lossy().replace('\\', "\\\\")),
+        "LUT 该写相对路径：{text}"
+    );
+
+    // 内存里也跟着变成便携形式，导出时由 `resolve_path` 还原。
+    let stored = project
+        .sequence
+        .clip(clip)
+        .unwrap()
+        .color
+        .lut
+        .clone()
+        .expect("LUT 还在");
+    assert!(stored.is_relative(), "{stored:?}");
+    assert!(project.resolve_path(&stored).is_file());
+
+    // 再存一次内容不变：否则每次 Ctrl+S 都会把「未保存」重新点亮。
+    let before = project.clone();
+    project.save(&path).expect("再存一次");
+    assert!(before.same_content(&project));
+
+    // 另存到子目录：LUT 不在新目录下面，相对路径表示不了（`..` 不写进工程，
+    // 与素材同一条规则），退回绝对路径——但必须还指着同一个文件。
+    let sub = dir.join("sub");
+    fs::create_dir_all(&sub).expect("建子目录");
+    project.save(&sub.join("p.ngyproj")).expect("另存为");
+    let stored = project
+        .sequence
+        .clip(clip)
+        .unwrap()
+        .color
+        .lut
+        .clone()
+        .unwrap();
+    assert!(stored.is_absolute(), "{stored:?}");
+    assert!(project.resolve_path(&stored).is_file(), "{stored:?}");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn 相对_lut_路径按工程目录解析() {
+    let dir = scratch("lut-relative");
+    let (mut project, _, _, clip) = sample(&dir);
+    project.sequence.clip_mut(clip).unwrap().color.lut = Some(PathBuf::from("luts/a.cube"));
+
+    // 没保存过的工程没有基准目录：相对路径原样返回。
+    assert_eq!(
+        project.resolve_path(Path::new("luts/a.cube")),
+        PathBuf::from("luts/a.cube")
+    );
+
+    project.save(&dir.join("p.ngyproj")).expect("保存工程");
+    assert_eq!(
+        project.resolve_path(Path::new("luts/a.cube")),
+        dir.join("luts/a.cube")
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

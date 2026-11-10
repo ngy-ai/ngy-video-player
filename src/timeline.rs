@@ -8,6 +8,7 @@
 //! 禁止用 `f64` 秒做累加、比较或存盘——错一帧的 bug 在时间线上无法调试。
 
 pub mod autosave;
+mod color;
 mod effect;
 mod export;
 mod keyframe;
@@ -25,6 +26,7 @@ mod transition;
 mod undo;
 mod view;
 
+pub use color::{COLOR_RANGE, COLOR_STEP, ColorGrade};
 pub use effect::{
     Effect, EffectKind, EffectParams, Knob, add_effect, cycle_knob, filter_chain as effect_chain,
     interpolated_fps, move_effect, remove_effect, sequence_fps, toggle_effect, unknown_effects,
