@@ -106,8 +106,8 @@ pub fn resolve_audio(sequence: &Sequence, at: Tick) -> Option<PreviewAudio> {
 /// 用来把两件预览做不到的事近似掉：
 ///
 /// - **空档**：没有任何画面时整块压黑，而不是把上一帧留在屏幕上；
-/// - **转场**：预览一次只解一路画面，混不出两幅画面的交叉溶解，所以在转场窗口里
-///   先淡到黑再淡回来（中点最暗）。形状与导出侧的过渡一致，看起来是一次对切溶暗。
+/// - **转场**：预览一次只解一路画面，混不出两幅画面的交叉溶解，所以在接缝两侧各取
+///   一半时长，先淡到黑再淡回来（接缝那一刻最暗）。
 ///
 /// 变速 / 定格片段之间的转场在导出里会退化成硬切（见 `export::plan`），这里同样
 /// 不压黑，免得预览里看到的过渡成片里没有。
@@ -118,10 +118,11 @@ pub fn overlay_dim(sequence: &Sequence, at: Tick) -> f32 {
     transition_dim(sequence, frame.track, frame.clip, at)
 }
 
-/// 转场窗口 `[after.start - duration, after.start)` 里的黑度。
+/// 当前片段两侧的接缝里，这一时刻该压多厚的黑。
 ///
-/// 窗口整个落在**前一段**的尾巴上（导出侧的 `xfade` 也是从那里开始溶的），所以
-/// 从当前片段往后找接缝，而不是往前找：窗口里正在显示的是前一段。
+/// 窗口以接缝为中心、两侧各占一半时长。为什么不整段落在接缝之前：那样淡到最黑之后
+/// 紧接着就是下一段的全亮，接缝处从全黑跳到全亮，看起来像是闪了一下；跨过接缝被
+/// 两段共用，才是「淡出 + 淡入」。
 fn transition_dim(sequence: &Sequence, track: Id, clip: Id, at: Tick) -> f32 {
     let Some(track) = sequence.track(track) else {
         return 0.0;
@@ -129,10 +130,20 @@ fn transition_dim(sequence: &Sequence, track: Id, clip: Id, at: Tick) -> f32 {
     let Some(index) = track.clip_index(clip) else {
         return 0.0;
     };
-    let Some(after) = track.clips.get(index + 1) else {
+    // 播放头在接缝前命中前一段的「后接缝」，在接缝后命中后一段的「前接缝」，
+    // 两条接缝的窗口有一半是重叠的，取浓的那个。
+    let before = match index.checked_sub(1) {
+        Some(previous) => seam_dim(track, previous, at),
+        None => 0.0,
+    };
+    before.max(seam_dim(track, index, at))
+}
+
+/// `clips[index]` 与下一个片段之间的接缝上，`at` 该压多黑。
+fn seam_dim(track: &Track, index: usize, at: Tick) -> f32 {
+    let (Some(before), Some(after)) = (track.clips.get(index), track.clips.get(index + 1)) else {
         return 0.0;
     };
-    let before = &track.clips[index];
     if before.end() != after.start {
         return 0.0;
     }
@@ -149,16 +160,15 @@ fn transition_dim(sequence: &Sequence, track: Id, clip: Id, at: Tick) -> f32 {
     else {
         return 0.0;
     };
-    let duration = transition.duration;
-    if duration <= Tick::ZERO {
+    let half = transition.duration.micros() / 2;
+    if half <= 0 {
         return 0.0;
     }
-    let start = after.start - duration;
-    if at < start || at >= after.start {
+    let offset = at.micros() - after.start.micros();
+    if offset.abs() > half {
         return 0.0;
     }
-    let progress = (at - start).micros() as f32 / duration.micros() as f32;
-    1.0 - (2.0 * progress - 1.0).abs()
+    (1.0 - offset.abs() as f32 / half as f32).clamp(0.0, 1.0)
 }
 
 /// 预览播放停在哪儿：有工作区就用出点，否则到序列总长。
@@ -430,12 +440,17 @@ mod tests {
         let (_, _, seam) = seam(&mut sequence);
 
         assert_eq!(overlay_dim(&sequence, s(0.9)), 0.0, "窗口之前正常显示");
-        assert_eq!(overlay_dim(&sequence, seam - s(1.0)), 0.0, "刚进窗口全亮");
-        let middle = overlay_dim(&sequence, seam - s(0.5));
-        assert!((middle - 1.0).abs() < 1e-6, "中点全黑：{middle}");
-        let quarter = overlay_dim(&sequence, seam - s(0.75));
-        assert!((quarter - 0.5).abs() < 1e-6, "四分之一点半黑：{quarter}");
-        assert_eq!(overlay_dim(&sequence, seam), 0.0, "接缝之后是下一段画面");
+        assert_eq!(overlay_dim(&sequence, seam - s(0.5)), 0.0, "刚进窗口全亮");
+        let middle = overlay_dim(&sequence, seam);
+        assert!((middle - 1.0).abs() < 1e-6, "接缝上全黑：{middle}");
+        let out = overlay_dim(&sequence, seam - s(0.25));
+        assert!((out - 0.5).abs() < 1e-6, "接缝前一拍的淡出半黑：{out}");
+        let back = overlay_dim(&sequence, seam + s(0.25));
+        assert!(
+            (back - 0.5).abs() < 1e-6,
+            "接缝后一拍应该淡回来而不是直接全亮：{back}"
+        );
+        assert_eq!(overlay_dim(&sequence, seam + s(0.5)), 0.0, "窗口之后全亮");
     }
 
     #[test]
@@ -447,7 +462,8 @@ mod tests {
         let index = track.clip_index(second).unwrap();
         track.clips[index].speed = 2.0;
 
-        assert_eq!(overlay_dim(&sequence, seam - s(0.5)), 0.0);
+        assert_eq!(overlay_dim(&sequence, seam), 0.0);
+        assert_eq!(overlay_dim(&sequence, seam - s(0.25)), 0.0);
     }
 
     // -- 播放时钟 ----------------------------------------------------------
