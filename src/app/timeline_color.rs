@@ -30,7 +30,7 @@ impl PlayerApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        if project.sequence.clip(clip).is_none() {
+        if project.sequence().clip(clip).is_none() {
             return;
         }
         self.timeline_menu = Some(TimelineMenu::Color(ColorMenu { clip, position }));
@@ -42,7 +42,7 @@ impl PlayerApp {
         let message = format!("调色：{}", color.summary());
         let result = self.project.as_ref().map(|project| {
             crate::timeline::apply(
-                &project.sequence,
+                project.sequence(),
                 &EditOp::SetColor {
                     clip,
                     color: color.clone(),
@@ -54,7 +54,7 @@ impl PlayerApp {
                 if self
                     .project
                     .as_ref()
-                    .is_some_and(|project| project.sequence == next)
+                    .is_some_and(|project| *project.sequence() == next)
                 {
                     self.flash("没有变化");
                     cx.notify();
@@ -83,7 +83,7 @@ impl PlayerApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        let Some(item) = project.sequence.clip(clip) else {
+        let Some(item) = project.sequence().clip(clip) else {
             return;
         };
         let mut color = item.color.clone();
@@ -150,7 +150,7 @@ impl PlayerApp {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let project = self.project.as_ref()?;
-        let clip = project.sequence.clip(menu.clip)?;
+        let clip = project.sequence().clip(menu.clip)?;
         let color = clip.color.clone();
         let title = format!(
             "调色 · {}",

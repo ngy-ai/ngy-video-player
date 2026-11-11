@@ -73,9 +73,9 @@ fn put(
     source_out: f64,
     start: f64,
 ) -> Id {
-    let id = project.sequence.alloc_id();
+    let id = project.sequence_mut().alloc_id();
     project
-        .sequence
+        .sequence_mut()
         .track_mut(track)
         .unwrap()
         .clips
@@ -92,7 +92,7 @@ fn put(
 /// 跑完一条导出任务；失败时把 ffmpeg 的最后几行带出来。
 fn run_export(dir: &Path, project: &Project, name: &str) -> PathBuf {
     let plan = plan_sequence(project).expect("生成计划");
-    run_plan(dir, plan, name, project.sequence.duration())
+    run_plan(dir, plan, name, project.sequence().duration())
 }
 
 /// 跑一条已经算好的计划。区间导出要先自己生成计划（带工作区）。
@@ -158,14 +158,14 @@ fn 改帧率之后导出用新规格() {
 
     let mut project = Project::new_with(SequenceSpec::new(320, 240, Rational::FPS_25));
     let asset = project.add_asset(&clip);
-    let video = project.sequence.tracks[0].id;
-    let audio = project.sequence.tracks[1].id;
+    let video = project.sequence_mut().tracks[0].id;
+    let audio = project.sequence_mut().tracks[1].id;
     put(&mut project, video, asset, 0.0, 2.0, 0.0);
     put(&mut project, audio, asset, 0.0, 2.0, 0.0);
-    assert_eq!(project.sequence.fps, Rational::FPS_25);
+    assert_eq!(project.sequence_mut().fps, Rational::FPS_25);
 
     // 只换帧率：片段的时间一个都没动，成片还是两秒。
-    project.sequence.fps = Rational::FPS_30;
+    project.sequence_mut().fps = Rational::FPS_30;
 
     let output = run_export(&dir, &project, "out30.mp4");
     assert_duration(&output, "00:00:02");
@@ -180,11 +180,11 @@ fn 导出带空档的两段序列() {
     let clip = make_clip(&dir);
 
     let mut project = Project::new();
-    project.sequence.width = 320;
-    project.sequence.height = 240;
+    project.sequence_mut().width = 320;
+    project.sequence_mut().height = 240;
     let asset = project.add_asset(&clip);
-    let video = project.sequence.tracks[0].id;
-    let audio = project.sequence.tracks[1].id;
+    let video = project.sequence_mut().tracks[0].id;
+    let audio = project.sequence_mut().tracks[1].id;
 
     // 视频：0-1 秒、3-4 秒，中间两秒空档应当补黑场。
     for start in [0.0, 3.0] {
@@ -206,18 +206,18 @@ fn 多轨转场与空档一起导出() {
     let clip = make_clip(&dir);
 
     let mut project = Project::new();
-    project.sequence.width = 320;
-    project.sequence.height = 240;
+    project.sequence_mut().width = 320;
+    project.sequence_mut().height = 240;
     let asset = project.add_asset(&clip);
-    let video0 = project.sequence.tracks[0].id;
-    let audio0 = project.sequence.tracks[1].id;
+    let video0 = project.sequence_mut().tracks[0].id;
+    let audio0 = project.sequence_mut().tracks[1].id;
 
     // 上层视频轨：紧邻的两段做 0.5 秒溶接，再留一段空档，最后又一段画面。
     let first = put(&mut project, video0, asset, 0.0, 1.0, 0.0);
     let second_clip = put(&mut project, video0, asset, 0.6, 1.6, 1.0);
-    let transition_id = project.sequence.alloc_id();
+    let transition_id = project.sequence_mut().alloc_id();
     project
-        .sequence
+        .sequence_mut()
         .track_mut(video0)
         .unwrap()
         .transitions
@@ -231,15 +231,15 @@ fn 多轨转场与空档一起导出() {
     put(&mut project, video0, asset, 0.0, 1.0, 3.0);
 
     // 下层视频轨只在 2-3 秒有画面，前后都补黑；两条轨必须等长才能 overlay。
-    let video1 = project.sequence.add_track(TrackKind::Video);
+    let video1 = project.sequence_mut().add_track(TrackKind::Video);
     put(&mut project, video1, asset, 0.0, 1.0, 2.0);
 
     // 两条音频轨各有空档：静音段与片段要能被 concat 接起来，再一起 amix。
     put(&mut project, audio0, asset, 0.0, 1.0, 0.0);
-    let audio1 = project.sequence.add_track(TrackKind::Audio);
+    let audio1 = project.sequence_mut().add_track(TrackKind::Audio);
     put(&mut project, audio1, asset, 0.0, 1.0, 2.0);
 
-    assert_eq!(project.sequence.duration(), second(4.0));
+    assert_eq!(project.sequence_mut().duration(), second(4.0));
     let output = run_export(&dir, &project, "complex.mp4");
     assert_duration(&output, "00:00:04");
     let _ = std::fs::remove_dir_all(&dir);
@@ -310,24 +310,28 @@ fn 变速导出时长按倍率缩短() {
 
     let mut project = Project::new_with(SequenceSpec::new(320, 240, Rational::FPS_30));
     let asset = project.add_asset(&clip);
-    let video = project.sequence.tracks[0].id;
-    let audio = project.sequence.tracks[1].id;
+    let video = project.sequence_mut().tracks[0].id;
+    let audio = project.sequence_mut().tracks[1].id;
     let picture = put(&mut project, video, asset, 0.0, 10.0, 0.0);
     let sound = put(&mut project, audio, asset, 0.0, 10.0, 0.0);
 
     // 画面与声音都改成 2 倍速：只改一边的话两条轨会不等长，成片被短的那条截断。
     for id in [picture, sound] {
         let ok = ngy_video_player::timeline::apply(
-            &project.sequence,
+            project.sequence_mut(),
             &ngy_video_player::timeline::EditOp::SetSpeed {
                 clip: id,
                 speed: 2.0,
             },
         )
         .expect("变速");
-        project.sequence = ok;
+        *project.sequence_mut() = ok;
     }
-    assert_eq!(project.sequence.duration(), second(5.0), "序列自己先算对");
+    assert_eq!(
+        project.sequence_mut().duration(),
+        second(5.0),
+        "序列自己先算对"
+    );
 
     let output = run_export(&dir, &project, "speed.mp4");
     assert_duration(&output, "00:00:05");
@@ -343,27 +347,27 @@ fn 片尾定格延长成片且最后一段静止() {
     let clip = make_clip(&dir);
 
     let mut project = Project::new();
-    project.sequence.width = 320;
-    project.sequence.height = 240;
+    project.sequence_mut().width = 320;
+    project.sequence_mut().height = 240;
     let asset = project.add_asset(&clip);
-    let video = project.sequence.tracks[0].id;
-    let audio = project.sequence.tracks[1].id;
+    let video = project.sequence_mut().tracks[0].id;
+    let audio = project.sequence_mut().tracks[1].id;
     let picture = put(&mut project, video, asset, 0.0, 2.0, 0.0);
     let sound = put(&mut project, audio, asset, 0.0, 2.0, 0.0);
 
     // 定格 2 秒：画面 `tpad` 克隆最后一帧，声音 `apad` 补等长静音。
     for id in [picture, sound] {
         let ok = ngy_video_player::timeline::apply(
-            &project.sequence,
+            project.sequence_mut(),
             &ngy_video_player::timeline::EditOp::SetHold {
                 clip: id,
                 hold: Tick::from_secs(2.0),
             },
         )
         .expect("定格");
-        project.sequence = ok;
+        *project.sequence_mut() = ok;
     }
-    assert_eq!(project.sequence.duration(), second(4.0));
+    assert_eq!(project.sequence_mut().duration(), second(4.0));
 
     let output = run_export(&dir, &project, "hold.mp4");
     assert_duration(&output, "00:00:04");
@@ -433,16 +437,21 @@ fn 调色导出确实改变画面亮度() {
     let clip = make_clip(&dir);
 
     let mut project = Project::new();
-    project.sequence.width = 320;
-    project.sequence.height = 240;
+    project.sequence_mut().width = 320;
+    project.sequence_mut().height = 240;
     let asset = project.add_asset(&clip);
-    let video = project.sequence.tracks[0].id;
-    let audio = project.sequence.tracks[1].id;
+    let video = project.sequence_mut().tracks[0].id;
+    let audio = project.sequence_mut().tracks[1].id;
     let picture = put(&mut project, video, asset, 0.0, 2.0, 0.0);
     put(&mut project, audio, asset, 0.0, 2.0, 0.0);
 
     let plain = run_export(&dir, &project, "plain.mp4");
-    project.sequence.clip_mut(picture).unwrap().color.brightness = 80;
+    project
+        .sequence_mut()
+        .clip_mut(picture)
+        .unwrap()
+        .color
+        .brightness = 80;
     let bright = run_export(&dir, &project, "bright.mp4");
 
     let before = average_luma(&plain, "1.0");
@@ -464,16 +473,16 @@ fn lut_文件能真正读进滤镜链() {
     let lut = identity_lut(&dir);
 
     let mut project = Project::new();
-    project.sequence.width = 320;
-    project.sequence.height = 240;
+    project.sequence_mut().width = 320;
+    project.sequence_mut().height = 240;
     let asset = project.add_asset(&clip);
-    let video = project.sequence.tracks[0].id;
-    let audio = project.sequence.tracks[1].id;
+    let video = project.sequence_mut().tracks[0].id;
+    let audio = project.sequence_mut().tracks[1].id;
     let picture = put(&mut project, video, asset, 0.0, 2.0, 0.0);
     put(&mut project, audio, asset, 0.0, 2.0, 0.0);
 
     let plain = run_export(&dir, &project, "plain.mp4");
-    project.sequence.clip_mut(picture).unwrap().color.lut = Some(lut);
+    project.sequence_mut().clip_mut(picture).unwrap().color.lut = Some(lut);
     let graded = run_export(&dir, &project, "lut.mp4");
 
     let psnr = psnr_between(&graded, "0.5", &plain, "0.5");
@@ -490,8 +499,8 @@ fn 只导出工作区那一段() {
 
     let mut project = Project::new_with(SequenceSpec::new(320, 240, Rational::FPS_30));
     let asset = project.add_asset(&clip);
-    let video = project.sequence.tracks[0].id;
-    let audio = project.sequence.tracks[1].id;
+    let video = project.sequence_mut().tracks[0].id;
+    let audio = project.sequence_mut().tracks[1].id;
     put(&mut project, video, asset, 0.0, 10.0, 0.0);
     put(&mut project, audio, asset, 0.0, 10.0, 0.0);
 
@@ -519,23 +528,23 @@ fn 字幕烧录与软字幕导出() {
 
     let mut project = Project::new_with(SequenceSpec::new(320, 240, Rational::FPS_30));
     let asset = project.add_asset(&clip);
-    let video = project.sequence.tracks[0].id;
-    let audio = project.sequence.tracks[1].id;
+    let video = project.sequence_mut().tracks[0].id;
+    let audio = project.sequence_mut().tracks[1].id;
     put(&mut project, video, asset, 0.0, 4.0, 0.0);
     put(&mut project, audio, asset, 0.0, 4.0, 0.0);
 
     let plain = run_export(&dir, &project, "plain.mp4");
 
     // 字幕轨：1–3 秒一句，文本与样式都要进 ASS。
-    let track = project.sequence.add_track(TrackKind::Subtitle);
-    let id = project.sequence.alloc_id();
+    let track = project.sequence_mut().add_track(TrackKind::Subtitle);
+    let id = project.sequence_mut().alloc_id();
     project
-        .sequence
+        .sequence_mut()
         .track_mut(track)
         .unwrap()
         .subtitles
         .push(SubtitleItem::new(id, second(1.0), second(3.0), "字幕测试"));
-    let total = project.sequence.duration();
+    let total = project.sequence_mut().duration();
 
     let burn_plan =
         plan_sequence_with(&project, None, &ExportSettings::default()).expect("烧录计划");

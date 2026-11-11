@@ -11,6 +11,8 @@ use crate::timeline::{AssetId, ClipItem, Id, Project, Tick, TrackKind};
 mod color;
 #[path = "tests/range.rs"]
 mod range;
+#[path = "tests/sequences.rs"]
+mod sequences;
 #[path = "tests/subtitle.rs"]
 mod subtitle;
 
@@ -88,12 +90,12 @@ impl Drop for Scratch {
 fn project_with(scratch: &Scratch, clips: &[(Tick, Tick, Tick)]) -> (Project, Vec<Id>) {
     let mut project = Project::new();
     let asset = project.add_asset(&scratch.media("media/a.mp4"));
-    let track = project.sequence.tracks[0].id;
+    let track = project.sequence_mut().tracks[0].id;
     let mut ids = Vec::new();
 
     for (source_in, source_out, start) in clips {
-        let id = project.sequence.alloc_id();
-        let lane = project.sequence.track_mut(track).expect("视频轨存在");
+        let id = project.sequence_mut().alloc_id();
+        let lane = project.sequence_mut().track_mut(track).expect("视频轨存在");
         lane.clips
             .push(ClipItem::new(id, asset, *source_in, *source_out, *start));
         lane.sort_clips();
@@ -110,12 +112,12 @@ fn 片段效果按顺序进滤镜链() {
     let (mut project, ids) = project_with(&scratch, &[(s(0), s(2), Tick::ZERO)]);
     let clip = ids[0];
     crate::timeline::add_effect(
-        &mut project.sequence,
+        project.sequence_mut(),
         clip,
         crate::timeline::EffectKind::Denoise,
     );
     crate::timeline::add_effect(
-        &mut project.sequence,
+        project.sequence_mut(),
         clip,
         crate::timeline::EffectKind::Sharpen,
     );
@@ -132,8 +134,8 @@ fn 片段效果按顺序进滤镜链() {
     );
 
     // 关掉的效果不发声，但顺序信息还在工程里。
-    let effect = project.sequence.clip_mut(clip).unwrap().effects[1].id;
-    crate::timeline::toggle_effect(&mut project.sequence, clip, effect);
+    let effect = project.sequence_mut().clip_mut(clip).unwrap().effects[1].id;
+    crate::timeline::toggle_effect(project.sequence_mut(), clip, effect);
     let plan = plan_sequence(&project).expect("能导出");
     assert_connected(&plan.filter);
     assert!(!plan.filter.contains("unsharp"), "{}", plan.filter);
@@ -147,7 +149,7 @@ fn 关键帧接在补边之后效果之前() {
     let (mut project, ids) = project_with(&scratch, &[(s(0), s(3), Tick::ZERO)]);
     let clip = ids[0];
     {
-        let item = project.sequence.clip_mut(clip).expect("片段存在");
+        let item = project.sequence_mut().clip_mut(clip).expect("片段存在");
         item.keys
             .ensure(crate::timeline::Property::Scale)
             .insert(Tick::ZERO, 1.0);
@@ -162,7 +164,7 @@ fn 关键帧接在补边之后效果之前() {
             .insert(s(1), 1.0);
     }
     crate::timeline::add_effect(
-        &mut project.sequence,
+        project.sequence_mut(),
         clip,
         crate::timeline::EffectKind::Sharpen,
     );
@@ -184,18 +186,18 @@ fn 变速改时间戳并串联音频速率() {
     let scratch = Scratch::new("speed");
     let (mut project, ids) = project_with(&scratch, &[(s(0), s(4), Tick::ZERO)]);
     let clip = ids[0];
-    project.sequence.clip_mut(clip).unwrap().speed = 4.0;
+    project.sequence_mut().clip_mut(clip).unwrap().speed = 4.0;
     // 声音也要跟着变速率：同一条素材再往音频轨放一段（两条轨上的片段各设各的倍率）。
     let asset = project.assets[0].id;
-    let audio = project.sequence.tracks[1].id;
-    let audio_id = project.sequence.alloc_id();
+    let audio = project.sequence_mut().tracks[1].id;
+    let audio_id = project.sequence_mut().alloc_id();
     project
-        .sequence
+        .sequence_mut()
         .track_mut(audio)
         .expect("音频轨存在")
         .clips
         .push(ClipItem::new(audio_id, asset, s(0), s(4), Tick::ZERO));
-    project.sequence.clip_mut(audio_id).unwrap().speed = 4.0;
+    project.sequence_mut().clip_mut(audio_id).unwrap().speed = 4.0;
 
     let plan = plan_sequence(&project).expect("能导出");
     assert_connected(&plan.filter);
@@ -217,17 +219,17 @@ fn 片尾定格克隆最后一帧并补静音() {
     let scratch = Scratch::new("hold");
     let (mut project, ids) = project_with(&scratch, &[(s(0), s(2), Tick::ZERO)]);
     let clip = ids[0];
-    project.sequence.clip_mut(clip).unwrap().hold = s(3);
+    project.sequence_mut().clip_mut(clip).unwrap().hold = s(3);
     let asset = project.assets[0].id;
-    let audio = project.sequence.tracks[1].id;
-    let audio_id = project.sequence.alloc_id();
+    let audio = project.sequence_mut().tracks[1].id;
+    let audio_id = project.sequence_mut().alloc_id();
     project
-        .sequence
+        .sequence_mut()
         .track_mut(audio)
         .expect("音频轨存在")
         .clips
         .push(ClipItem::new(audio_id, asset, s(0), s(2), Tick::ZERO));
-    project.sequence.clip_mut(audio_id).unwrap().hold = s(3);
+    project.sequence_mut().clip_mut(audio_id).unwrap().hold = s(3);
 
     let plan = plan_sequence(&project).expect("能导出");
     assert_connected(&plan.filter);
@@ -254,7 +256,7 @@ fn 空时间线拒绝导出() {
 fn 视频轨全被隐藏时拒绝导出() {
     let scratch = Scratch::new("muted");
     let (mut project, _) = project_with(&scratch, &[(s(0), s(2), Tick::ZERO)]);
-    project.sequence.tracks[0].muted = true;
+    project.sequence_mut().tracks[0].muted = true;
     assert_eq!(
         plan_sequence(&project).unwrap_err(),
         ExportError::NoVideoTrack
@@ -327,10 +329,10 @@ fn 音频轨参与导出并统一到四十八千赫() {
     let scratch = Scratch::new("audio");
     let (mut project, _) = project_with(&scratch, &[(s(0), s(2), Tick::ZERO)]);
     let asset = project.assets[0].id;
-    let audio = project.sequence.tracks[1].id;
-    let id = project.sequence.alloc_id();
+    let audio = project.sequence_mut().tracks[1].id;
+    let id = project.sequence_mut().alloc_id();
     project
-        .sequence
+        .sequence_mut()
         .track_mut(audio)
         .expect("音频轨存在")
         .clips
@@ -359,10 +361,10 @@ fn 视频与音频各用各的裁剪滤镜() {
     let scratch = Scratch::new("pads");
     let (mut project, _) = project_with(&scratch, &[(s(0), s(2), Tick::ZERO)]);
     let asset = project.assets[0].id;
-    let audio = project.sequence.tracks[1].id;
-    let id = project.sequence.alloc_id();
+    let audio = project.sequence_mut().tracks[1].id;
+    let id = project.sequence_mut().alloc_id();
     project
-        .sequence
+        .sequence_mut()
         .track_mut(audio)
         .expect("音频轨存在")
         .clips
@@ -419,10 +421,10 @@ fn 素材缺失在生成计划时就报错() {
 #[test]
 fn 片段引用了不存在的素材时报错() {
     let mut project = Project::new();
-    let track = project.sequence.tracks[0].id;
-    let id = project.sequence.alloc_id();
+    let track = project.sequence_mut().tracks[0].id;
+    let id = project.sequence_mut().alloc_id();
     project
-        .sequence
+        .sequence_mut()
         .track_mut(track)
         .unwrap()
         .clips
@@ -463,10 +465,10 @@ fn add_track_clip(
     source_out: Tick,
     start: Tick,
 ) -> Id {
-    let track = project.sequence.add_track(kind);
-    let id = project.sequence.alloc_id();
+    let track = project.sequence_mut().add_track(kind);
+    let id = project.sequence_mut().alloc_id();
     project
-        .sequence
+        .sequence_mut()
         .track_mut(track)
         .expect("刚加的轨道")
         .clips
@@ -508,10 +510,10 @@ fn 两条音频轨按amix混合() {
     let (mut project, _) = project_with(&scratch, &[(s(0), s(2), Tick::ZERO)]);
     let asset = project.assets[0].id;
 
-    let first = project.sequence.tracks[1].id;
-    let id = project.sequence.alloc_id();
+    let first = project.sequence_mut().tracks[1].id;
+    let id = project.sequence_mut().alloc_id();
     project
-        .sequence
+        .sequence_mut()
         .track_mut(first)
         .expect("音频轨存在")
         .clips
@@ -543,10 +545,10 @@ fn 视频轨比序列短时补黑对齐() {
     let (mut project, _) = project_with(&scratch, &[(s(0), s(1), Tick::ZERO)]);
     let asset = project.assets[0].id;
     // 音频比视频长：序列总长 3 秒，视频轨只有 1 秒，得补 2 秒黑场。
-    let audio = project.sequence.tracks[1].id;
-    let id = project.sequence.alloc_id();
+    let audio = project.sequence_mut().tracks[1].id;
+    let id = project.sequence_mut().alloc_id();
     project
-        .sequence
+        .sequence_mut()
         .track_mut(audio)
         .expect("音频轨存在")
         .clips
@@ -568,25 +570,29 @@ fn 相邻片段之间插交叉溶解() {
     let (mut project, ids) = project_with(&scratch, &[(s(1), s(3), Tick::ZERO)]);
     let asset = project.assets[0].id;
     // 紧贴前一段的第二个片段：source_in 要往前挪 0.5 秒做溶接。
-    let track = project.sequence.tracks[0].id;
-    let second = project.sequence.alloc_id();
+    let track = project.sequence_mut().tracks[0].id;
+    let second = project.sequence_mut().alloc_id();
     project
-        .sequence
+        .sequence_mut()
         .track_mut(track)
         .expect("视频轨存在")
         .clips
         .push(ClipItem::new(second, asset, s(2), s(4), s(2)));
-    project.sequence.track_mut(track).unwrap().sort_clips();
+    project
+        .sequence_mut()
+        .track_mut(track)
+        .unwrap()
+        .sort_clips();
 
     let transition = crate::timeline::Transition::new(
-        project.sequence.alloc_id(),
+        project.sequence_mut().alloc_id(),
         ids[0],
         second,
         crate::timeline::TransitionKind::CrossDissolve,
         Tick::from_millis(500),
     );
     project
-        .sequence
+        .sequence_mut()
         .track_mut(track)
         .unwrap()
         .transitions
@@ -664,10 +670,10 @@ fn 多条轨道都有空档时标签不撞车() {
     let asset = project.assets[0].id;
 
     // 序列总长 4 秒：两条视频轨都要补开头与末尾的黑场，两条音频轨都要补静音。
-    let audio = project.sequence.tracks[1].id;
-    let id = project.sequence.alloc_id();
+    let audio = project.sequence_mut().tracks[1].id;
+    let id = project.sequence_mut().alloc_id();
     project
-        .sequence
+        .sequence_mut()
         .track_mut(audio)
         .expect("音频轨存在")
         .clips

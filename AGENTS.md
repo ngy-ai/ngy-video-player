@@ -30,6 +30,9 @@ cargo clippy --all-targets        # 静态检查
 - Rust edition 2024，MSRV 跟随当前稳定版。
 - libmpv 缺失时程序仍可启动，只是无法播放；不要把它改成启动即崩溃。
 - `libs/`、`.cache/`、`target/` 不入库，不要提交。
+- 工程格式 v2 起是 `sequences` 列表 + `active_sequence` 指针：字段语义的搬运一律写在
+  `project.rs::migrate`（缺省 `version` 按 v1 处理），只靠 `serde(default)` 会让老工程
+  读出空序列列表；列表非空、id 唯一与指针有效由 `project/sequences.rs` 自愈。
 
 ## 代码结构
 
@@ -48,6 +51,7 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  timeline_effects（片段效果栈面板：加 / 开关 / 换档 / 调序 / 删）、
                  timeline_keys（片段关键帧面板：在播放头处记录与删除）、
                  timeline_subtitle（字幕编辑模态面板、字幕块右键菜单与预览入口）、
+                 sequence_manager（多序列管理面板：新建 / 切换 / 改名 / 删除与切换复位）、
                  controls、menus、bar、
                  menu_bar、associations、ab_loop（A-B 循环）、
                  project_file（工程保存/另存为/未保存确认）、
@@ -107,6 +111,8 @@ src/timeline/media.rs  素材元信息、文件指纹与过期判断；不含 ff
 src/timeline/model.rs  序列 → 轨道 → 片段、转场与标记；纯数据，不持有文件路径
 src/timeline/ops.rs    编辑操作纯函数：旧序列进、新序列出，非法操作返回错误
 src/timeline/project.rs  .ngyproj 工程文件：版本迁移、相对素材路径、原子写 + .bak
+src/timeline/project/sequences.rs  多序列：列表 + 当前指针、增删改切换、读盘自愈（ADR 0009）
+docs/adr/0009  工程持有多条序列、界面状态仍只有一份
 src/timeline/three_point.rs  三点编辑的时间换算：源入点 + 源出点 + 时间线入点，缺哪个退化成两点
 src/timeline/transition.rs  转场编辑：两侧余量、加 / 改 / 去，时长按余量预钳（导出侧再兜底）
 src/timeline/effect.rs  片段效果栈：去隔行 / 降噪 / 锐化 / 防抖 / 插帧 / 水印的滤镜与增删改

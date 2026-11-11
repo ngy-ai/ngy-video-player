@@ -156,10 +156,15 @@ impl PlayerApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        let Some(target) = project.sequence.tracks.iter().find(|item| item.id == track) else {
+        let Some(target) = project
+            .sequence()
+            .tracks
+            .iter()
+            .find(|item| item.id == track)
+        else {
             return;
         };
-        let fps = project.sequence.fps;
+        let fps = project.sequence().fps;
         let duration = total_duration(&drag.items);
         let start = snap_start(self.timeline.time_at(lane_x), fps);
         // 先按帧对齐，再往片段边缘贴：差几帧在界面上看不出来，压到片段上就白吸附了。
@@ -200,7 +205,7 @@ impl PlayerApp {
             return;
         };
         let kind = project
-            .sequence
+            .sequence()
             .tracks
             .iter()
             .find(|item| item.id == track)
@@ -220,7 +225,13 @@ impl PlayerApp {
             Placement::Overwrite => "覆盖",
             Placement::Insert => "插入",
         };
-        match place_items(&project.sequence, track, drop.start, &drag.items, drop.mode) {
+        match place_items(
+            project.sequence(),
+            track,
+            drop.start,
+            &drag.items,
+            drop.mode,
+        ) {
             Ok(sequence) => {
                 let count = drag.items.len();
                 let message = if count == 1 {

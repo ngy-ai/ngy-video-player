@@ -18,7 +18,7 @@ impl PlayerApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        match crate::timeline::set_transition(&project.sequence, after, kind, duration) {
+        match crate::timeline::set_transition(project.sequence(), after, kind, duration) {
             Ok(applied) => {
                 let label = crate::timeline::transition_at(&applied.sequence, after)
                     .map(|transition| transition.kind.label())
@@ -45,7 +45,7 @@ impl PlayerApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        match crate::timeline::remove_transition(&project.sequence, after) {
+        match crate::timeline::remove_transition(project.sequence(), after) {
             Ok(sequence) => {
                 self.commit_edit(sequence, "去掉转场");
                 self.flash("已去掉转场");
@@ -66,9 +66,9 @@ impl PlayerApp {
             let Some(project) = self.project.as_mut() else {
                 return;
             };
-            let id = project.sequence.add_track(kind);
+            let id = project.sequence_mut().add_track(kind);
             let name = project
-                .sequence
+                .sequence()
                 .track(id)
                 .map(|track| track.name.clone())
                 .unwrap_or_default();
@@ -89,7 +89,7 @@ impl PlayerApp {
         let Some((locked, kind, name, detail, has_content)) = self
             .project
             .as_ref()
-            .and_then(|project| project.sequence.track(track))
+            .and_then(|project| project.sequence().track(track))
             .map(|target| {
                 (
                     target.locked,
@@ -120,11 +120,11 @@ impl PlayerApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        let Some(target) = project.sequence.track(track) else {
+        let Some(target) = project.sequence().track(track) else {
             return;
         };
         let message = format!("删除{}轨「{}」", target.kind.label(), target.name);
-        let outcome = apply_edit(&project.sequence, &EditOp::RemoveTrack { track });
+        let outcome = apply_edit(project.sequence(), &EditOp::RemoveTrack { track });
 
         match outcome {
             Ok(sequence) => {

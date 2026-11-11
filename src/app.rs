@@ -136,6 +136,7 @@ mod render;
 mod scenes;
 mod scope;
 mod sequence_dialog;
+mod sequence_manager;
 mod session;
 mod settings_panel;
 mod source_edit;
@@ -177,6 +178,7 @@ use self::remux::RemuxDialog;
 use self::scenes::ScenesDialog;
 use self::scope::ScopeDialog;
 use self::sequence_dialog::{SequenceDialog, SequencePurpose};
+use self::sequence_manager::SequenceManagerDialog;
 use self::settings_panel::SettingsTab;
 use self::timeline_menu::TimelineMenu;
 use self::timeline_subtitle::SubtitleDialog;
@@ -471,6 +473,8 @@ pub struct PlayerApp {
     export_dialog: Option<ExportDialog>,
     /// 字幕编辑面板；`None` 表示没打开。与导出面板互斥。
     subtitle_dialog: Option<SubtitleDialog>,
+    /// 序列管理面板；`None` 表示没打开。与其余模态互斥。
+    sequence_manager: Option<SequenceManagerDialog>,
     /// 上一次确认过的导出参数。只在本次会话里记着，不随工程存盘；
     /// 要跨会话复用就存成预设（`render-presets.json`）。
     export_settings: ExportSettings,
@@ -480,6 +484,8 @@ pub struct PlayerApp {
     export_progress: Option<f32>,
     /// 正在跑的那条用的是哪个预设；进度旁与完成提示都要说出来。
     export_preset: Option<String>,
+    /// 正在跑的那条属于哪个序列；提示里带上，切换序列之后仍能分清。
+    export_sequence: Option<String>,
     /// 排队等着导出的任务。一次只跑一条，失败不阻塞后面的。
     export_queue: VecDeque<QueuedExport>,
 

@@ -11,7 +11,7 @@ fn 调色排在关键帧之后效果之前() {
     let (mut project, ids) = project_with(&scratch, &[(s(0), s(3), Tick::ZERO)]);
     let clip = ids[0];
     {
-        let item = project.sequence.clip_mut(clip).expect("片段存在");
+        let item = project.sequence_mut().clip_mut(clip).expect("片段存在");
         item.color.brightness = 20;
         item.color.temperature = -10;
         item.color.lut = Some(PathBuf::from("luts/a.cube"));
@@ -23,7 +23,7 @@ fn 调色排在关键帧之后效果之前() {
             .insert(s(1), 1.0);
     }
     crate::timeline::add_effect(
-        &mut project.sequence,
+        project.sequence_mut(),
         clip,
         crate::timeline::EffectKind::Sharpen,
     );

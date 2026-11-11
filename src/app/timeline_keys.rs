@@ -27,7 +27,7 @@ impl PlayerApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        if project.sequence.clip(clip).is_none() {
+        if project.sequence().clip(clip).is_none() {
             return;
         }
         self.timeline_menu = Some(TimelineMenu::Keys(KeysMenu { clip, position }));
@@ -45,16 +45,16 @@ impl PlayerApp {
             return;
         };
         let locked = project
-            .sequence
+            .sequence()
             .clip_track(clip)
-            .and_then(|track| project.sequence.track(track))
+            .and_then(|track| project.sequence().track(track))
             .is_some_and(|track| track.locked);
         if locked {
             self.flash("轨道锁着，先解锁再改关键帧");
             cx.notify();
             return;
         }
-        let mut sequence = project.sequence.clone();
+        let mut sequence = project.sequence().clone();
         let Some(message) = change(&mut sequence) else {
             return;
         };
@@ -71,11 +71,11 @@ impl PlayerApp {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let project = self.project.as_ref()?;
-        let clip = project.sequence.clip(menu.clip)?;
+        let clip = project.sequence().clip(menu.clip)?;
         let track = project
-            .sequence
+            .sequence()
             .clip_track(menu.clip)
-            .and_then(|track| project.sequence.track(track));
+            .and_then(|track| project.sequence().track(track));
         let locked = track.is_some_and(|track| track.locked);
         let title = format!(
             "关键帧 · {}",

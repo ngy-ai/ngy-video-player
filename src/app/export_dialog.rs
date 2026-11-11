@@ -9,7 +9,7 @@
 
 use super::*;
 use crate::timeline::{
-    EncodeSpeed, ExportSettings, Quality, RenderPresetStore, SubtitleMode, VideoCodec,
+    EncodeSpeed, ExportSettings, Id, Quality, RenderPresetStore, SubtitleMode, VideoCodec,
     normalize_preset_name,
 };
 use gpui_kit::component::input::{Input, InputState};
@@ -19,6 +19,9 @@ pub(super) struct ExportDialog {
     pub(super) settings: ExportSettings,
     pub(super) presets: RenderPresetStore,
     pub(super) preset_name: Entity<InputState>,
+    /// 打开面板时那条序列。确认导出时按它生成计划，中途切走序列也不会导错。
+    sequence_id: Id,
+    sequence_name: String,
 }
 
 /// 音频码率三档（kbps）。与 `ExportSettings::audio_kbps` 的夹取区间一致。
@@ -49,16 +52,26 @@ impl PlayerApp {
             self.close_export_dialog(cx);
             return;
         }
-        // 计划先生成一次：缺素材、没有视频轨这类问题不该等用户填完参数才发现。
+        // 计划先按「打开面板时那条序列」生成一次：缺素材、没有视频轨这类问题
+        // 不该等用户填完参数才发现；id 也一起记下，确认时按它再生成一次。
         let settings = self.export_settings.clone();
-        if let Some(project) = self.project.as_ref()
-            && let Err(error) =
-                crate::timeline::plan_sequence_with(project, project.ui.range(), &settings)
-        {
-            self.flash(format!("无法导出：{error}"));
-            cx.notify();
-            return;
-        }
+        let target = {
+            let Some(project) = self.project.as_ref() else {
+                return;
+            };
+            let id = project.active_id();
+            let name = project.sequence().name.clone();
+            crate::timeline::plan_sequence_id(project, id, project.ui.range(), &settings)
+                .map(|_| (id, name))
+        };
+        let (sequence_id, sequence_name) = match target {
+            Ok(data) => data,
+            Err(error) => {
+                self.flash(format!("无法导出：{error}"));
+                cx.notify();
+                return;
+            }
+        };
 
         // 模态互斥：叠在一起会互相挡住，也会抢同一份按键。
         self.close_subtitle_dialog(cx);
@@ -78,6 +91,8 @@ impl PlayerApp {
             settings,
             presets,
             preset_name,
+            sequence_id,
+            sequence_name,
         });
         self.menu = None;
         self.menu_bar = None;
@@ -194,9 +209,11 @@ impl PlayerApp {
         let settings = dialog.settings.clone();
         // 记下「这条用的是哪个预设」：参数被微调过就对不上任何一份，记成自定义。
         let preset = dialog.presets.find_match(&settings).map(str::to_string);
+        let sequence_id = dialog.sequence_id;
+        let sequence_name = dialog.sequence_name.clone();
         self.export_dialog = None;
         self.export_settings = settings.clone();
-        self.pick_export_path(settings, preset, window, cx);
+        self.pick_export_path(settings, preset, sequence_id, sequence_name, window, cx);
     }
 
     /// 导出面板：参数 + 预设 + 一颗「导出…」。

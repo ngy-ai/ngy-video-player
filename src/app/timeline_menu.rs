@@ -107,7 +107,7 @@ impl PlayerApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        if crate::timeline::transition_room(&project.sequence, after).is_none() {
+        if crate::timeline::transition_room(project.sequence(), after).is_none() {
             self.flash("左边没有紧挨着的片段，加不了转场（先把两段接上）");
             cx.notify();
             return;
@@ -128,8 +128,8 @@ impl PlayerApp {
     ) -> Option<AnyElement> {
         let project = self.project.as_ref()?;
         // 片段被删掉时菜单跟着收掉，不留一张指向不存在接缝的壳。
-        project.sequence.clip(menu.after)?;
-        let current = crate::timeline::transition_at(&project.sequence, menu.after);
+        project.sequence().clip(menu.after)?;
+        let current = crate::timeline::transition_at(project.sequence(), menu.after);
         let kind = current
             .as_ref()
             .map(|transition| transition.kind)
@@ -138,7 +138,7 @@ impl PlayerApp {
             .as_ref()
             .map(|transition| transition.duration)
             .unwrap_or(crate::timeline::DEFAULT_TRANSITION);
-        let room = crate::timeline::transition_room(&project.sequence, menu.after)?;
+        let room = crate::timeline::transition_room(project.sequence(), menu.after)?;
         let after = menu.after;
         let origin = menu_origin(menu.position, TRANSITION_PANEL_HEIGHT, window);
 
@@ -159,7 +159,7 @@ impl PlayerApp {
                         .project
                         .as_ref()
                         .and_then(|project| {
-                            crate::timeline::transition_at(&project.sequence, after)
+                            crate::timeline::transition_at(project.sequence(), after)
                         })
                         .map(|transition| transition.duration)
                         .unwrap_or(crate::timeline::DEFAULT_TRANSITION);
@@ -182,7 +182,7 @@ impl PlayerApp {
                         .project
                         .as_ref()
                         .and_then(|project| {
-                            crate::timeline::transition_at(&project.sequence, after)
+                            crate::timeline::transition_at(project.sequence(), after)
                         })
                         .map(|transition| transition.kind)
                         .unwrap_or_default();
@@ -263,9 +263,9 @@ impl PlayerApp {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let project = self.project.as_ref()?;
-        let track = project.sequence.track(menu.track)?;
+        let track = project.sequence().track(menu.track)?;
         // 片段已经被删掉（比如刚按过 Delete）时，菜单跟着收掉，不留一张空壳。
-        project.sequence.clip(menu.clip)?;
+        project.sequence().clip(menu.clip)?;
 
         let (mute_label, lock_label) = toggle_labels(track.kind, track.muted, track.locked);
         // 图标跟着状态走：亮着的是「当前状态」，点下去变成另一个。

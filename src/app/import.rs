@@ -429,7 +429,7 @@ impl PlayerApp {
         let mut cursor = self
             .project
             .as_ref()
-            .map(|project| project.sequence.duration());
+            .map(|project| project.sequence().duration());
         let mut imported = 0;
         let mut failed = 0;
 
@@ -445,7 +445,7 @@ impl PlayerApp {
                 let end = self
                     .project
                     .as_ref()
-                    .map(|project| project.sequence.duration())
+                    .map(|project| project.sequence().duration())
                     .unwrap_or(Tick::ZERO);
                 vec![playhead, end]
             };
@@ -504,13 +504,13 @@ impl PlayerApp {
     /// 视频与音频用同一个起点：分成两次各找位置会让声音和画面对不齐。
     fn insert_probed(&mut self, id: AssetId, media: &MediaInfo, at: Tick) -> Option<Tick> {
         let project = self.project.as_mut()?;
-        let targets = target_tracks(&project.sequence, media.has_video(), media.has_audio());
+        let targets = target_tracks(project.sequence(), media.has_video(), media.has_audio());
         if targets.is_empty() {
             return None;
         }
 
         // 先在副本上排完，全部成功才写回：插一半失败会留下没有声音的画面。
-        let mut next = project.sequence.clone();
+        let mut next = project.sequence().clone();
         for track in targets {
             let spec = ClipSpec::new(id, Tick::ZERO, media.duration);
             match apply_edit(
@@ -533,7 +533,7 @@ impl PlayerApp {
             }
         }
 
-        project.sequence = next;
+        *project.sequence_mut() = next;
         Some(at + media.duration)
     }
 

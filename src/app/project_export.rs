@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use super::project_file::{file_name, safe_file_stem};
 use super::*;
-use crate::timeline::{ExportSettings, Tick};
+use crate::timeline::{ExportSettings, Id, Tick};
 
 impl PlayerApp {
     /// 选文件名并把这次导出排进队列。
@@ -19,6 +19,8 @@ impl PlayerApp {
         &mut self,
         settings: ExportSettings,
         preset: Option<String>,
+        sequence_id: Id,
+        sequence_name: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -28,12 +30,23 @@ impl PlayerApp {
             cx.notify();
             return;
         }
-        let Some(project) = self.project.as_ref() else {
-            return;
-        };
         // 有入出点就只导工作区：这是「先粗剪一遍，再只导那一段」的入口。
-        let range = project.ui.range();
-        let plan = match crate::timeline::plan_sequence_with(project, range, &settings) {
+        // 计划按面板记下的序列 id 生成：文件选择框开着的时候切到别的序列，
+        // 也不会把 B 序列导成 A 的成片。
+        let prepared = {
+            let Some(project) = self.project.as_ref() else {
+                return;
+            };
+            let range = project.ui.range();
+            let plan = crate::timeline::plan_sequence_id(project, sequence_id, range, &settings);
+            let duration = project
+                .sequence_by_id(sequence_id)
+                .map(|sequence| sequence.duration())
+                .unwrap_or(Tick::ZERO);
+            (range, plan, duration)
+        };
+        let (range, plan, duration) = prepared;
+        let plan = match plan {
             Ok(plan) => plan,
             Err(error) => {
                 self.flash(format!("无法导出：{error}"));
@@ -42,9 +55,9 @@ impl PlayerApp {
         };
         let total = match range {
             Some((start, end)) => end - start,
-            None => project.sequence.duration(),
+            None => duration,
         };
-        let stem = safe_file_stem(&project.sequence.name, "导出");
+        let stem = safe_file_stem(&sequence_name, "导出");
         let default_name = if range.is_some() {
             format!("{stem} 工作区.mp4")
         } else {
@@ -84,7 +97,17 @@ impl PlayerApp {
                             end.secs()
                         ));
                     }
-                    this.enqueue_export(plan, path, total, preset, cx);
+                    this.enqueue_export(
+                        plan,
+                        path,
+                        total,
+                        preset,
+                        super::export_queue::ExportTarget {
+                            id: sequence_id,
+                            name: sequence_name,
+                        },
+                        cx,
+                    );
                 }
                 cx.notify();
             });
@@ -105,6 +128,7 @@ impl PlayerApp {
         self.export_task = None;
         self.export_progress = None;
         self.export_preset = None;
+        self.export_sequence = None;
         self.flash(if queued == 0 {
             "正在取消导出…".to_string()
         } else {
@@ -119,6 +143,7 @@ impl PlayerApp {
         path: PathBuf,
         total: Tick,
         preset: Option<String>,
+        sequence: String,
         cx: &mut Context<Self>,
     ) {
         let (tx, rx) = futures::channel::mpsc::unbounded();
@@ -127,6 +152,7 @@ impl PlayerApp {
                 self.export_task = Some(task);
                 self.export_progress = Some(0.0);
                 self.export_preset = preset;
+                self.export_sequence = Some(sequence);
                 cx.spawn(async move |this, cx| {
                     let mut rx = rx;
                     while let Some(event) = rx.next().await {
@@ -151,9 +177,15 @@ impl PlayerApp {
                 self.export_task = None;
                 self.export_progress = None;
                 let name = file_name(&path);
+                // 队列里可能排着别的序列：完成提示要说清这次是哪条。
+                let of = self
+                    .export_sequence
+                    .take()
+                    .map(|value| format!(" · 序列「{value}」"))
+                    .unwrap_or_default();
                 match self.export_preset.take() {
-                    Some(preset) => self.flash(format!("已导出「{name}」（预设「{preset}」）")),
-                    None => self.flash(format!("已导出「{name}」")),
+                    Some(preset) => self.flash(format!("已导出「{name}」（预设「{preset}」）{of}")),
+                    None => self.flash(format!("已导出「{name}」{of}")),
                 }
                 self.start_next_export(cx);
             }
@@ -162,6 +194,7 @@ impl PlayerApp {
                 self.export_task = None;
                 self.export_progress = None;
                 self.export_preset = None;
+                self.export_sequence = None;
                 self.error = Some(Banner::new("导出失败", message));
                 self.start_next_export(cx);
             }
@@ -169,6 +202,7 @@ impl PlayerApp {
                 self.export_task = None;
                 self.export_progress = None;
                 self.export_preset = None;
+                self.export_sequence = None;
                 self.flash("已取消导出");
             }
         }

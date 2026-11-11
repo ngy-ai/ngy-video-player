@@ -33,12 +33,12 @@ impl PlayerApp {
             let total = self
                 .project
                 .as_ref()
-                .map_or(0, |project| project.sequence.tracks.len());
+                .map_or(0, |project| project.sequence().tracks.len());
             // 加轨时只记了「要看最后一屏」的意图，面板高度到这里才知道；
             // 删轨 / 窗口变矮之后也在这里把滚动位置夹回合法范围。
             self.timeline.sync_tracks(total, visible_track_rows(height));
         }
-        let Some(duration) = self.project.as_ref().map(|p| p.sequence.duration()) else {
+        let Some(duration) = self.project.as_ref().map(|p| p.sequence().duration()) else {
             return;
         };
         let width = (f32::from(window.viewport_size().width) - TIMELINE_GUTTER).max(1.0);
@@ -94,7 +94,7 @@ impl PlayerApp {
         // 空工程还没落盘，但也没丢任何东西：把当前状态当基准，关掉时不必再问。
         self.project_saved = Some(project.clone());
         self.project_path = None;
-        self.history = Some(UndoHistory::new(project.sequence.clone()));
+        self.history = Some(UndoHistory::new(project.sequence().clone()));
         self.show_history = false;
         self.delete_track_confirm = None;
         self.project = Some(project);
@@ -161,7 +161,7 @@ impl PlayerApp {
         self.timeline_menu = None;
         match Project::open(&source) {
             Ok(project) => {
-                let duration = project.sequence.duration();
+                let duration = project.sequence().duration();
                 let playhead = project.ui.playhead.secs();
                 self.timeline = ViewState::new();
                 match project.ui.zoom {
@@ -169,7 +169,7 @@ impl PlayerApp {
                     Some(zoom) => {
                         self.timeline.set_zoom(
                             zoom,
-                            ViewState::max_zoom(project.sequence.fps),
+                            ViewState::max_zoom(project.sequence().fps),
                             duration,
                         );
                         self.timeline.scroll_to(project.ui.scroll, duration);
@@ -192,8 +192,8 @@ impl PlayerApp {
                 self.remember_project(&path);
                 self.project_path = Some(path);
                 // 认不出来的效果不阻止打开，但要说一句：否则用户会以为效果丢了。
-                let unknown = crate::timeline::unknown_effects(&project.sequence);
-                self.history = Some(UndoHistory::new(project.sequence.clone()));
+                let unknown = crate::timeline::unknown_effects(project.sequence());
+                self.history = Some(UndoHistory::new(project.sequence().clone()));
                 self.show_history = false;
                 self.delete_track_confirm = None;
                 self.project = Some(project);
@@ -231,7 +231,7 @@ impl PlayerApp {
             return;
         };
         let lane_x = f32::from(x) - TIMELINE_GUTTER;
-        let duration = project.sequence.duration();
+        let duration = project.sequence().duration();
         let seconds = seek_seconds(&self.timeline, lane_x, duration, snap);
         self.timeline_snap = snap;
         let mut at = Tick::from_secs(seconds);
@@ -243,7 +243,7 @@ impl PlayerApp {
                 .in_point
                 .into_iter()
                 .chain(project.ui.out_point)
-                .chain(project.sequence.markers.iter().map(|marker| marker.at))
+                .chain(project.sequence().markers.iter().map(|marker| marker.at))
                 .collect();
             at = snap_to_targets(&self.timeline, at, &targets);
         }
@@ -255,7 +255,7 @@ impl PlayerApp {
     }
 
     pub(super) fn scroll_timeline(&mut self, pixels: f32) {
-        let Some(duration) = self.project.as_ref().map(|p| p.sequence.duration()) else {
+        let Some(duration) = self.project.as_ref().map(|p| p.sequence().duration()) else {
             return;
         };
         self.timeline.scroll_by(pixels, duration);
@@ -266,8 +266,8 @@ impl PlayerApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        let max_zoom = ViewState::max_zoom(project.sequence.fps);
-        let duration = project.sequence.duration();
+        let max_zoom = ViewState::max_zoom(project.sequence().fps);
+        let duration = project.sequence().duration();
         self.timeline
             .zoom_around(factor, anchor_x.max(0.0), max_zoom, duration);
     }
@@ -279,7 +279,10 @@ impl PlayerApp {
         label: impl Into<String>,
     ) {
         if let Some(project) = self.project.as_mut() {
-            project.sequence = sequence;
+            // 序列 id 属于工程：编辑纯函数若从零构造了新序列，也不能把它冲掉。
+            let id = project.active_id();
+            *project.sequence_mut() = sequence;
+            project.sequence_mut().id = id;
         }
         self.remember_history(label);
     }
@@ -293,7 +296,7 @@ impl PlayerApp {
             return;
         };
         if let Some(project) = self.project.as_ref() {
-            history.push_labeled(project.sequence.clone(), label);
+            history.push_labeled(project.sequence().clone(), label);
         }
         // 编辑路径最后都收敛到这里，自动保存的 30 秒计时也就挂在这一处。
         self.note_edit();
@@ -348,8 +351,16 @@ impl PlayerApp {
         let Some(project) = self.project.as_mut() else {
             return;
         };
-        project.sequence = sequence;
-        prune_selection(&mut project.ui.selected, &project.sequence);
+        let id = project.active_id();
+        *project.sequence_mut() = sequence;
+        project.sequence_mut().id = id;
+        // 先把存活的片段 id 收成集合：`ui` 与序列同属 project，不能一借一改。
+        let alive: std::collections::HashSet<Id> = project
+            .sequence()
+            .clips()
+            .map(|(_, clip)| clip.id)
+            .collect();
+        prune_selection(&mut project.ui.selected, &alive);
         // 撤销 / 重做同样是「内容改了」，要重新计时。
         self.note_edit();
         self.poke();
@@ -370,10 +381,10 @@ impl PlayerApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        let duration = project.sequence.duration();
+        let duration = project.sequence().duration();
         let seconds = duration.secs().max(1.0) as f32;
         let zoom = self.timeline.width() / seconds * 0.95;
-        let max_zoom = ViewState::max_zoom(project.sequence.fps);
+        let max_zoom = ViewState::max_zoom(project.sequence().fps);
         self.timeline.set_zoom(zoom, max_zoom, duration);
         self.timeline.scroll_to(0.0, duration);
         cx.notify();
@@ -390,7 +401,7 @@ impl PlayerApp {
         let Some(project) = &self.project else {
             return div().into_any_element();
         };
-        let sequence = &project.sequence;
+        let sequence = project.sequence();
         let view = &self.timeline;
         let window_width = f32::from(window.viewport_size().width);
         let lane_width = (window_width - TIMELINE_GUTTER).max(1.0);
@@ -694,8 +705,8 @@ fn visible_track_rows(height: f32) -> usize {
 
 /// 撤销 / 重做之后，选中集合里指向已消失片段的 id 要清掉，
 /// 否则下一次删除会拿一个不存在的 id 去查表并报错。
-fn prune_selection(selected: &mut Vec<Id>, sequence: &crate::timeline::Sequence) {
-    selected.retain(|id| sequence.clip(*id).is_some());
+fn prune_selection(selected: &mut Vec<Id>, alive: &std::collections::HashSet<Id>) {
+    selected.retain(|id| alive.contains(id));
 }
 
 #[cfg(test)]
@@ -725,7 +736,9 @@ mod tests {
         ));
 
         let mut selected = vec![id, Id::new(999)];
-        prune_selection(&mut selected, &sequence);
+        let alive: std::collections::HashSet<Id> =
+            sequence.clips().map(|(_, clip)| clip.id).collect();
+        prune_selection(&mut selected, &alive);
         assert_eq!(selected, vec![id], "只留下还在序列里的");
     }
 }

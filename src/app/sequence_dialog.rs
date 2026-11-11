@@ -86,9 +86,9 @@ impl PlayerApp {
                 .as_ref()
                 .map(|project| {
                     SequenceSpec::new(
-                        project.sequence.width,
-                        project.sequence.height,
-                        project.sequence.fps,
+                        project.sequence().width,
+                        project.sequence().height,
+                        project.sequence().fps,
                     )
                 })
                 .unwrap_or_default(),
@@ -267,16 +267,16 @@ impl PlayerApp {
             return;
         };
         let current = SequenceSpec::new(
-            project.sequence.width,
-            project.sequence.height,
-            project.sequence.fps,
+            project.sequence().width,
+            project.sequence().height,
+            project.sequence().fps,
         );
         if current == spec {
             self.flash("序列规格没有变化");
             cx.notify();
             return;
         }
-        let mut sequence = project.sequence.clone();
+        let mut sequence = project.sequence().clone();
         sequence.width = spec.width;
         sequence.height = spec.height;
         sequence.fps = spec.fps;

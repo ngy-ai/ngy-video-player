@@ -53,7 +53,7 @@ impl PlayerApp {
             return;
         };
         let draft = match item {
-            Some(id) => match project.sequence.subtitle(id) {
+            Some(id) => match project.sequence().subtitle(id) {
                 Some(existing) => existing.clone(),
                 None => return,
             },
@@ -63,7 +63,7 @@ impl PlayerApp {
             }
         };
         if let Some(id) = track
-            && project.sequence.track(id).is_some_and(|lane| lane.locked)
+            && project.sequence().track(id).is_some_and(|lane| lane.locked)
         {
             self.flash("轨道锁着，先解锁再加字幕");
             cx.notify();
@@ -174,7 +174,7 @@ impl PlayerApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        let mut sequence = project.sequence.clone();
+        let mut sequence = project.sequence().clone();
         let (op, message) = if let Some(id) = dialog.item {
             (EditOp::SetSubtitle { id, item }, "编辑字幕".to_string())
         } else {
@@ -206,7 +206,7 @@ impl PlayerApp {
                 if self
                     .project
                     .as_ref()
-                    .is_some_and(|project| project.sequence == next)
+                    .is_some_and(|project| *project.sequence() == next)
                 {
                     self.flash("没有变化");
                 } else {
@@ -228,7 +228,7 @@ impl PlayerApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        match crate::timeline::apply(&project.sequence, &EditOp::RemoveSubtitle { id }) {
+        match crate::timeline::apply(project.sequence(), &EditOp::RemoveSubtitle { id }) {
             Ok(next) => {
                 self.commit_edit(next, "删除字幕");
                 self.flash("已删除字幕");
@@ -259,7 +259,7 @@ impl PlayerApp {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let project = self.project.as_ref()?;
-        project.sequence.subtitle(item)?;
+        project.sequence().subtitle(item)?;
         let origin = super::timeline_menu::menu_origin(
             position,
             super::timeline_menu::menu_height(2, 0),
@@ -308,7 +308,7 @@ impl PlayerApp {
                         this.timeline_menu = None;
                         if let Some(project) = this.project.as_ref()
                             && let Ok(next) = crate::timeline::apply(
-                                &project.sequence,
+                                project.sequence(),
                                 &EditOp::RemoveSubtitle { id: item },
                             )
                         {

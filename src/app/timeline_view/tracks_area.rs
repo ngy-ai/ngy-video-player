@@ -20,7 +20,7 @@ impl PlayerApp {
         let Some(project) = &self.project else {
             return div().into_any_element();
         };
-        let sequence = &project.sequence;
+        let sequence = project.sequence();
         let tracks_top = TIMELINE_HEADER + TIMELINE_RULER;
         let area_height = (height - tracks_top).max(0.0);
         let row_px = TIMELINE_TRACK_HEIGHT + TIMELINE_TRACK_GAP;
@@ -64,7 +64,7 @@ impl PlayerApp {
                         let count = this
                             .project
                             .as_ref()
-                            .map_or(0, |project| project.sequence.tracks.len());
+                            .map_or(0, |project| project.sequence().tracks.len());
                         let visible = visible_track_rows(this.timeline_height(window));
                         let row_px = TIMELINE_TRACK_HEIGHT + TIMELINE_TRACK_GAP;
                         let moved = this
@@ -142,7 +142,7 @@ impl PlayerApp {
                             let count = this
                                 .project
                                 .as_ref()
-                                .map_or(0, |project| project.sequence.tracks.len());
+                                .map_or(0, |project| project.sequence().tracks.len());
                             let visible = visible_track_rows(panel_height);
                             let target = (fraction * count.saturating_sub(visible) as f32).round();
                             this.timeline

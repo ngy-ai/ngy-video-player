@@ -36,6 +36,8 @@ pub(super) enum BarAction {
     ShowHistory,
     /// 改当前序列的分辨率与帧率。
     SequenceSettings,
+    /// 管理工程里的多条序列：新建 / 切换 / 改名 / 删除。
+    ManageSequences,
     /// 退出工程模式，回到纯播放器。
     CloseProject,
     // -- 剪辑模式专用 ------------------------------------------------------

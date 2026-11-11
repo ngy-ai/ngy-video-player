@@ -4,6 +4,9 @@ use super::*;
 use crate::timeline::ClipItem;
 use std::fs;
 
+#[path = "tests/sequences.rs"]
+mod sequences;
+
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("ngy-vp-project-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
@@ -32,9 +35,9 @@ fn sample(dir: &Path) -> (Project, PathBuf, AssetId, Id) {
     let mut project = Project::new();
     let asset = project.add_asset(&file);
 
-    let video = project.sequence.tracks[0].id;
-    let clip = project.sequence.alloc_id();
-    project.sequence.track_mut(video).unwrap().clips.push(
+    let video = project.sequence_mut().tracks[0].id;
+    let clip = project.sequence_mut().alloc_id();
+    project.sequence_mut().track_mut(video).unwrap().clips.push(
         ClipItem::new(
             clip,
             asset,
@@ -58,17 +61,17 @@ fn 保存后能原样打开() {
 
     project.save(&path).expect("保存工程");
 
-    let back = Project::open(&path).expect("打开工程");
+    let mut back = Project::open(&path).expect("打开工程");
     assert_eq!(back.version, PROJECT_VERSION);
-    assert_eq!(back.sequence.name, project.sequence.name);
-    assert_eq!(back.sequence.fps, project.sequence.fps);
-    assert_eq!(back.sequence.tracks[0].clips.len(), 1);
-    assert_eq!(back.sequence.tracks[0].clips[0].id, clip);
-    assert_eq!(back.sequence.tracks[0].clips[0].name, "开场");
-    assert_eq!(back.sequence.tracks[0].clips[0].asset_id, asset);
+    assert_eq!(back.sequence().name, project.sequence().name);
+    assert_eq!(back.sequence_mut().fps, project.sequence_mut().fps);
+    assert_eq!(back.sequence_mut().tracks[0].clips.len(), 1);
+    assert_eq!(back.sequence_mut().tracks[0].clips[0].id, clip);
+    assert_eq!(back.sequence_mut().tracks[0].clips[0].name, "开场");
+    assert_eq!(back.sequence_mut().tracks[0].clips[0].asset_id, asset);
     assert_eq!(back.ui.playhead, Tick::from_millis(1500));
     assert_eq!(back.ui.selected, vec![clip]);
-    assert!(back.sequence.validate().is_ok());
+    assert!(back.sequence_mut().validate().is_ok());
 
     assert_eq!(back.assets.len(), 1);
     assert!(!back.assets[0].missing, "素材还在原地");
@@ -160,7 +163,7 @@ fn 内容比对忽略播放头但认得序列改动() {
     other.ui.selected.clear();
     assert!(project.same_content(&other), "拖播放头、改选中不算改动");
 
-    other.sequence.name = "改名了".to_string();
+    other.sequence_mut().name = "改名了".to_string();
     assert!(!project.same_content(&other), "序列名改了要算改动");
 
     let mut third = project.clone();
@@ -248,17 +251,21 @@ fn 保存时留下上一版备份() {
     let dir = scratch("backup");
     let path = dir.join("p.ngyproj");
     let mut project = Project::new();
-    project.sequence.name = "第一版".to_string();
+    project.sequence_mut().name = "第一版".to_string();
     project.save(&path).expect("第一次保存");
 
-    project.sequence.name = "第二版".to_string();
+    project.sequence_mut().name = "第二版".to_string();
     project.save(&path).expect("第二次保存");
 
     let current = Project::from_json(&fs::read_to_string(&path).expect("读当前工程")).unwrap();
-    assert_eq!(current.sequence.name, "第二版");
+    assert_eq!(current.sequence().name, "第二版");
 
     let backup = Project::from_json(&fs::read_to_string(bak_of(&path)).expect("读备份")).unwrap();
-    assert_eq!(backup.sequence.name, "第一版", ".bak 是上一次保存的那一版");
+    assert_eq!(
+        backup.sequence().name,
+        "第一版",
+        ".bak 是上一次保存的那一版"
+    );
 
     let temp = dir.join("p.ngyproj.tmp");
     assert!(!temp.exists(), "临时文件不能留在磁盘上");
@@ -314,7 +321,7 @@ fn 老工程没有版本号也能读() {
     let project =
         Project::from_json(r#"{"sequence":{"name":"旧工程"}}"#).expect("没有 version 当作 v1");
     assert_eq!(project.version, PROJECT_VERSION);
-    assert_eq!(project.sequence.name, "旧工程");
+    assert_eq!(project.sequence().name, "旧工程");
     assert!(project.assets.is_empty());
 }
 
@@ -410,9 +417,9 @@ fn 保存会去掉指向已删片段的转场() {
     let dir = scratch("dangling");
     let path = dir.join("p.ngyproj");
     let mut project = Project::new();
-    let video = project.sequence.tracks[0].id;
+    let video = project.sequence_mut().tracks[0].id;
     project
-        .sequence
+        .sequence_mut()
         .track_mut(video)
         .unwrap()
         .transitions
@@ -426,7 +433,7 @@ fn 保存会去掉指向已删片段的转场() {
 
     project.save(&path).expect("保存工程");
     let back = Project::open(&path).expect("打开工程");
-    assert!(back.sequence.tracks[0].transitions.is_empty());
+    assert!(back.sequence().tracks[0].transitions.is_empty());
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -467,7 +474,7 @@ fn 被片段引用的素材不能移除() {
     assert!(project.asset(asset).is_some(), "拒绝移除时素材必须还在");
 
     // 把引用它的片段删掉之后就能移除，文件本身不受影响。
-    project.sequence.tracks[0].clips.clear();
+    project.sequence_mut().tracks[0].clips.clear();
     assert_eq!(project.remove_asset(asset), Ok(()));
     assert!(project.asset(asset).is_none());
     assert!(file.is_file(), "只改素材表，不动磁盘上的文件");
@@ -488,32 +495,32 @@ fn 字幕条目随工程往返且老工程缺字段也能打开() {
     let dir = scratch("subtitle-roundtrip");
     let path = dir.join("p.ngyproj");
     let (mut project, _, _, _) = sample(&dir);
-    let track = project.sequence.add_track(TrackKind::Subtitle);
-    let id = project.sequence.alloc_id();
+    let track = project.sequence_mut().add_track(TrackKind::Subtitle);
+    let id = project.sequence_mut().alloc_id();
     let mut entry = SubtitleItem::new(id, Tick::from_secs(5.0), Tick::from_secs(8.0), "你好，世界");
     entry.style.size = 64;
     entry.style.color = COLORS[1].0;
     entry.style.position = SubtitlePosition::Top;
     project
-        .sequence
+        .sequence_mut()
         .track_mut(track)
         .unwrap()
         .subtitles
         .push(entry.clone());
 
     project.save(&path).expect("保存工程");
-    let back = Project::open(&path).expect("打开工程");
-    assert_eq!(back.sequence.subtitle(id), Some(&entry));
-    assert_eq!(back.sequence.duration(), Tick::from_secs(8.0));
-    assert_eq!(back.sequence.subtitle_track(id), Some(track));
-    assert!(back.sequence.validate().is_ok());
+    let mut back = Project::open(&path).expect("打开工程");
+    assert_eq!(back.sequence().subtitle(id), Some(&entry));
+    assert_eq!(back.sequence_mut().duration(), Tick::from_secs(8.0));
+    assert_eq!(back.sequence_mut().subtitle_track(id), Some(track));
+    assert!(back.sequence_mut().validate().is_ok());
 
     // 这一版之前写的工程没有 `subtitles` 键：整条字幕轨仍要能打开。
     let legacy = r#"{"version":1,"sequence":{"tracks":[{"id":1,"kind":"subtitle",
         "name":"字幕 1","clips":[],"transitions":[],"muted":false,"locked":false}],
         "markers":[]},"assets":[],"ui":{},"next_asset_id":1}"#;
     let old = Project::from_json(legacy).expect("老工程照常打开");
-    assert!(old.sequence.tracks[0].subtitles.is_empty());
+    assert!(old.sequence().tracks[0].subtitles.is_empty());
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -561,7 +568,7 @@ fn lut_路径随工程相对化并在另存后跟着新目录() {
     let dir = scratch("lut-path");
     let (mut project, _, _, clip) = sample(&dir);
     let lut = media(&dir, "luts/warm.cube");
-    project.sequence.clip_mut(clip).unwrap().color.lut = Some(lut.clone());
+    project.sequence_mut().clip_mut(clip).unwrap().color.lut = Some(lut.clone());
 
     let path = dir.join("p.ngyproj");
     project.save(&path).expect("保存工程");
@@ -573,7 +580,7 @@ fn lut_路径随工程相对化并在另存后跟着新目录() {
 
     // 内存里也跟着变成便携形式，导出时由 `resolve_path` 还原。
     let stored = project
-        .sequence
+        .sequence()
         .clip(clip)
         .unwrap()
         .color
@@ -594,7 +601,7 @@ fn lut_路径随工程相对化并在另存后跟着新目录() {
     fs::create_dir_all(&sub).expect("建子目录");
     project.save(&sub.join("p.ngyproj")).expect("另存为");
     let stored = project
-        .sequence
+        .sequence()
         .clip(clip)
         .unwrap()
         .color
@@ -611,7 +618,7 @@ fn lut_路径随工程相对化并在另存后跟着新目录() {
 fn 相对_lut_路径按工程目录解析() {
     let dir = scratch("lut-relative");
     let (mut project, _, _, clip) = sample(&dir);
-    project.sequence.clip_mut(clip).unwrap().color.lut = Some(PathBuf::from("luts/a.cube"));
+    project.sequence_mut().clip_mut(clip).unwrap().color.lut = Some(PathBuf::from("luts/a.cube"));
 
     // 没保存过的工程没有基准目录：相对路径原样返回。
     assert_eq!(

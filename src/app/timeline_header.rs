@@ -11,7 +11,7 @@ impl PlayerApp {
         let Some(project) = &self.project else {
             return div().into_any_element();
         };
-        let sequence = &project.sequence;
+        let sequence = project.sequence();
         let duration = sequence.duration();
         let playhead = project.ui.playhead.secs();
         // 能用才点亮：灰色按钮比点了没反应更容易看懂。

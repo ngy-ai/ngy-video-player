@@ -144,7 +144,7 @@ impl PlayerApp {
             TrackKind::Audio
         };
         let Some(track) = project
-            .sequence
+            .sequence()
             .tracks
             .iter()
             .find(|track| track.kind == kind && !track.locked)
@@ -173,7 +173,7 @@ impl PlayerApp {
             },
         };
 
-        match apply_edit(&project.sequence, &op) {
+        match apply_edit(project.sequence(), &op) {
             Ok(sequence) => {
                 let verb = match mode {
                     Placement::Overwrite => "覆盖",

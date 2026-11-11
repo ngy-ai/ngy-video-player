@@ -381,10 +381,13 @@ impl Track {
     }
 }
 
-/// 一条时间线。一个工程可以有多条序列（M6-T03 导出队列按序列排队）。
+/// 一条时间线。一个工程可以有多条序列，切换与迁移见 `docs/adr/0009`。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Sequence {
+    /// 工程级 id，由 `Project::alloc_sequence_id` 分配。与序列内部的 `next_id`
+    /// 是两个空间：不同序列里可以有同号的轨道 / 片段。
+    pub id: Id,
     pub name: String,
     /// 序列帧率。素材帧率可以不同，换算只在 `timeline::time` 里发生。
     pub fps: Rational,
@@ -399,6 +402,7 @@ pub struct Sequence {
 impl Default for Sequence {
     fn default() -> Self {
         Self {
+            id: Id::default(),
             name: "序列 1".to_string(),
             fps: Rational::FPS_30,
             width: 1920,

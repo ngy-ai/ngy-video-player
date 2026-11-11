@@ -50,7 +50,7 @@ impl PlayerApp {
         let Some(project) = self.project.as_ref() else {
             return false;
         };
-        let Some(frame) = preview::resolve(&project.sequence, at) else {
+        let Some(frame) = preview::resolve(project.sequence(), at) else {
             // 空档的黑场由画面那一层压黑（`preview::overlay_dim`），这里只负责别出声：
             // 不暂停的话 mpv 会接着放上一段的声音，播放头走过空档时听着像窜了音。
             self.send(Command::SetPaused(true));
@@ -98,7 +98,7 @@ impl PlayerApp {
             cx.notify();
             return;
         }
-        let duration = project.sequence.duration();
+        let duration = project.sequence().duration();
         if duration <= Tick::ZERO {
             self.flash("时间线还是空的");
             cx.notify();
@@ -173,7 +173,7 @@ impl PlayerApp {
             self.stop_timeline_playback(cx);
             return;
         };
-        let stop = preview::stop_at(project.sequence.duration(), project.ui.range());
+        let stop = preview::stop_at(project.sequence().duration(), project.ui.range());
         // 倍速是 mpv 的播放速度：时钟必须乘同一个数，否则改了倍速之后音画和
         // 播放头会越离越远。
         let speed = self.snapshot.speed;
@@ -205,7 +205,7 @@ impl PlayerApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        let Some(frame) = preview::resolve(&project.sequence, at) else {
+        let Some(frame) = preview::resolve(project.sequence(), at) else {
             // 空档：这一刻没有任何画面。停住 mpv，播放头照常往前走。
             if !self.snapshot.paused {
                 self.send(Command::SetPaused(true));
@@ -267,7 +267,7 @@ impl PlayerApp {
     /// 都下命令，会让它一直重新 seek，听着就是不停打嗝。
     fn sync_timeline_audio(&mut self, at: Tick, playing: bool, follow: bool) {
         let target = self.project.as_ref().and_then(|project| {
-            let frame = preview::resolve_audio(&project.sequence, at)?;
+            let frame = preview::resolve_audio(project.sequence(), at)?;
             let path = project.asset_path(frame.asset)?.to_path_buf();
             Some((path, frame.source.secs()))
         });
@@ -356,7 +356,7 @@ impl PlayerApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        let duration = project.sequence.duration();
+        let duration = project.sequence().duration();
         let limit = crate::timeline::playhead_limit(&self.timeline, duration);
         let at = Tick::from_secs((project.ui.playhead.secs() + delta).clamp(0.0, limit));
         if let Some(project) = self.project.as_mut() {
@@ -374,8 +374,8 @@ impl PlayerApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        let fps = project.sequence.fps;
-        let duration = project.sequence.duration();
+        let fps = project.sequence().fps;
+        let duration = project.sequence().duration();
         let limit = Tick::from_secs(crate::timeline::playhead_limit(&self.timeline, duration));
         let frame = project.ui.playhead.round_frames(fps) + i64::from(steps);
         let at = Tick::from_frames(frame, fps).clamp(Tick::ZERO, limit);
@@ -397,7 +397,7 @@ impl PlayerApp {
             return;
         };
         let playhead = project.ui.playhead.secs();
-        let duration = project.sequence.duration();
+        let duration = project.sequence().duration();
         let width = self.timeline.width();
         let x = self.timeline.x_of(playhead);
         if x >= 0.0 && x <= width * 0.85 {

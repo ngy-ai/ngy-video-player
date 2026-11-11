@@ -206,7 +206,7 @@ impl PlayerApp {
             self.project
                 .as_ref()
                 .map(|project| {
-                    crate::timeline::preview::overlay_dim(&project.sequence, project.ui.playhead)
+                    crate::timeline::preview::overlay_dim(project.sequence(), project.ui.playhead)
                 })
                 .unwrap_or(0.0)
         };
@@ -216,7 +216,7 @@ impl PlayerApp {
             None
         } else {
             self.project.as_ref().and_then(|project| {
-                crate::timeline::subtitle_at(&project.sequence, project.ui.playhead)
+                crate::timeline::subtitle_at(project.sequence(), project.ui.playhead)
             })
         };
         div()

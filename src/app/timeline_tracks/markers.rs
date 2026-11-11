@@ -80,8 +80,8 @@ impl PlayerApp {
             return;
         };
         let at = project.ui.playhead;
-        let name = format!("标记 {}", project.sequence.markers.len() + 1);
-        let added = project.sequence.toggle_marker(at, name, tolerance);
+        let name = format!("标记 {}", project.sequence().markers.len() + 1);
+        let added = project.sequence_mut().toggle_marker(at, name, tolerance);
 
         self.flash(if added {
             "已添加标记"

@@ -63,13 +63,13 @@ fn 自动保存能被打开且不留备份() {
     let dir = scratch("write");
     let project_path = dir.join("p.ngyproj");
     let mut project = Project::new();
-    project.sequence.name = "崩溃前".to_string();
+    project.sequence_mut().name = "崩溃前".to_string();
 
     let path = write(&project, &project_path).expect("写自动保存");
     assert_eq!(path, autosave_path(&project_path));
 
     let back = Project::open(&path).expect("自动保存也是合法工程");
-    assert_eq!(back.sequence.name, "崩溃前");
+    assert_eq!(back.sequence().name, "崩溃前");
     assert!(
         !with_suffix(&path, ".bak").exists(),
         "自动保存不该每 30 秒多一份 .bak"
@@ -104,7 +104,7 @@ fn 更晚的自动保存才提示恢复() {
 
     // 文件系统的时间戳精度可能只到秒，睡够一秒才能保证「更晚」。
     std::thread::sleep(Duration::from_millis(1100));
-    project.sequence.name = "崩溃前".to_string();
+    project.sequence_mut().name = "崩溃前".to_string();
     let autosave = write(&project, &project_path).expect("写自动保存");
     assert_eq!(pending(&project_path), Some(autosave.clone()));
 

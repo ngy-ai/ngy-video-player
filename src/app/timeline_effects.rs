@@ -34,7 +34,7 @@ impl PlayerApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        if project.sequence.clip(clip).is_none() {
+        if project.sequence().clip(clip).is_none() {
             return;
         }
         self.timeline_menu = Some(TimelineMenu::Effects(EffectsMenu { clip, position }));
@@ -55,16 +55,16 @@ impl PlayerApp {
             return;
         };
         let locked = project
-            .sequence
+            .sequence()
             .clip_track(clip)
-            .and_then(|track| project.sequence.track(track))
+            .and_then(|track| project.sequence().track(track))
             .is_some_and(|track| track.locked);
         if locked {
             self.flash("轨道锁着，先解锁再改效果");
             cx.notify();
             return;
         }
-        let mut sequence = project.sequence.clone();
+        let mut sequence = project.sequence().clone();
         let Some(message) = change(&mut sequence) else {
             return;
         };
@@ -83,15 +83,15 @@ impl PlayerApp {
     ) -> Option<AnyElement> {
         let project = self.project.as_ref()?;
         // 片段被删掉时菜单跟着收掉，不留一张指向不存在片段的壳。
-        let clip = project.sequence.clip(menu.clip)?;
+        let clip = project.sequence().clip(menu.clip)?;
         let track = project
-            .sequence
+            .sequence()
             .clip_track(menu.clip)
-            .and_then(|track| project.sequence.track(track));
+            .and_then(|track| project.sequence().track(track));
         let locked = track.is_some_and(|track| track.locked);
         let title = format!("效果 · {}", clip_title(project, clip));
         let effects = clip.effects.clone();
-        let fps = crate::timeline::sequence_fps(&project.sequence);
+        let fps = crate::timeline::sequence_fps(project.sequence());
 
         let height = CHROME_HEIGHT + effects.len() as f32 * ROW_HEIGHT;
         let origin = super::timeline_menu::menu_origin(menu.position, height, window);

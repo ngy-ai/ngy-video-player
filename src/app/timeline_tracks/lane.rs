@@ -48,7 +48,7 @@ impl PlayerApp {
                     let Some(project) = this.project.as_ref() else {
                         return;
                     };
-                    let fps = project.sequence.fps;
+                    let fps = project.sequence().fps;
                     let lane_x = f32::from(position.x) - f32::from(event.bounds.origin.x);
                     let seconds = this.timeline.time_at(lane_x - grab).max(0.0);
                     let start = snap_to_frame(Tick::from_secs(seconds), fps);
@@ -300,7 +300,7 @@ impl PlayerApp {
         // 拖动预览：贴着落点画一个半透明框，松手之前就能看出会落到哪。
         if let Some(drop) = self.timeline_drop
             && drop.to_track == track_id
-            && let Some(clip) = project.sequence.clip(drop.clip)
+            && let Some(clip) = project.sequence().clip(drop.clip)
         {
             let left = view.x_of(drop.start.secs()).max(0.0);
             let right = view
@@ -417,7 +417,7 @@ impl PlayerApp {
             },
         };
         let outcome = match self.project.as_ref() {
-            Some(project) => apply_edit(&project.sequence, &op),
+            Some(project) => apply_edit(project.sequence(), &op),
             None => return,
         };
         match outcome {

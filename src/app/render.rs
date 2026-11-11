@@ -248,6 +248,7 @@ impl Render for PlayerApp {
                     || this.on_convert_key(event, cx)
                     || this.on_export_dialog_key(event, cx)
                     || this.on_subtitle_dialog_key(event, cx)
+                    || this.on_sequence_manager_key(event, cx)
                 {
                     cx.stop_propagation();
                     return;
@@ -433,6 +434,7 @@ impl Render for PlayerApp {
             .children(self.render_concat_dialog(cx))
             .children(self.render_export_dialog(cx))
             .children(self.render_subtitle_dialog(cx))
+            .children(self.render_sequence_manager_dialog(cx))
             .children(self.render_playlist_import_dialog(cx))
             .children(self.render_file_info(cx))
             .children(self.render_delete_track_confirm(cx))

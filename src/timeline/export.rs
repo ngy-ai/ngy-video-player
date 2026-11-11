@@ -10,7 +10,7 @@ mod settings;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-pub use plan::{plan_sequence, plan_sequence_range, plan_sequence_with};
+pub use plan::{plan_sequence, plan_sequence_id, plan_sequence_range, plan_sequence_with};
 pub use presets::{PRESET_NAME_CHARS, RenderPreset, RenderPresetStore, normalize_name};
 pub use settings::{EncodeSpeed, ExportSettings, Quality, SubtitleMode, VideoCodec};
 
@@ -119,6 +119,8 @@ pub enum ExportError {
     MissingAsset(String),
     /// 工作区（入点 / 出点）夹到序列范围之后是空的。
     EmptyRange,
+    /// 记下要导的序列之后，它被从工程里删掉了。
+    SequenceGone,
 }
 
 impl fmt::Display for ExportError {
@@ -131,6 +133,7 @@ impl fmt::Display for ExportError {
                 write!(f, "素材「{name}」找不到了，先把它放回原处或重新链接")
             }
             Self::EmptyRange => write!(f, "工作区是空的：入点要早于出点"),
+            Self::SequenceGone => write!(f, "要导的序列已经被删掉了，重新打开导出面板再选一次"),
         }
     }
 }

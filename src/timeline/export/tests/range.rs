@@ -33,10 +33,10 @@ fn 音频也跟着切并重新起算() {
     let scratch = Scratch::new("range-audio");
     let (mut project, _) = project_with(&scratch, &[(s(0), s(10), Tick::ZERO)]);
     let asset = project.assets[0].id;
-    let audio = project.sequence.tracks[1].id;
-    let id = project.sequence.alloc_id();
+    let audio = project.sequence_mut().tracks[1].id;
+    let id = project.sequence_mut().alloc_id();
     project
-        .sequence
+        .sequence_mut()
         .track_mut(audio)
         .expect("音频轨存在")
         .clips

@@ -35,7 +35,7 @@ pub use effect::{
 pub use export::{
     EncodeSpeed, ExportError, ExportPlan, ExportSettings, PRESET_NAME_CHARS, Quality, RenderPreset,
     RenderPresetStore, SubtitleAttachment, SubtitleMode, VideoCodec,
-    normalize_name as normalize_preset_name, plan_sequence, plan_sequence_range,
+    normalize_name as normalize_preset_name, plan_sequence, plan_sequence_id, plan_sequence_range,
     plan_sequence_with,
 };
 pub use keyframe::{
@@ -49,7 +49,8 @@ pub use model::{
 };
 pub use ops::{ClipSpec, EditError, EditOp, Placement, apply, remove_clips, split_at};
 pub use project::{
-    Asset, AssetRemoveError, PROJECT_EXTENSION, PROJECT_VERSION, Project, ProjectError, UiState,
+    Asset, AssetRemoveError, PROJECT_EXTENSION, PROJECT_VERSION, Project, ProjectError,
+    SequenceError, UiState,
 };
 pub use spec::{SequenceSpec, SpecError, rate_label};
 pub use speed::{set_hold, set_speed};

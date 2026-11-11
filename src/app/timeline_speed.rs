@@ -40,7 +40,7 @@ impl PlayerApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        if project.sequence.clip(clip).is_none() {
+        if project.sequence().clip(clip).is_none() {
             return;
         }
         self.timeline_menu = Some(TimelineMenu::Speed(SpeedMenu { clip, position }));
@@ -54,13 +54,13 @@ impl PlayerApp {
         let result = self
             .project
             .as_ref()
-            .map(|project| crate::timeline::apply(&project.sequence, &op));
+            .map(|project| crate::timeline::apply(project.sequence(), &op));
         match result {
             Some(Ok(next)) => {
                 if self
                     .project
                     .as_ref()
-                    .is_some_and(|project| project.sequence == next)
+                    .is_some_and(|project| *project.sequence() == next)
                 {
                     self.flash("没有变化");
                     cx.notify();
@@ -87,11 +87,11 @@ impl PlayerApp {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let project = self.project.as_ref()?;
-        let clip = project.sequence.clip(menu.clip)?;
+        let clip = project.sequence().clip(menu.clip)?;
         let locked = project
-            .sequence
+            .sequence()
             .clip_track(menu.clip)
-            .and_then(|track| project.sequence.track(track))
+            .and_then(|track| project.sequence().track(track))
             .is_some_and(|track| track.locked);
         let rate = clip.rate();
         let hold = clip.hold.max(Tick::ZERO);

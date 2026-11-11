@@ -132,7 +132,7 @@ impl PlayerApp {
         let Some(project) = self.project.as_mut() else {
             return;
         };
-        let Some(track) = project.sequence.track_mut(track) else {
+        let Some(track) = project.sequence_mut().track_mut(track) else {
             return;
         };
         track.muted = !track.muted;
@@ -161,7 +161,7 @@ impl PlayerApp {
         let Some(project) = self.project.as_mut() else {
             return;
         };
-        let Some(track) = project.sequence.track_mut(track) else {
+        let Some(track) = project.sequence_mut().track_mut(track) else {
             return;
         };
         track.locked = !track.locked;

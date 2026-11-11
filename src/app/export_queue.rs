@@ -4,18 +4,25 @@
 //! 是剪辑收尾时最常见的动作。队列只是一串待跑的 [`QueuedExport`]，真正干活仍然
 //! 只有 `ExportTask` 一个，所以「同时只跑一条」是结构上就成立的。
 //!
-//! 工程目前只有一条序列（`Project::sequence`），所以队列装的是「同一条序列的多次
-//! 导出」，而不是「多条序列各导一次」。等模型支持多序列时，这里换成按序列排队即可。
+//! 队列里每项都记着它属于哪条序列：工程可以同时存在多条序列，切换序列之后
+//! 提示里仍要说得清「这次导的是哪条」。
 
 use std::path::PathBuf;
 
 use super::*;
-use crate::timeline::{ExportPlan, Tick};
+use crate::timeline::{ExportPlan, Id, Tick};
+
+/// 一次导出属于哪条序列。id 与名字一起带进队列，切换序列不会把活算到别处。
+#[derive(Clone, Debug)]
+pub(super) struct ExportTarget {
+    pub id: Id,
+    pub name: String,
+}
 
 /// 排队中的一次导出。
 ///
 /// 计划在入队时就算好并定死：入队之后的编辑不该改写已经排上的活——用户点导出时
-/// 认可的是当时那条片子。
+/// 认可的是当时那条片子。序列 id 同理，切换 / 删除序列都不会改写已经排上的活。
 #[derive(Clone, Debug)]
 pub(super) struct QueuedExport {
     plan: ExportPlan,
@@ -23,6 +30,8 @@ pub(super) struct QueuedExport {
     total: Tick,
     /// 这条用的预设名；`None` 表示参数被微调过或没存成预设。
     preset: Option<String>,
+    sequence_id: Id,
+    sequence_name: String,
 }
 
 impl PlayerApp {
@@ -33,6 +42,7 @@ impl PlayerApp {
         path: PathBuf,
         total: Tick,
         preset: Option<String>,
+        target: ExportTarget,
         cx: &mut Context<Self>,
     ) {
         let label = preset_label(preset.as_deref());
@@ -41,13 +51,16 @@ impl PlayerApp {
             path,
             total,
             preset,
+            sequence_id: target.id,
+            sequence_name: target.name.clone(),
         });
         if self.export_task.is_none() {
             self.start_next_export(cx);
             return;
         }
         self.flash(format!(
-            "已加入导出队列（{label}，前面还有 {} 条）",
+            "已加入导出队列（序列「{}」· {label}，前面还有 {} 条）",
+            target.name,
             self.export_queue.len()
         ));
         cx.notify();
@@ -59,10 +72,13 @@ impl PlayerApp {
             self.export_task = None;
             self.export_progress = None;
             self.export_preset = None;
+            self.export_sequence = None;
             cx.notify();
             return;
         };
-        self.start_export(job.plan, job.path, job.total, job.preset, cx);
+        // 序列 id 也带进提示：同一批队列里可能排着不同序列的导出。
+        let sequence = format!("{} #{}", job.sequence_name, job.sequence_id.raw());
+        self.start_export(job.plan, job.path, job.total, job.preset, sequence, cx);
     }
 
     /// 标题条上的队列提示：还在排队的条数（不含正在跑的那条）。

@@ -18,10 +18,14 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
+mod sequences;
+pub use sequences::SequenceError;
+
 /// 工程文件扩展名（不带点）。
 pub const PROJECT_EXTENSION: &str = "ngyproj";
 /// 当前工程格式版本。加字段不算新版本（`serde(default)` 能兜住），只有语义变化才 +1。
-pub const PROJECT_VERSION: u32 = 1;
+/// v1 是一条 `sequence`；v2 起是 `sequences` 列表 + `active_sequence` 指针（ADR 0009）。
+pub const PROJECT_VERSION: u32 = 2;
 
 /// 工程素材表里的一项。
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -143,16 +147,22 @@ impl UiState {
     }
 }
 
-/// 一个工程 = 一条序列 + 素材表 + 界面状态。
+/// 一个工程 = 多条序列（其中一条是当前序列）+ 素材表 + 界面状态。
+///
+/// 序列列表至少有一条；`active_sequence` 指当前那条。素材表、界面状态与自动保存
+/// 都是工程级的，所有序列共享（ADR 0009）。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Project {
     pub version: u32,
-    pub sequence: Sequence,
+    pub sequences: Vec<Sequence>,
+    pub active_sequence: Id,
     pub assets: Vec<Asset>,
     pub ui: UiState,
-    /// 素材 id 的计数器。和序列的 id 空间分开：素材表不属于任何一条序列。
+    /// 素材 id 的计数器。和序列内对象的 id 空间分开：素材表不属于任何一条序列。
     next_asset_id: u64,
+    /// 序列 id 的计数器。与每条序列自己的 `next_id` 是两码事。
+    next_sequence_id: u64,
     /// 工程文件所在目录。不写进文件：工程文件拷走之后它自然跟着变。
     #[serde(skip)]
     base_dir: PathBuf,
@@ -160,12 +170,17 @@ pub struct Project {
 
 impl Default for Project {
     fn default() -> Self {
+        // 不能用结构体更新语法补 id：`Sequence::next_id` 是模型模块的私有字段。
+        let mut first = Sequence::new("序列 1", Rational::FPS_30, 1920, 1080);
+        first.id = Id::new(1);
         Self {
             version: PROJECT_VERSION,
-            sequence: Sequence::new("序列 1", Rational::FPS_30, 1920, 1080),
+            sequences: vec![first],
+            active_sequence: Id::new(1),
             assets: Vec::new(),
             ui: UiState::default(),
             next_asset_id: 1,
+            next_sequence_id: 2,
             base_dir: PathBuf::new(),
         }
     }
@@ -178,10 +193,12 @@ impl Project {
 
     /// 按指定规格建一个空工程：分辨率与帧率来自「新建工程」对话框。
     pub fn new_with(spec: SequenceSpec) -> Self {
-        Self {
-            sequence: Sequence::new("序列 1", spec.fps, spec.width, spec.height),
-            ..Self::default()
-        }
+        let mut project = Self::default();
+        let sequence = project.sequence_mut();
+        sequence.fps = spec.fps;
+        sequence.width = spec.width;
+        sequence.height = spec.height;
+        project
     }
 
     /// 工程文件所在目录。还没保存过时是空路径。
@@ -196,8 +213,10 @@ impl Project {
     /// 推出来，也不参与比较——保存之后它们会被重算成另一组值。
     pub fn same_content(&self, other: &Self) -> bool {
         self.version == other.version
-            && self.sequence == other.sequence
+            && self.sequences == other.sequences
+            && self.active_sequence == other.active_sequence
             && self.next_asset_id == other.next_asset_id
+            && self.next_sequence_id == other.next_sequence_id
             && self.assets.len() == other.assets.len()
             && self.assets.iter().zip(&other.assets).all(|(left, right)| {
                 left.id == right.id
@@ -213,8 +232,10 @@ impl Project {
 
     /// 有多少片段引用了这个素材。素材库决定能不能移除时看它。
     pub fn asset_clip_count(&self, id: AssetId) -> usize {
-        self.sequence
-            .clips()
+        // 素材表是全工程共享的：任何一条序列里还在用，都不能从素材库移除。
+        self.sequences
+            .iter()
+            .flat_map(|sequence| sequence.clips())
             .filter(|(_, clip)| clip.asset_id == id)
             .count()
     }
@@ -397,17 +418,20 @@ impl Project {
     /// 与素材路径一样：工程被拷到别的目录后，相对路径要跟着新位置走，
     /// 否则「另存为」会把 LUT 指回旧目录。
     fn repath_luts(&mut self, from: &Path, dir: &Path) {
-        for track in &mut self.sequence.tracks {
-            for clip in &mut track.clips {
-                let Some(lut) = clip.color.lut.clone() else {
-                    continue;
-                };
-                let absolute = if lut.is_absolute() {
-                    lut
-                } else {
-                    from.join(lut)
-                };
-                clip.color.lut = Some(relative_to(&absolute, dir).unwrap_or(absolute));
+        // 每条序列都可能有挂 LUT 的片段：另存为到别的目录时要一起重写。
+        for sequence in &mut self.sequences {
+            for track in &mut sequence.tracks {
+                for clip in &mut track.clips {
+                    let Some(lut) = clip.color.lut.clone() else {
+                        continue;
+                    };
+                    let absolute = if lut.is_absolute() {
+                        lut
+                    } else {
+                        from.join(lut)
+                    };
+                    clip.color.lut = Some(relative_to(&absolute, dir).unwrap_or(absolute));
+                }
             }
         }
     }
@@ -416,23 +440,28 @@ impl Project {
     ///
     /// 这里不删任何片段：工程里的素材内容比「模型好看」重要，坏数据留给校验报告。
     fn sanitize(&mut self) {
-        for track in &mut self.sequence.tracks {
-            track.sort_clips();
-            track.sort_transitions();
-            track.sort_subtitles();
-            let known: HashSet<Id> = track.clips.iter().map(|clip| clip.id).collect();
-            track.transitions.retain(|transition| {
-                known.contains(&transition.before) && known.contains(&transition.after)
-            });
+        self.repair_sequences();
+        for sequence in &mut self.sequences {
+            for track in &mut sequence.tracks {
+                track.sort_clips();
+                track.sort_transitions();
+                track.sort_subtitles();
+                let known: HashSet<Id> = track.clips.iter().map(|clip| clip.id).collect();
+                track.transitions.retain(|transition| {
+                    known.contains(&transition.before) && known.contains(&transition.after)
+                });
+            }
+            sequence
+                .markers
+                .sort_by_key(|marker| (marker.at, marker.id));
+            sequence.repair_next_id();
         }
-        self.sequence
-            .markers
-            .sort_by_key(|marker| (marker.at, marker.id));
-        self.sequence.repair_next_id();
         self.repair_next_asset_id();
 
-        let sequence = &self.sequence;
-        self.ui.selected.retain(|id| sequence.clip(*id).is_some());
+        // 先把存活的片段 id 收成集合，再改 `ui`：一边借 `&self` 拿序列、
+        // 一边借 `&mut self.ui` 会撞车。
+        let alive: HashSet<Id> = self.sequence().clips().map(|(_, clip)| clip.id).collect();
+        self.ui.selected.retain(|id| alive.contains(id));
     }
 }
 
@@ -532,16 +561,35 @@ fn migrate(mut value: serde_json::Value) -> Result<serde_json::Value, ProjectErr
     if !value.is_object() {
         return Err(ProjectError::NotAProject);
     }
+    // 没有 version 键的也按 v1：早期工程与手写的测试工程都不带版本号，
+    // 不能按当前版本跳过迁移，否则会反序列化出空的序列列表。
     let version = value
         .get("version")
         .and_then(serde_json::Value::as_u64)
-        .unwrap_or(PROJECT_VERSION as u64) as u32;
+        .unwrap_or(1) as u32;
     if version > PROJECT_VERSION {
         return Err(ProjectError::TooNew { version });
     }
 
-    // v1 是第一个版本，没有需要搬的字段。以后加版本时在这里 match version 逐级升级，
-    // 升到当前版本再反序列化；`serde(default)` 负责补新增字段。
+    // v1 → v2：单条 `sequence` 包成列表，补上序列 id 与当前指针。
+    // v2 工程若被手改回 `sequence` 对象，也按同一条路修回来。
+    if version < 2 || value.get("sequences").is_none() {
+        let mut sequence = value
+            .get("sequence")
+            .cloned()
+            .filter(serde_json::Value::is_object)
+            .unwrap_or_else(|| serde_json::json!({}));
+        let id = sequence
+            .get("id")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(1);
+        sequence["id"] = serde_json::json!(id);
+        value["sequences"] = serde_json::json!([sequence]);
+        value["active_sequence"] = serde_json::json!(id);
+        value["next_sequence_id"] = serde_json::json!(id.saturating_add(1));
+        value.as_object_mut().unwrap().remove("sequence");
+    }
+    // 字段级补齐交给 `serde(default)`；列表 / 指针的自愈在 `sanitize` 里。
     value["version"] = serde_json::Value::from(PROJECT_VERSION);
     Ok(value)
 }

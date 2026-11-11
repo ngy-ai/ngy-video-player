@@ -444,6 +444,9 @@ impl PlayerApp {
     fn edit_entries(&self, items: &mut Vec<BarItem>) {
         use BarAction::*;
 
+        // 一个工程可以有多条序列：新建 / 切换 / 改名 / 删除都在同一张面板里。
+        items.push(BarItem::Entry(BarEntry::new("序列管理…", ManageSequences)));
+        items.push(BarItem::Separator);
         let can_undo = self.history.as_ref().is_some_and(UndoHistory::can_undo);
         let can_redo = self.history.as_ref().is_some_and(UndoHistory::can_redo);
         // 素材库是「从零编排」的第一步：先收素材，再往轨道上放。
@@ -571,6 +574,7 @@ impl PlayerApp {
             BarAction::SequenceSettings => {
                 self.request_sequence_dialog(SequencePurpose::Edit, Some(window), cx);
             }
+            BarAction::ManageSequences => self.open_sequence_manager_dialog(window, cx),
             BarAction::Save => {
                 self.save_project(Some(window), cx, None);
             }

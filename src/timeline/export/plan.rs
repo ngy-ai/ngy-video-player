@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 
-use crate::timeline::{AssetId, Project, Sequence, Tick, Track, TrackKind};
+use crate::timeline::{AssetId, Id, Project, Sequence, Tick, Track, TrackKind};
 
 use super::{ExportError, ExportPlan, ExportSettings, SubtitleAttachment};
 
@@ -53,7 +53,31 @@ pub fn plan_sequence_with(
     range: Option<(Tick, Tick)>,
     settings: &ExportSettings,
 ) -> Result<ExportPlan, ExportError> {
-    let sequence = &project.sequence;
+    plan_sequence_id(project, project.active_id(), range, settings)
+}
+
+/// 按序列 id 生成计划。
+///
+/// 导出面板打开时记下的是「当时那条序列」：文件选择框期间用户可能切走，甚至把
+/// 那条序列删掉。按 id 取序列才不会把 B 序列导成 A 的成片（ADR 0009）。
+pub fn plan_sequence_id(
+    project: &Project,
+    sequence_id: Id,
+    range: Option<(Tick, Tick)>,
+    settings: &ExportSettings,
+) -> Result<ExportPlan, ExportError> {
+    let sequence = project
+        .sequence_by_id(sequence_id)
+        .ok_or(ExportError::SequenceGone)?;
+    build_plan(project, sequence, range, settings)
+}
+
+fn build_plan(
+    project: &Project,
+    sequence: &Sequence,
+    range: Option<(Tick, Tick)>,
+    settings: &ExportSettings,
+) -> Result<ExportPlan, ExportError> {
     if sequence.tracks.iter().all(|track| track.clips.is_empty()) {
         return Err(ExportError::Empty);
     }

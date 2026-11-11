@@ -7,12 +7,12 @@ use crate::timeline::{SubtitleItem, SubtitlePosition};
 
 fn with_subtitle(scratch: &Scratch) -> Project {
     let (mut project, _) = project_with(scratch, &[(s(0), s(10), Tick::ZERO)]);
-    let track = project.sequence.add_track(TrackKind::Subtitle);
-    let id = project.sequence.alloc_id();
+    let track = project.sequence_mut().add_track(TrackKind::Subtitle);
+    let id = project.sequence_mut().alloc_id();
     let mut entry = SubtitleItem::new(id, s(5), s(8), "字幕内容");
     entry.style.position = SubtitlePosition::Top;
     project
-        .sequence
+        .sequence_mut()
         .track_mut(track)
         .unwrap()
         .subtitles
@@ -55,13 +55,13 @@ fn 隐藏的字幕轨不进计划() {
     let scratch = Scratch::new("subtitle-hidden");
     let mut project = with_subtitle(&scratch);
     let track = project
-        .sequence
+        .sequence()
         .tracks
         .iter()
         .find(|track| track.kind == TrackKind::Subtitle)
         .unwrap()
         .id;
-    project.sequence.track_mut(track).unwrap().muted = true;
+    project.sequence_mut().track_mut(track).unwrap().muted = true;
     assert!(plan_sequence(&project).unwrap().subtitle.is_none());
 }
 

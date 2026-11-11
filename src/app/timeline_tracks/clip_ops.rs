@@ -9,7 +9,7 @@ impl PlayerApp {
             return;
         };
         let at = project.ui.playhead;
-        let outcome = crate::timeline::split_at(&project.sequence, at);
+        let outcome = crate::timeline::split_at(project.sequence(), at);
 
         match outcome {
             Ok(Some((sequence, cuts))) => {
@@ -58,7 +58,7 @@ impl PlayerApp {
                 Ok(None)
             } else {
                 crate::timeline::apply(
-                    &project.sequence,
+                    project.sequence(),
                     &EditOp::RippleDelete {
                         clips: clips.clone(),
                     },
@@ -66,7 +66,7 @@ impl PlayerApp {
                 .map(Some)
             }
         } else {
-            crate::timeline::remove_clips(&project.sequence, &clips)
+            crate::timeline::remove_clips(project.sequence(), &clips)
         };
 
         match outcome {

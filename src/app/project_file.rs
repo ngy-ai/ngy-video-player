@@ -94,7 +94,7 @@ impl PlayerApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        let default_name = default_project_file_name(&project.sequence.name);
+        let default_name = default_project_file_name(&project.sequence().name);
         // 优先落在工程旁边；新建的工程还没有位置，就沿用上次打开文件的目录。
         let directory = self
             .project_path
