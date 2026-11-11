@@ -47,6 +47,7 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  keys（动作 → 键位串，一处集中）、
                  timeline_effects（片段效果栈面板：加 / 开关 / 换档 / 调序 / 删）、
                  timeline_keys（片段关键帧面板：在播放头处记录与删除）、
+                 timeline_subtitle（字幕编辑模态面板、字幕块右键菜单与预览入口）、
                  controls、menus、bar、
                  menu_bar、associations、ab_loop（A-B 循环）、
                  project_file（工程保存/另存为/未保存确认）、
@@ -111,7 +112,9 @@ src/timeline/transition.rs  转场编辑：两侧余量、加 / 改 / 去，时�
 src/timeline/effect.rs  片段效果栈：去隔行 / 降噪 / 锐化 / 防抖 / 插帧 / 水印的滤镜与增删改
 src/timeline/keyframe.rs  片段关键帧：缩放 / 位置 / 不透明度的曲线、求值与 ffmpeg 表达式
 src/timeline/color.rs  片段调色：亮度 / 对比度 / 饱和度 / 色温与 3D LUT 的滤镜映射
-src/timeline/export.rs  序列导出：`ExportPlan`、`ExportSettings` 与 `render-presets.json` 预设
+src/timeline/subtitle.rs  字幕条目与样式、预览取字；`subtitle/ass.rs` 生成交给 libass 的 ASS
+src/timeline/export.rs  序列导出：`ExportPlan`、`ExportSettings`、字幕附件与 `render-presets.json` 预设
+src/export/task.rs  导出进程：临时 ASS 落盘 / 清理、软字幕按容器选编码器、进度与取消
 src/timeline/undo.rs    撤销 / 重做：状态快照栈，一次操作一步，上限 200 步
 src/timeline/autosave.rs  自动保存（30 秒无操作）与 `.autosave` 崩溃恢复
 src/timeline/view.rs    时间线视图状态：缩放（1 像素 = 1 帧 ~ 10 秒）、滚动、标尺换挡

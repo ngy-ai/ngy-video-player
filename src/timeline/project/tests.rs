@@ -482,6 +482,43 @@ fn 被片段引用的素材不能移除() {
 }
 
 #[test]
+fn 字幕条目随工程往返且老工程缺字段也能打开() {
+    use crate::timeline::{COLORS, SubtitleItem, SubtitlePosition, TrackKind};
+
+    let dir = scratch("subtitle-roundtrip");
+    let path = dir.join("p.ngyproj");
+    let (mut project, _, _, _) = sample(&dir);
+    let track = project.sequence.add_track(TrackKind::Subtitle);
+    let id = project.sequence.alloc_id();
+    let mut entry = SubtitleItem::new(id, Tick::from_secs(5.0), Tick::from_secs(8.0), "你好，世界");
+    entry.style.size = 64;
+    entry.style.color = COLORS[1].0;
+    entry.style.position = SubtitlePosition::Top;
+    project
+        .sequence
+        .track_mut(track)
+        .unwrap()
+        .subtitles
+        .push(entry.clone());
+
+    project.save(&path).expect("保存工程");
+    let back = Project::open(&path).expect("打开工程");
+    assert_eq!(back.sequence.subtitle(id), Some(&entry));
+    assert_eq!(back.sequence.duration(), Tick::from_secs(8.0));
+    assert_eq!(back.sequence.subtitle_track(id), Some(track));
+    assert!(back.sequence.validate().is_ok());
+
+    // 这一版之前写的工程没有 `subtitles` 键：整条字幕轨仍要能打开。
+    let legacy = r#"{"version":1,"sequence":{"tracks":[{"id":1,"kind":"subtitle",
+        "name":"字幕 1","clips":[],"transitions":[],"muted":false,"locked":false}],
+        "markers":[]},"assets":[],"ui":{},"next_asset_id":1}"#;
+    let old = Project::from_json(legacy).expect("老工程照常打开");
+    assert!(old.sequence.tracks[0].subtitles.is_empty());
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn 打开工程之后文件被删掉也报缺失() {
     let dir = scratch("vanish");
     let (mut project, file, asset, _) = sample(&dir);

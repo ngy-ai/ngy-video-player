@@ -27,6 +27,8 @@ pub(super) enum TimelineMenu {
     Speed(super::timeline_speed::SpeedMenu),
     /// 片段的调色面板：亮度 / 对比度 / 饱和度 / 色温与 LUT。
     Color(super::timeline_color::ColorMenu),
+    /// 字幕轨上的条目右键菜单：编辑或删除这一条文字。
+    Subtitle { item: Id, position: Point<Pixels> },
 }
 
 /// 转场面板的上下文：接缝右侧的那段片段（转场挂在它身上）与鼠标位置。
@@ -89,6 +91,9 @@ impl PlayerApp {
             TimelineMenu::Keys(menu) => self.render_keys_menu(menu, window, cx),
             TimelineMenu::Speed(menu) => self.render_speed_menu(menu, window, cx),
             TimelineMenu::Color(menu) => self.render_color_menu(menu, window, cx),
+            TimelineMenu::Subtitle { item, position } => {
+                self.render_subtitle_item_menu(item, position, window, cx)
+            }
         }
     }
 

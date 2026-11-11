@@ -45,7 +45,8 @@ pub(crate) struct AssetDrop {
 
 /// 素材能不能放在这条轨道上。
 ///
-/// 视频轨只接有画面的素材，音频轨只接有声音的；字幕轨要等 M9-T10。
+/// 视频轨只接有画面的素材，音频轨只接有声音的；字幕轨只放文字条目（字幕面板里建），
+/// 不收素材文件。
 /// 一个视频素材拖到音频轨是允许的——它确实有音轨，只是只取声音。
 pub(crate) fn fits(kind: TrackKind, item: &AssetDragItem) -> bool {
     match kind {

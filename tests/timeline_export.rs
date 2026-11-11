@@ -11,8 +11,9 @@ use std::process::Command;
 
 use ngy_video_player::export::{ExportEvent, ExportTask};
 use ngy_video_player::timeline::{
-    AssetId, ClipItem, ExportPlan, Id, Project, Rational, SequenceSpec, Tick, TrackKind,
-    Transition, TransitionKind, plan_sequence, plan_sequence_range,
+    AssetId, ClipItem, ExportPlan, ExportSettings, Id, Project, Rational, SequenceSpec,
+    SubtitleItem, SubtitleMode, Tick, TrackKind, Transition, TransitionKind, plan_sequence,
+    plan_sequence_range, plan_sequence_with,
 };
 
 fn scratch(name: &str) -> PathBuf {
@@ -505,5 +506,72 @@ fn 只导出工作区那一段() {
     // 对照：成片 0.5 秒与素材 0.5 秒（另一个位置）必须明显不同，否则上面的相近毫无意义。
     let wrong = psnr_between(&output, "0.5", &clip, "0.5");
     assert!(wrong < 30.0, "对照帧应当不同，实测 {wrong:.1} dB");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// M9-T10：字幕烧录真的改变画面（只改字幕出现那一段），软字幕真的落成一条
+/// 独立的 ASS 轨且不动画面。两者都用同一条序列、同一套编码参数导出，方便逐帧对照。
+#[test]
+#[ignore = "需要本机 ffmpeg"]
+fn 字幕烧录与软字幕导出() {
+    let dir = scratch("export-subtitle");
+    let clip = make_clip_seconds(&dir, "source.mp4", 4.0);
+
+    let mut project = Project::new_with(SequenceSpec::new(320, 240, Rational::FPS_30));
+    let asset = project.add_asset(&clip);
+    let video = project.sequence.tracks[0].id;
+    let audio = project.sequence.tracks[1].id;
+    put(&mut project, video, asset, 0.0, 4.0, 0.0);
+    put(&mut project, audio, asset, 0.0, 4.0, 0.0);
+
+    let plain = run_export(&dir, &project, "plain.mp4");
+
+    // 字幕轨：1–3 秒一句，文本与样式都要进 ASS。
+    let track = project.sequence.add_track(TrackKind::Subtitle);
+    let id = project.sequence.alloc_id();
+    project
+        .sequence
+        .track_mut(track)
+        .unwrap()
+        .subtitles
+        .push(SubtitleItem::new(id, second(1.0), second(3.0), "字幕测试"));
+    let total = project.sequence.duration();
+
+    let burn_plan =
+        plan_sequence_with(&project, None, &ExportSettings::default()).expect("烧录计划");
+    assert_eq!(
+        burn_plan.subtitle.as_ref().unwrap().mode,
+        SubtitleMode::Burn
+    );
+    let burn = run_plan(&dir, burn_plan, "burn.mp4", total);
+    assert_duration(&burn, "00:00:04");
+    let inside = psnr_between(&plain, "2.0", &burn, "2.0");
+    assert!(
+        inside < 40.0,
+        "字幕出现的 2 秒处画面该明显不同：{inside:.1} dB"
+    );
+    let outside = psnr_between(&plain, "3.5", &burn, "3.5");
+    assert!(outside > 35.0, "字幕之外的 3.5 秒不该变：{outside:.1} dB");
+
+    let soft_settings = ExportSettings {
+        subtitle: SubtitleMode::Soft,
+        ..ExportSettings::default()
+    };
+    let soft_plan = plan_sequence_with(&project, None, &soft_settings).expect("软字幕计划");
+    let soft = run_plan(&dir, soft_plan, "soft.mkv", total);
+    assert_duration(&soft, "00:00:04");
+    let probe = Command::new("ffmpeg")
+        .args(["-hide_banner", "-i"])
+        .arg(&soft)
+        .output()
+        .expect("读回字幕轨");
+    let info = String::from_utf8_lossy(&probe.stderr);
+    assert!(
+        info.contains("Subtitle: ass"),
+        "成片里应当有一条 ASS 软字幕：\n{info}"
+    );
+    let untouched = psnr_between(&plain, "2.0", &soft, "2.0");
+    assert!(untouched > 30.0, "软字幕不该改画面：{untouched:.1} dB");
+
     let _ = std::fs::remove_dir_all(&dir);
 }

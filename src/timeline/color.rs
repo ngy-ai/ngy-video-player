@@ -117,7 +117,7 @@ fn resolve(base_dir: &Path, path: &Path) -> PathBuf {
 ///
 /// 与 `clip::export::effects::filter_path` 同一套规则：两处都是把用户目录塞进
 /// ffmpeg 的滤镜参数里，规则不一致就会有一边在 Windows 上炸掉。
-fn filter_path(path: &Path) -> String {
+pub(crate) fn filter_path(path: &Path) -> String {
     path.to_string_lossy()
         .replace('\\', "/")
         .replace('\'', "\\'")

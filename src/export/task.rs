@@ -5,18 +5,21 @@
 
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures::channel::mpsc::UnboundedSender;
 
 use crate::platform::ffmpeg;
-use crate::timeline::{ExportPlan, Tick};
+use crate::timeline::{ExportPlan, SubtitleMode, Tick};
 
 /// 失败时回传的日志行数：够看清原因，又不至于把界面撑爆。
 const TAIL_LINES: usize = 12;
+
+/// 同一进程里排着几条导出时，临时 ASS 文件名也要各不相同。
+static SUBTITLE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// 导出任务回报。
 #[derive(Clone, Debug, PartialEq)]
@@ -42,6 +45,19 @@ impl ExportTask {
         total: Tick,
         sender: UnboundedSender<ExportEvent>,
     ) -> anyhow::Result<Self> {
+        // 字幕文本只在计划里，真正落盘要等任务启动：队列里排着的几条导出不能
+        // 抢同一个临时文件。写完的路径同时决定 `-i` 与 `subtitles=` 滤镜参数。
+        let subtitle = match plan.subtitle.as_ref() {
+            Some(attachment) => Some((
+                write_subtitle(&attachment.ass)?,
+                attachment.mode,
+                subtitle_codec(&output),
+            )),
+            None => None,
+        };
+        let args = subtitle_args(&plan, &subtitle);
+        let subtitle_path = subtitle.as_ref().map(|(path, _, _)| path.clone());
+
         let executable = ffmpeg::executable()?;
         let mut command = Command::new(executable);
         command
@@ -53,13 +69,21 @@ impl ExportTask {
             .arg("error")
             .arg("-progress")
             .arg("pipe:2")
-            .args(plan.args())
+            .args(args)
             .arg(&output)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
 
-        let mut child = command.spawn()?;
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                if let Some(path) = subtitle_path {
+                    let _ = std::fs::remove_file(path);
+                }
+                return Err(error.into());
+            }
+        };
         let stderr = child.stderr.take();
         let slot = Arc::new(Mutex::new(Some(child)));
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -88,6 +112,10 @@ impl ExportTask {
                     None => ExportEvent::Failed("ffmpeg 进程已经结束".to_string()),
                 }
             };
+            // 成败都把临时 ASS 收掉：它只对这一次 ffmpeg 进程有意义。
+            if let Some(path) = subtitle_path {
+                let _ = std::fs::remove_file(path);
+            }
             let _ = sender.unbounded_send(outcome);
         });
 
@@ -150,6 +178,34 @@ fn describe(code: Option<i32>, tail: &VecDeque<String>) -> String {
     }
 }
 
+/// 计划里带字幕时补上临时 ASS 文件对应的参数；没字幕就还是原来那套。
+fn subtitle_args(
+    plan: &ExportPlan,
+    subtitle: &Option<(PathBuf, SubtitleMode, &'static str)>,
+) -> Vec<String> {
+    match subtitle {
+        Some((path, mode, codec)) => plan.args_with_subtitle(path, *mode, codec),
+        None => plan.args(),
+    }
+}
+
+/// ASS 文本落到临时文件。`SUBTITLE_SEQ` 保证同进程并发导出也不会互相覆盖。
+fn write_subtitle(ass: &str) -> std::io::Result<PathBuf> {
+    let seq = SUBTITLE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("ngy-sub-{}-{seq}.ass", std::process::id()));
+    std::fs::write(&path, ass.as_bytes())?;
+    Ok(path)
+}
+
+/// 软字幕的编码器取决于容器：mkv 能原样装 ASS，mp4 / mov 只认 mov_text
+/// （样式会丢一部分，见 README「已知限制」）。
+fn subtitle_codec(output: &Path) -> &'static str {
+    match output.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) if ext.eq_ignore_ascii_case("mkv") => "ass",
+        _ => "mov_text",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,5 +233,24 @@ mod tests {
         assert!(message.contains("Some(1)"), "{message}");
 
         assert_eq!(describe(None, &VecDeque::new()), "ffmpeg 异常退出（None）");
+    }
+
+    #[test]
+    fn 软字幕编码器按容器挑() {
+        assert_eq!(subtitle_codec(Path::new("成片.mkv")), "ass");
+        assert_eq!(subtitle_codec(Path::new("成片.MKV")), "ass");
+        assert_eq!(subtitle_codec(Path::new("成片.mp4")), "mov_text");
+        assert_eq!(subtitle_codec(Path::new("成片")), "mov_text");
+    }
+
+    #[test]
+    fn 临时字幕文件每次都独立且内容正确() {
+        let first = write_subtitle("第一条").expect("写临时字幕");
+        let second = write_subtitle("第二条").expect("写临时字幕");
+        assert_ne!(first, second);
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "第一条");
+        assert_eq!(std::fs::read_to_string(&second).unwrap(), "第二条");
+        let _ = std::fs::remove_file(&first);
+        let _ = std::fs::remove_file(&second);
     }
 }

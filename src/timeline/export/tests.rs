@@ -11,6 +11,8 @@ use crate::timeline::{AssetId, ClipItem, Id, Project, Tick, TrackKind};
 mod color;
 #[path = "tests/range.rs"]
 mod range;
+#[path = "tests/subtitle.rs"]
+mod subtitle;
 
 fn s(n: i64) -> Tick {
     Tick::from_micros(n * 1_000_000)

@@ -195,6 +195,53 @@ impl From<String> for EncodeSpeed {
     }
 }
 
+/// 字幕怎么进成片。
+///
+/// 烧录是画面的一部分（`subtitles` 滤镜走 libass），软字幕是单独一条字幕轨：
+/// 后者能不能保留字体 / 描边 / 位置取决于容器，mkv 存 ASS、mp4 存 mov_text。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(into = "String", from = "String")]
+pub enum SubtitleMode {
+    #[default]
+    Burn,
+    Soft,
+}
+
+impl SubtitleMode {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Burn => "burn",
+            Self::Soft => "soft",
+        }
+    }
+
+    fn from_id(id: &str) -> Self {
+        match id {
+            "soft" => Self::Soft,
+            _ => Self::Burn,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Burn => "烧录",
+            Self::Soft => "软字幕",
+        }
+    }
+}
+
+impl From<SubtitleMode> for String {
+    fn from(mode: SubtitleMode) -> Self {
+        mode.id().to_string()
+    }
+}
+
+impl From<String> for SubtitleMode {
+    fn from(id: String) -> Self {
+        Self::from_id(&id)
+    }
+}
+
 /// 一整套导出参数。
 ///
 /// `#[serde(default)]` 是向前兼容的一半：老文件缺字段（比如以后才加的 `faststart`）
@@ -209,6 +256,8 @@ pub struct ExportSettings {
     pub audio_bitrate: u32,
     /// mp4 的 `+faststart`：把索引挪到文件头，网页播放不用等整段下载。
     pub faststart: bool,
+    /// 字幕烧进画面还是做成一条软字幕轨。参数只在本次会话 / 预设里，不随工程存盘。
+    pub subtitle: SubtitleMode,
 }
 
 impl Default for ExportSettings {
@@ -221,6 +270,7 @@ impl Default for ExportSettings {
             speed: EncodeSpeed::Medium,
             audio_bitrate: 192,
             faststart: true,
+            subtitle: SubtitleMode::Burn,
         }
     }
 }
@@ -265,11 +315,12 @@ impl ExportSettings {
     /// 面板与提示里的一行摘要。
     pub fn summary(&self) -> String {
         format!(
-            "{} · {} · 编码{} · 音频 {}kbps",
+            "{} · {} · 编码{} · 音频 {}kbps · 字幕{}",
             self.codec.label(),
             self.quality.label(),
             self.speed.label(),
-            self.audio_kbps()
+            self.audio_kbps(),
+            self.subtitle.label()
         )
     }
 }
@@ -393,6 +444,7 @@ mod tests {
             speed: EncodeSpeed::Slow,
             audio_bitrate: 256,
             faststart: false,
+            subtitle: SubtitleMode::Soft,
         };
         let text = serde_json::to_string(&settings).unwrap();
         assert!(
@@ -409,5 +461,20 @@ mod tests {
         assert!(summary.contains("H.264"));
         assert!(summary.contains("标准"));
         assert!(summary.contains("192kbps"));
+        assert!(summary.contains("烧录"));
+    }
+
+    #[test]
+    fn 字幕模式缺字段与未知值都降级成烧录() {
+        let missing: ExportSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(missing.subtitle, SubtitleMode::Burn);
+        let unknown: ExportSettings = serde_json::from_str(r#"{"subtitle":"pgs"}"#).unwrap();
+        assert_eq!(unknown.subtitle, SubtitleMode::Burn);
+        let soft: ExportSettings = serde_json::from_str(r#"{"subtitle":"soft"}"#).unwrap();
+        assert_eq!(soft.subtitle, SubtitleMode::Soft);
+        assert_eq!(
+            soft.output_args(true),
+            ExportSettings::default().output_args(true)
+        );
     }
 }

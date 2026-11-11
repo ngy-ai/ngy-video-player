@@ -13,7 +13,7 @@
 //! 素材长度不在这里校验：片段只知道 `AssetId`，素材时长要等 M1-T07 登记进工程。
 //! 这里只保证「素材入点不为负、时长为正、同轨不重叠」这三件模型能自己判断的事。
 
-use crate::timeline::{AssetId, ClipItem, ColorGrade, Id, Sequence, Tick};
+use crate::timeline::{AssetId, ClipItem, ColorGrade, Id, Sequence, SubtitleItem, Tick, TrackKind};
 use std::collections::HashSet;
 use std::fmt;
 
@@ -93,7 +93,13 @@ pub enum EditOp {
     /// 改调色。整套参数一起换：面板每次改动都是一份完整的 `ColorGrade`，
     /// 单个字段的增删在界面层算好，落一步撤销。
     SetColor { clip: Id, color: ColorGrade },
-    /// 删掉整条轨道，连同它上面的片段与转场。锁定的轨道要先解锁。
+    /// 在字幕轨上加一条文字条目。id 由调用方从序列分配，重叠就拒绝。
+    AddSubtitle { track: Id, item: SubtitleItem },
+    /// 改一条字幕的全部内容（文本、起止、样式）。id 不变。
+    SetSubtitle { id: Id, item: SubtitleItem },
+    /// 删掉一条字幕。
+    RemoveSubtitle { id: Id },
+    /// 删掉整条轨道，连同它上面的片段、转场与字幕条目。锁定的轨道要先解锁。
     RemoveTrack { track: Id },
 }
 
@@ -118,6 +124,10 @@ pub enum EditError {
     TrackLocked(Id),
     /// 倍率不是有限数，或者定格时长为负。
     BadRate,
+    /// 字幕条目的 id 已经被片段 / 轨道 / 另一条字幕占用。
+    DuplicateId(Id),
+    /// 字幕条目本身不在序列里。
+    UnknownSubtitle(Id),
 }
 
 impl fmt::Display for EditError {
@@ -133,6 +143,8 @@ impl fmt::Display for EditError {
             EditError::SplitOutside(id) => write!(f, "切点必须落在片段 {id} 内部"),
             EditError::TrackLocked(id) => write!(f, "轨道 {id} 已锁定，先解锁再编辑"),
             EditError::BadRate => write!(f, "倍率必须是有限数，定格时长不能为负"),
+            EditError::DuplicateId(id) => write!(f, "id {id} 已经被别的内容占用了"),
+            EditError::UnknownSubtitle(id) => write!(f, "字幕 {id} 不在序列里"),
         }
     }
 }
@@ -172,6 +184,9 @@ pub fn apply(sequence: &Sequence, op: &EditOp) -> Result<Sequence, EditError> {
         EditOp::SetSpeed { clip, speed } => set_speed(&mut next, *clip, *speed)?,
         EditOp::SetHold { clip, hold } => set_hold(&mut next, *clip, *hold)?,
         EditOp::SetColor { clip, color } => set_color(&mut next, *clip, color)?,
+        EditOp::AddSubtitle { track, item } => add_subtitle(&mut next, *track, item)?,
+        EditOp::SetSubtitle { id, item } => set_subtitle(&mut next, *id, item)?,
+        EditOp::RemoveSubtitle { id } => remove_subtitle(&mut next, *id)?,
         EditOp::RemoveTrack { track } => remove_track(&mut next, *track)?,
     }
     Ok(next)
@@ -736,6 +751,99 @@ fn remove_track(sequence: &mut Sequence, track_id: Id) -> Result<(), EditError> 
         return Err(EditError::TrackLocked(track_id));
     }
     sequence.tracks.remove(index);
+    Ok(())
+}
+
+/// 字幕编辑的轨道定位：轨道存在、是字幕轨、没锁，三件事一次查完。
+fn subtitle_lane(sequence: &Sequence, track: Id) -> Result<usize, EditError> {
+    let index = sequence
+        .track_index(track)
+        .ok_or(EditError::UnknownTrack(track))?;
+    let lane = &sequence.tracks[index];
+    if lane.locked {
+        return Err(EditError::TrackLocked(track));
+    }
+    if lane.kind != TrackKind::Subtitle {
+        return Err(EditError::WrongTrackKind);
+    }
+    Ok(index)
+}
+
+/// 字幕的时间区间要合法，且同一轨上不与别的条目重叠（首尾相接不算重叠）。
+fn check_subtitle(
+    sequence: &Sequence,
+    index: usize,
+    item: &SubtitleItem,
+    except: Option<Id>,
+) -> Result<(), EditError> {
+    if item.start.is_negative() {
+        return Err(EditError::NegativeTime);
+    }
+    if item.end <= item.start {
+        return Err(EditError::EmptyClip);
+    }
+    let lane = &sequence.tracks[index];
+    let overlap = lane
+        .subtitles
+        .iter()
+        .any(|other| Some(other.id) != except && other.start < item.end && item.start < other.end);
+    if overlap {
+        return Err(EditError::Overlap(lane.id));
+    }
+    Ok(())
+}
+
+fn add_subtitle(sequence: &mut Sequence, track: Id, item: &SubtitleItem) -> Result<(), EditError> {
+    let index = subtitle_lane(sequence, track)?;
+    if sequence.id_is_used(item.id) {
+        return Err(EditError::DuplicateId(item.id));
+    }
+    // 负起点是数据错误，不该被 `normalize` 悄悄夹成 0；其余坏值（空区间、
+    // 空文本、字号越界）规整后落盘。
+    if item.start.is_negative() {
+        return Err(EditError::NegativeTime);
+    }
+    let mut item = item.clone();
+    item.normalize();
+    check_subtitle(sequence, index, &item, None)?;
+    sequence.tracks[index].subtitles.push(item);
+    sequence.tracks[index].sort_subtitles();
+    // 直接给 id 的调用方（导入、测试）未必动过计数器。
+    sequence.repair_next_id();
+    Ok(())
+}
+
+fn set_subtitle(sequence: &mut Sequence, id: Id, item: &SubtitleItem) -> Result<(), EditError> {
+    let track = sequence
+        .subtitle_track(id)
+        .ok_or(EditError::UnknownSubtitle(id))?;
+    let index = subtitle_lane(sequence, track)?;
+    if item.start.is_negative() {
+        return Err(EditError::NegativeTime);
+    }
+    let mut item = item.clone();
+    item.id = id;
+    item.normalize();
+    check_subtitle(sequence, index, &item, Some(id))?;
+    let lane = &mut sequence.tracks[index];
+    let position = lane
+        .subtitles
+        .iter()
+        .position(|entry| entry.id == id)
+        .ok_or(EditError::UnknownSubtitle(id))?;
+    lane.subtitles[position] = item;
+    lane.sort_subtitles();
+    Ok(())
+}
+
+fn remove_subtitle(sequence: &mut Sequence, id: Id) -> Result<(), EditError> {
+    let track = sequence
+        .subtitle_track(id)
+        .ok_or(EditError::UnknownSubtitle(id))?;
+    let index = subtitle_lane(sequence, track)?;
+    sequence.tracks[index]
+        .subtitles
+        .retain(|entry| entry.id != id);
     Ok(())
 }
 

@@ -8,11 +8,21 @@ mod presets;
 mod settings;
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub use plan::{plan_sequence, plan_sequence_range, plan_sequence_with};
 pub use presets::{PRESET_NAME_CHARS, RenderPreset, RenderPresetStore, normalize_name};
-pub use settings::{EncodeSpeed, ExportSettings, Quality, VideoCodec};
+pub use settings::{EncodeSpeed, ExportSettings, Quality, SubtitleMode, VideoCodec};
+
+/// 导出计划里附带的字幕：一份 ASS 文本 + 交付方式。
+///
+/// 这里只带文本不带路径：计划是「入队即定死」的纯数据，临时 `.ass` 文件要到任务
+/// 真正启动时才写（队列里排着的两条导出不能抢同一个文件名）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubtitleAttachment {
+    pub ass: String,
+    pub mode: SubtitleMode,
+}
 
 /// 一条导出计划：喂给 ffmpeg 的全部素材与滤镜。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,25 +37,69 @@ pub struct ExportPlan {
     pub audio_label: Option<String>,
     /// 输出参数（不含输出文件本身）。
     pub output_args: Vec<String>,
+    /// 序列上的字幕条目。没有字幕时是 `None`，命令里也不多一个输入。
+    pub subtitle: Option<SubtitleAttachment>,
 }
 
 impl ExportPlan {
     /// 拼成完整的 ffmpeg 参数（不含 `ffmpeg` 命令本身）。
     ///
     /// 输出文件不在这里：调用方要在参数末尾追加目标路径，中途失败时才好换名重写。
+    /// 字幕走 [`Self::args_with_subtitle`]：临时文件是任务层才有的东西，计划本身保持
+    /// 纯数据，既有的字符串快照也不会因为临时路径变来变去。
     pub fn args(&self) -> Vec<String> {
+        self.build(None)
+    }
+
+    /// 带上已落盘的 ASS 文件拼参数。`codec` 由调用方按输出容器挑（mkv 用 `ass`、
+    /// mp4 用 `mov_text`）；烧录时这个文件只是 `subtitles` 滤镜的输入，不做 `-i`。
+    pub fn args_with_subtitle(&self, path: &Path, mode: SubtitleMode, codec: &str) -> Vec<String> {
+        self.build(Some((path, mode, codec)))
+    }
+
+    fn build(&self, subtitle: Option<(&Path, SubtitleMode, &str)>) -> Vec<String> {
+        // 软字幕是额外一路输入。追加在末尾，前面那些 `[N:v]` / `[N:a]` 的下标不变。
+        let soft_input = match subtitle {
+            Some((path, SubtitleMode::Soft, _)) => Some(path),
+            _ => None,
+        };
         let mut args = Vec::new();
-        for input in &self.inputs {
+        for input in self.inputs.iter().map(PathBuf::as_path).chain(soft_input) {
             args.push("-i".to_string());
             args.push(input.to_string_lossy().into_owned());
         }
-        if !self.filter.is_empty() {
-            args.push("-filter_complex".to_string());
-            args.push(self.filter.clone());
+
+        // 烧录排在滤镜图的最后：字幕要盖在转场、效果、调色都算完的成片上。
+        let mut filter = self.filter.clone();
+        let mut video_label = self.video_label.clone();
+        if let Some((path, SubtitleMode::Burn, _)) = subtitle
+            && let Some(label) = video_label.clone()
+        {
+            if !filter.is_empty() {
+                filter.push(';');
+            }
+            filter.push_str(&format!(
+                "{label}subtitles=filename='{}'[subv]",
+                super::color::filter_path(path)
+            ));
+            video_label = Some("[subv]".to_string());
         }
-        for label in [&self.video_label, &self.audio_label].into_iter().flatten() {
+        if !filter.is_empty() {
+            args.push("-filter_complex".to_string());
+            args.push(filter);
+        }
+        for label in [&video_label, &self.audio_label].into_iter().flatten() {
             args.push("-map".to_string());
             args.push(label.clone());
+        }
+        if let Some((_, SubtitleMode::Soft, codec)) = subtitle {
+            let index = self.inputs.len();
+            args.extend([
+                "-map".to_string(),
+                format!("{index}:s:0"),
+                "-c:s".to_string(),
+                codec.to_string(),
+            ]);
         }
         args.extend(self.output_args.iter().cloned());
         args

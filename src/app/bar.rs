@@ -503,6 +503,11 @@ impl PlayerApp {
         items.push(BarItem::Separator);
         items.push(BarItem::Entry(BarEntry::new("加视频轨", AddVideoTrack)));
         items.push(BarItem::Entry(BarEntry::new("加音频轨", AddAudioTrack)));
+        items.push(BarItem::Entry(BarEntry::new("加字幕轨", AddSubtitleTrack)));
+        items.push(BarItem::Entry(BarEntry::new(
+            "在播放头加字幕…",
+            AddSubtitle,
+        )));
     }
 
     /// 剪辑模式「预览」：只留对工程预览有意义的动作。播放列表换集、循环、A-B
@@ -590,6 +595,15 @@ impl PlayerApp {
             BarAction::MarkOut => self.set_out_point(cx),
             BarAction::AddVideoTrack => self.add_track(crate::timeline::TrackKind::Video, cx),
             BarAction::AddAudioTrack => self.add_track(crate::timeline::TrackKind::Audio, cx),
+            BarAction::AddSubtitleTrack => self.add_track(crate::timeline::TrackKind::Subtitle, cx),
+            BarAction::AddSubtitle => {
+                let start = self
+                    .project
+                    .as_ref()
+                    .map(|project| project.ui.playhead)
+                    .unwrap_or(crate::timeline::Tick::ZERO);
+                self.open_subtitle_dialog(None, None, start, window, cx);
+            }
             BarAction::LoadSubtitle => self.pick_subtitle(window, cx),
             BarAction::Previous => self.previous_file(cx),
             BarAction::Next => self.next_file(cx),

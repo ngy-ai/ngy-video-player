@@ -10,6 +10,7 @@
 //! 2. 片段时长恒为正（`source_out > source_in`）；
 //! 3. 序列内所有 id 唯一。
 
+use super::subtitle::SubtitleItem;
 use crate::timeline::{Rational, Tick};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -280,6 +281,8 @@ pub struct Track {
     pub name: String,
     pub clips: Vec<ClipItem>,
     pub transitions: Vec<Transition>,
+    /// 字幕轨上的文字条目。只有 `Subtitle` 轨会有内容，其它轨恒为空。
+    pub subtitles: Vec<SubtitleItem>,
     /// 这一轨不参与预览与导出：视频 / 字幕轨隐藏，音频轨静音。
     ///
     /// 用一个字段而不是 `hidden` + `muted`：轨道的 `kind` 已经说明它是画面还是声音，
@@ -297,6 +300,7 @@ impl Track {
             name: name.into(),
             clips: Vec::new(),
             transitions: Vec::new(),
+            subtitles: Vec::new(),
             muted: false,
             locked: false,
         }
@@ -314,11 +318,15 @@ impl Track {
         self.clips.iter().position(|clip| clip.id == id)
     }
 
-    /// 轨道内容的终点（最后一个片段的出点）。空轨道是 0。
+    /// 轨道内容的终点（片段与字幕条目里最晚的那个出点）。空轨道是 0。
+    ///
+    /// 字幕也要算进去：只有字幕轨上有内容时，序列时长不能还是 0，否则导出计划
+    /// 会把整条序列当空的，预览播放头也走不过字幕。
     pub fn end(&self) -> Tick {
         self.clips
             .iter()
             .map(ClipItem::end)
+            .chain(self.subtitles.iter().map(|item| item.end))
             .max()
             .unwrap_or(Tick::ZERO)
     }
@@ -350,6 +358,26 @@ impl Track {
 
     pub fn sort_transitions(&mut self) {
         self.transitions.sort_by_key(|transition| transition.id);
+    }
+
+    pub fn subtitle(&self, id: Id) -> Option<&SubtitleItem> {
+        self.subtitles.iter().find(|item| item.id == id)
+    }
+
+    pub fn subtitle_mut(&mut self, id: Id) -> Option<&mut SubtitleItem> {
+        self.subtitles.iter_mut().find(|item| item.id == id)
+    }
+
+    /// 按起点排序。字幕条目比片段少得多，加载工程时排一次就够。
+    pub fn sort_subtitles(&mut self) {
+        self.subtitles.sort_by_key(|item| (item.start, item.id));
+    }
+
+    /// 与 `[from, to)` 有交集的字幕条目，供时间线只画视口里的那几条。
+    pub fn visible_subtitles(&self, from: Tick, to: Tick) -> impl Iterator<Item = &SubtitleItem> {
+        self.subtitles
+            .iter()
+            .filter(move |item| item.start < to && item.end > from)
     }
 }
 
@@ -456,6 +484,24 @@ impl Sequence {
             .map(|track| track.id)
     }
 
+    pub fn subtitle(&self, id: Id) -> Option<&SubtitleItem> {
+        self.tracks.iter().find_map(|track| track.subtitle(id))
+    }
+
+    pub fn subtitle_mut(&mut self, id: Id) -> Option<&mut SubtitleItem> {
+        self.tracks
+            .iter_mut()
+            .find_map(|track| track.subtitle_mut(id))
+    }
+
+    /// 字幕条目所在的轨道 id。
+    pub fn subtitle_track(&self, id: Id) -> Option<Id> {
+        self.tracks
+            .iter()
+            .find(|track| track.subtitle(id).is_some())
+            .map(|track| track.id)
+    }
+
     /// 序列时长：所有轨道终点的最大值。
     pub fn duration(&self) -> Tick {
         self.tracks
@@ -509,6 +555,7 @@ impl Sequence {
                     .transitions
                     .iter()
                     .any(|transition| transition.id == id)
+                || track.subtitles.iter().any(|item| item.id == id)
         }) || self.markers.iter().any(|marker| marker.id == id)
     }
 
@@ -527,6 +574,7 @@ impl Sequence {
                             .iter()
                             .map(|transition| transition.id.raw()),
                     )
+                    .chain(track.subtitles.iter().map(|item| item.id.raw()))
             })
             .chain(self.markers.iter().map(|marker| marker.id.raw()))
             .max()
@@ -567,6 +615,20 @@ impl Sequence {
                 }
                 previous_end = Some(clip.end());
             }
+            // 字幕条目是非空的序列时间区间；id 与片段、标记共用同一空间。
+            let mut subtitle_end = Tick::ZERO;
+            for item in &track.subtitles {
+                if !used.insert(item.id) {
+                    return Err(ModelError::DuplicateId(item.id));
+                }
+                if item.start.is_negative() || item.end <= item.start {
+                    return Err(ModelError::BadSubtitle(item.id));
+                }
+                if item.start < subtitle_end {
+                    return Err(ModelError::Overlap(track.id));
+                }
+                subtitle_end = item.end;
+            }
         }
         for marker in &self.markers {
             if !used.insert(marker.id) {
@@ -592,6 +654,8 @@ pub enum ModelError {
     /// 转场引用的片段不存在，或者前后顺序反了。
     DanglingTransition(Id),
     NegativeMarker(Id),
+    /// 字幕条目的时间区间是空的、负的，或者出点早于入点。
+    BadSubtitle(Id),
 }
 
 impl fmt::Display for ModelError {
@@ -604,6 +668,7 @@ impl fmt::Display for ModelError {
                 write!(f, "转场 {id} 引用的片段不存在，或前后顺序反了")
             }
             ModelError::NegativeMarker(id) => write!(f, "标记 {id} 在负时间上"),
+            ModelError::BadSubtitle(id) => write!(f, "字幕 {id} 的起止时间不对"),
         }
     }
 }

@@ -159,6 +159,20 @@ impl PlayerApp {
                         }),
                     ))
                     .child(ui::icon_toggle_small(
+                        "timeline-add-subtitle",
+                        IconName::Captions,
+                        false,
+                        "在播放头加字幕（没有字幕轨时自动建一条）",
+                        cx.listener(|this, _: &ClickEvent, window, cx| {
+                            let start = this
+                                .project
+                                .as_ref()
+                                .map(|project| project.ui.playhead)
+                                .unwrap_or(crate::timeline::Tick::ZERO);
+                            this.open_subtitle_dialog(None, None, start, window, cx);
+                        }),
+                    ))
+                    .child(ui::icon_toggle_small(
                         "timeline-export",
                         IconName::FileDown,
                         false,

@@ -419,6 +419,7 @@ impl Project {
         for track in &mut self.sequence.tracks {
             track.sort_clips();
             track.sort_transitions();
+            track.sort_subtitles();
             let known: HashSet<Id> = track.clips.iter().map(|clip| clip.id).collect();
             track.transitions.retain(|transition| {
                 known.contains(&transition.before) && known.contains(&transition.after)

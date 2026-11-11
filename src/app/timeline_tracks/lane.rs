@@ -93,6 +93,68 @@ impl PlayerApp {
                 this.clear_selection(cx);
             }));
 
+        // 字幕轨画的是文字条目：它没有素材、倍率与效果，也不参与拖放换轨，
+        // 所以单独一条绘制路径，别和素材片段的拖动 / 转场标记搅在一起。
+        if track.kind == crate::timeline::TrackKind::Subtitle {
+            for entry in track
+                .visible_subtitles(Tick::from_secs(view.scroll()), Tick::from_secs(visible_end))
+            {
+                let left = view.x_of(entry.start.secs()).max(0.0);
+                let right = view.x_of(entry.end.secs()).min(lane_width);
+                let width = (right - left).max(2.0);
+                let label: SharedString = entry.label().into();
+                let id = entry.id;
+                lane = lane.child(
+                    div()
+                        .id(format!("timeline-subtitle-{}", id.raw()))
+                        .absolute()
+                        .left(px(left))
+                        .top(px(4.0))
+                        .bottom(px(4.0))
+                        .w(px(width))
+                        .rounded(px(4.0))
+                        .overflow_hidden()
+                        .px(px(5.0))
+                        .flex()
+                        .items_center()
+                        .bg(clip_color(track.kind))
+                        .opacity(if track.muted { 0.4 } else { 1.0 })
+                        .when(width > 44.0, |this| {
+                            this.text_size(px(11.0))
+                                .text_color(gpui_kit::rgba(0xffffffee))
+                                .whitespace_nowrap()
+                                .child(label)
+                        })
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.open_subtitle_dialog(None, Some(id), Tick::ZERO, window, cx);
+                        }))
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                                cx.stop_propagation();
+                                this.open_subtitle_item_menu(id, event.position, cx);
+                            }),
+                        ),
+                );
+            }
+            // 空白处右键新建：起点就用播放头（标尺上先点好位置，面板里还能再改）。
+            // 用播放头而不是鼠标坐标，免得 DPI 缩放下的坐标换算把字幕放到别处。
+            return lane
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                        let start = this
+                            .project
+                            .as_ref()
+                            .map(|project| project.ui.playhead)
+                            .unwrap_or(Tick::ZERO);
+                        this.open_subtitle_dialog(Some(track_id), None, start, window, cx);
+                    }),
+                )
+                .into_any_element();
+        }
+
         // 只取视口里的片段：万级片段的工程每帧从头扫一遍，滚动就会掉帧。
         for clip in
             track.visible_clips(Tick::from_secs(view.scroll()), Tick::from_secs(visible_end))

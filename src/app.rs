@@ -148,6 +148,7 @@ mod timeline_keys;
 mod timeline_menu;
 mod timeline_preview;
 mod timeline_speed;
+mod timeline_subtitle;
 mod timeline_tracks;
 mod timeline_view;
 mod video_area;
@@ -178,6 +179,7 @@ use self::scope::ScopeDialog;
 use self::sequence_dialog::{SequenceDialog, SequencePurpose};
 use self::settings_panel::SettingsTab;
 use self::timeline_menu::TimelineMenu;
+use self::timeline_subtitle::SubtitleDialog;
 use self::timeline_tracks::TimelineDrop;
 use self::widgets::*;
 
@@ -467,6 +469,8 @@ pub struct PlayerApp {
     timeline_audio_solo: bool,
     /// 导出面板；`None` 表示没打开。
     export_dialog: Option<ExportDialog>,
+    /// 字幕编辑面板；`None` 表示没打开。与导出面板互斥。
+    subtitle_dialog: Option<SubtitleDialog>,
     /// 上一次确认过的导出参数。只在本次会话里记着，不随工程存盘；
     /// 要跨会话复用就存成预设（`render-presets.json`）。
     export_settings: ExportSettings,

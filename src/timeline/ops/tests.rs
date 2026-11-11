@@ -742,3 +742,7 @@ mod speed;
 // 调色走 `EditOp` 之后的前置校验，见 `tests/color.rs`。
 #[path = "tests/color.rs"]
 mod color;
+
+// 字幕条目的增删改，见 `tests/subtitle.rs`。
+#[path = "tests/subtitle.rs"]
+mod subtitle;

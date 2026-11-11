@@ -210,6 +210,15 @@ impl PlayerApp {
                 })
                 .unwrap_or(0.0)
         };
+        // 预览的字幕是一层界面文字：单路 mpv 画面上没有 libass 排版，字体与描边
+        // 只有导出时才有。试听原片时画面与播放头无关，也不能拿时间线字幕盖上去。
+        let subtitle = if self.audition.is_some() {
+            None
+        } else {
+            self.project.as_ref().and_then(|project| {
+                crate::timeline::subtitle_at(&project.sequence, project.ui.playhead)
+            })
+        };
         div()
             .id("video-area")
             .absolute()
@@ -230,6 +239,31 @@ impl PlayerApp {
                         .absolute()
                         .inset_0()
                         .bg(gpui_kit::rgba(u32::from(alpha))),
+                )
+            })
+            // 字幕压在黑场之上：空档里也应该看得见字幕。字号按预览窗口折一档，
+            // ASS 里的数字是按序列高度（1080p / 4K）定义的像素。
+            .when_some(subtitle, |this, item| {
+                let style = &item.style;
+                let size = (style.size as f32 * 0.55).clamp(14.0, 64.0);
+                let ink: Hsla = gpui_kit::rgb(style.color).into();
+                let mut layer = div().absolute().inset_0().flex().flex_col().items_center();
+                layer = match style.position.vertical() {
+                    "start" => layer.justify_start().pt(px(24.0)),
+                    "center" => layer.justify_center(),
+                    _ => layer.justify_end().pb(px(24.0)),
+                };
+                this.child(
+                    layer.child(
+                        div()
+                            .px(px(10.0))
+                            .py(px(2.0))
+                            .rounded(px(4.0))
+                            .bg(gpui_kit::rgba(0x00000066))
+                            .text_size(px(size))
+                            .text_color(ink)
+                            .child(item.label()),
+                    ),
                 )
             })
             // 空状态只看「有没有帧」，不看 mpv 上报的宽高：width/height 属性在

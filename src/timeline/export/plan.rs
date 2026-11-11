@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use crate::timeline::{AssetId, Project, Sequence, Tick, Track, TrackKind};
 
-use super::{ExportError, ExportPlan, ExportSettings};
+use super::{ExportError, ExportPlan, ExportSettings, SubtitleAttachment};
 
 /// 音频统一到 48kHz 立体声。导出链里混采样率是最常见的「声音变调」来源。
 const AUDIO_RATE: u32 = 48_000;
@@ -177,6 +177,13 @@ pub fn plan_sequence_with(
     }
 
     let output_args = settings.output_args(audio_label.is_some());
+    // 字幕 ASS 文本按同一段范围裁切 / 平移，成片从 0 起算字幕也跟着从 0 起算。
+    // 隐藏的字幕轨和落在工作区外的条目都不进脚本；一条都不剩就不附字幕。
+    let subtitle =
+        crate::timeline::subtitle::ass_script(sequence, range).map(|ass| SubtitleAttachment {
+            ass,
+            mode: settings.subtitle,
+        });
 
     Ok(ExportPlan {
         inputs,
@@ -184,6 +191,7 @@ pub fn plan_sequence_with(
         video_label,
         audio_label,
         output_args,
+        subtitle,
     })
 }
 

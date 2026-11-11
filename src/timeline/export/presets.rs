@@ -149,7 +149,7 @@ pub fn normalize_name(name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::timeline::export::{EncodeSpeed, Quality, VideoCodec};
+    use crate::timeline::export::{EncodeSpeed, Quality, SubtitleMode, VideoCodec};
 
     /// 一整套非默认值：往返一次后每个字段都要还在。
     fn sample() -> ExportSettings {
@@ -159,6 +159,7 @@ mod tests {
             speed: EncodeSpeed::Slow,
             audio_bitrate: 256,
             faststart: false,
+            subtitle: SubtitleMode::Soft,
         }
     }
 

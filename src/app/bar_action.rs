@@ -53,9 +53,12 @@ pub(super) enum BarAction {
     ToggleMarkerAtPlayhead,
     MarkIn,
     MarkOut,
-    /// 各加一条视频 / 音频轨。
+    /// 各加一条视频 / 音频 / 字幕轨。
     AddVideoTrack,
     AddAudioTrack,
+    AddSubtitleTrack,
+    /// 在播放头处编辑一条新字幕；没有字幕轨时确定时自动补一条。
+    AddSubtitle,
     LoadSubtitle,
     Previous,
     Next,

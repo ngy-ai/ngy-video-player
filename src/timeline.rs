@@ -20,6 +20,7 @@ pub mod preview;
 mod project;
 mod spec;
 mod speed;
+mod subtitle;
 mod three_point;
 mod time;
 mod transition;
@@ -33,8 +34,9 @@ pub use effect::{
 };
 pub use export::{
     EncodeSpeed, ExportError, ExportPlan, ExportSettings, PRESET_NAME_CHARS, Quality, RenderPreset,
-    RenderPresetStore, VideoCodec, normalize_name as normalize_preset_name, plan_sequence,
-    plan_sequence_range, plan_sequence_with,
+    RenderPresetStore, SubtitleAttachment, SubtitleMode, VideoCodec,
+    normalize_name as normalize_preset_name, plan_sequence, plan_sequence_range,
+    plan_sequence_with,
 };
 pub use keyframe::{
     Animation, Interpolation, Keyframe, Keyframes, Property, fade_filters as keyframe_fades,
@@ -51,6 +53,11 @@ pub use project::{
 };
 pub use spec::{SequenceSpec, SpecError, rate_label};
 pub use speed::{set_hold, set_speed};
+pub use subtitle::{
+    COLORS, FONTS, MAX_OUTLINE, MAX_SIZE, MIN_SIZE, POSITIONS, SIZE_STEP, SubtitleItem,
+    SubtitlePosition, SubtitleStyle, ass_script as subtitle_ass_script, at as subtitle_at,
+    items as subtitle_items,
+};
 pub use three_point::{ThreePoint, ThreePointError, three_point};
 pub use time::{MICROS_PER_SECOND, Rational, Tick};
 pub use transition::{

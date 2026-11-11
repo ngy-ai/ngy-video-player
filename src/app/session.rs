@@ -109,6 +109,7 @@ impl PlayerApp {
             timeline_audio_file: None,
             timeline_audio_solo: false,
             export_dialog: None,
+            subtitle_dialog: None,
             export_settings: ExportSettings::default(),
             export_task: None,
             export_progress: None,

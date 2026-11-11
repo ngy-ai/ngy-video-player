@@ -23,12 +23,14 @@ pub(super) struct DeleteTrackConfirm {
 /// 只有转场没有片段属于坏数据（`Sequence::validate` 会拒），但删轨不该因为数据
 /// 不干净就跳过确认：宁可多问一句。
 pub(super) fn track_has_content(track: &crate::timeline::Track) -> bool {
-    !track.clips.is_empty() || !track.transitions.is_empty()
+    !track.clips.is_empty() || !track.transitions.is_empty() || !track.subtitles.is_empty()
 }
 
-/// 轨道内容的中文摘要。片段数是最直观的那一项。
+/// 轨道内容的中文摘要。字幕轨没有片段，得单独说有几条字幕。
 pub(super) fn track_content_detail(track: &crate::timeline::Track) -> String {
-    if track.clips.is_empty() {
+    if !track.subtitles.is_empty() {
+        format!("还有 {} 条字幕", track.subtitles.len())
+    } else if track.clips.is_empty() {
         "还有转场记录".to_string()
     } else {
         format!("还有 {} 个片段", track.clips.len())
@@ -56,6 +58,7 @@ impl PlayerApp {
         self.close_multicam_dialog(cx);
         self.close_concat_dialog(cx);
         self.close_playlist_import_dialog(cx);
+        self.close_subtitle_dialog(cx);
         self.show_settings = false;
         self.file_info = None;
         self.tab_rename = None;

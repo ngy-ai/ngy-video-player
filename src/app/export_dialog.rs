@@ -9,7 +9,8 @@
 
 use super::*;
 use crate::timeline::{
-    EncodeSpeed, ExportSettings, Quality, RenderPresetStore, VideoCodec, normalize_preset_name,
+    EncodeSpeed, ExportSettings, Quality, RenderPresetStore, SubtitleMode, VideoCodec,
+    normalize_preset_name,
 };
 use gpui_kit::component::input::{Input, InputState};
 
@@ -36,6 +37,7 @@ const SPEED_IDS: [&str; 3] = [
     "export-speed-medium",
     "export-speed-slow",
 ];
+const SUBTITLE_IDS: [&str; 2] = ["export-subtitle-burn", "export-subtitle-soft"];
 
 impl PlayerApp {
     /// 打开导出面板。再点一次同一个入口就收起。
@@ -59,6 +61,7 @@ impl PlayerApp {
         }
 
         // 模态互斥：叠在一起会互相挡住，也会抢同一份按键。
+        self.close_subtitle_dialog(cx);
         self.close_remux_dialog(cx);
         self.close_metadata_dialog(cx);
         self.close_proxy_dialog(cx);
@@ -271,6 +274,21 @@ impl PlayerApp {
             })
             .collect();
 
+        let subtitles = [SubtitleMode::Burn, SubtitleMode::Soft]
+            .into_iter()
+            .enumerate()
+            .map(|(index, mode)| {
+                chip(
+                    SUBTITLE_IDS[index],
+                    mode.label(),
+                    dialog.settings.subtitle == mode,
+                    cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                        this.update_export_settings(|settings| settings.subtitle = mode, cx);
+                    }),
+                )
+            })
+            .collect();
+
         let preset_line = match current {
             Some(name) => format!("当前：{}（预设「{name}」）", dialog.settings.summary()),
             None => format!("当前：{}（自定义）", dialog.settings.summary()),
@@ -307,9 +325,13 @@ impl PlayerApp {
             .child(option_row("画质", qualities))
             .child(option_row("速度", speeds))
             .child(option_row("音频", audio))
+            .child(option_row("字幕", subtitles))
             .child(settings_note(preset_line))
             .child(settings_note(
                 "H.265 同画质体积更小、解码更吃 CPU；「速度」只影响编码耗时，不影响时长。",
+            ))
+            .child(settings_note(
+                "烧录把字幕画进画面；软字幕另存一条字幕轨（mkv 存 ASS，mp4 存 mov_text，样式会少一些）。",
             ))
             .child(
                 div()
@@ -436,5 +458,11 @@ mod tests {
         assert_eq!(CODEC_IDS.len(), 2, "编码器有两档");
         assert_eq!(QUALITY_IDS.len(), 3, "画质有三档");
         assert_eq!(SPEED_IDS.len(), 3, "速度有三档");
+        assert_eq!(SUBTITLE_IDS.len(), 2, "字幕有烧录 / 软字幕两档");
+        assert_eq!(
+            ExportSettings::default().subtitle,
+            SubtitleMode::Burn,
+            "默认烧录，老预设缺字段也落这一档"
+        );
     }
 }
