@@ -42,7 +42,8 @@ src/app.rs       主视图入口：状态类型、PlayerApp 字段、快捷键�
 src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  session（初始化/事件循环）、playback、window（迷你窗/置顶）、
                  picture、playlist_ops、video_area、
-                 timeline_view / timeline_tracks（工程模式时间线：布局、轨道行与拖动）、
+                 timeline_view / timeline_tracks（工程模式时间线：布局、轨道行、片段与
+                   关键帧标记的拖动，`timeline_tracks/lane.rs` 是片段区各自画什么）、
                  library（工程模式左侧素材库：导入 / 后台探测 / 封面 / 试听原片，
                    `library/drop.rs` 是拖到轨道的落点、兼容性与首尾相接排布）、
                  source_edit（三点编辑：源入出点、`,` / `.` 落位，与试听分成两笔状态）、
@@ -110,6 +111,9 @@ src/timeline/spec.rs  序列规格：分辨率预设、帧率表、奇数边校�
 src/timeline/media.rs  素材元信息、文件指纹与过期判断；不含 ffmpeg 调用
 src/timeline/model.rs  序列 → 轨道 → 片段、转场与标记；纯数据，不持有文件路径
 src/timeline/ops.rs    编辑操作纯函数：旧序列进、新序列出，非法操作返回错误
+src/timeline/ops/placement.rs  放置语义：严格插入 / 插入让位 / 覆盖清区（`shift_open`、`clear_range`）
+src/timeline/ops/params.rs     片段参数：倍率、片尾定格、调色
+src/timeline/ops/subtitle.rs   字幕条目增删改：未锁定的字幕轨 + 同轨不重叠
 src/timeline/project.rs  .ngyproj 工程文件：版本迁移、相对素材路径、原子写 + .bak
 src/timeline/project/sequences.rs  多序列：列表 + 当前指针、增删改切换、读盘自愈（ADR 0009）
 docs/adr/0009  工程持有多条序列、界面状态仍只有一份
@@ -186,8 +190,11 @@ src/timeline/view.rs    时间线视图状态：缩放（1 像素 = 1 帧 ~ 10 �
     `#[cfg(test)] mod tests;`。
   - 跨模块的集成测试留在 `tests/` 顶层。
 
-现状：所有源码文件都在 700 行以内（最大的三个：`src/app/convert/panel.rs` 约 673 行、
-`src/app.rs` 约 655 行、`src/app/timeline_tracks.rs` 约 615 行）。
+现状：仍有几个文件超过 700 行，属于待还的债（按行数从大到小）：`src/app.rs` 约 842 行、
+`src/timeline/ops/tests.rs` 约 752 行、`src/playlist.rs` 约 748 行、
+`src/app/timeline_view.rs` 约 744 行、`src/app/overlays.rs` 约 705 行。
+`src/timeline/ops.rs` 已经拆过（放置 / 参数 / 字幕各成子模块，入口约 600 行），可以直接照这个
+样子拆：入口只留类型、`apply` 分发与跨模块辅助函数，其余按职责分文件。
 新增代码时如果目标文件接近上限，先把要动的区域抽成子模块再加逻辑，不要继续往上堆。
 
 ## 任务收尾：必须更新 CURRENT_STATE.md
