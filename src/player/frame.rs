@@ -105,6 +105,30 @@ impl FrameBuffer {
         }
     }
 
+    /// 拷成一块紧密排列的 BGRA（行宽 = `width * 4`），给截图 / 示波器用。
+    ///
+    /// 与 `to_image` 的区别：不转、不碰 alpha、也不进 GPUI 的图集——调用方要的是
+    /// 「屏幕上这一帧到底是什么颜色」，不是一张要上屏的图。
+    pub(crate) fn to_bgra(&self) -> Vec<u8> {
+        let width = self.width as usize;
+        let height = self.height as usize;
+        let mut out = vec![0u8; width * height * 4];
+        if width == 0 || height == 0 {
+            return out;
+        }
+        for row in 0..height {
+            let start = self.offset + row * self.stride;
+            let dst = row * width * 4;
+            out[dst..dst + width * 4].copy_from_slice(&self.storage[start..start + width * 4]);
+            // 与 `to_image` 同一条理由：mpv 的第四字节是未定义填充值，不一并写死
+            // 255 的话，拿去上屏或存 PNG 会变成半透明。
+            for pixel in out[dst..dst + width * 4].chunks_exact_mut(4) {
+                pixel[3] = 255;
+            }
+        }
+        out
+    }
+
     /// 拷成一张紧密排列、alpha 全不透明的 BGRA 图像，并按 `rotation` 顺时针转。
     ///
     /// 三个细节：
@@ -228,6 +252,26 @@ mod tests {
         let start = buffer.offset;
         buffer.storage[start..start + 3].copy_from_slice(&bgra);
         buffer
+    }
+
+    #[test]
+    fn 紧凑导出会给每行去掉对齐填充() {
+        let mut buffer = FrameBuffer::default();
+        buffer.resize(3, 2);
+        buffer.storage.fill(9);
+        let start = buffer.offset;
+        for row in 0..2usize {
+            let row_start = start + row * buffer.stride;
+            for x in 0..3usize {
+                let index = row_start + x * 4;
+                buffer.storage[index..index + 4].copy_from_slice(&[10 + x as u8, 20, 30, 0]);
+            }
+        }
+        let out = buffer.to_bgra();
+        assert_eq!(out.len(), 3 * 2 * 4, "行宽必须是 width * 4，不带 padding");
+        assert_eq!(&out[0..4], &[10, 20, 30, 255], "alpha 补齐到 255");
+        assert_eq!(&out[8..12], &[12, 20, 30, 255]);
+        assert_eq!(&out[12..16], &[10, 20, 30, 255], "第二行也要按紧密行宽取");
     }
 
     #[test]

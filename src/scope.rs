@@ -223,6 +223,29 @@ pub struct Bitmap {
     pub pixels: Vec<u8>,
 }
 
+/// 从一块紧密 BGRA（合成预览的当前帧）统计。
+///
+/// 多轨合成时画面不来自某一个文件，`sample(path, time)` 那种「按时间抽一路素材」
+/// 的路子统计的就不是用户看到的画面；这里直接读预览那一帧，最近邻缩到
+/// `SAMPLE_WIDTH`×`SAMPLE_HEIGHT`——示波器看的是分布，取值不必做面积平均。
+pub fn sample_bgra(bgra: &[u8], width: u32, height: u32) -> Option<ScopeFrame> {
+    let width = width as usize;
+    let height = height as usize;
+    if width == 0 || height == 0 || bgra.len() < width * height * 4 {
+        return None;
+    }
+    let mut rgb = Vec::with_capacity(SAMPLE_WIDTH * SAMPLE_HEIGHT * 3);
+    for row in 0..SAMPLE_HEIGHT {
+        let source_row = row * height / SAMPLE_HEIGHT;
+        for column in 0..SAMPLE_WIDTH {
+            let source_column = column * width / SAMPLE_WIDTH;
+            let offset = (source_row * width + source_column) * 4;
+            rgb.extend_from_slice(&[bgra[offset + 2], bgra[offset + 1], bgra[offset]]);
+        }
+    }
+    ScopeFrame::from_rgb(&rgb)
+}
+
 /// 在 `time` 处抽一帧统计。
 pub fn sample(input: &Path, time: f64) -> Result<ScopeFrame> {
     let executable = crate::platform::ffmpeg::executable()?;
@@ -357,6 +380,46 @@ mod tests {
     fn 空画面不当成全黑() {
         assert!(LumaScope::from_gray(&[]).is_none());
         assert!(ScopeFrame::from_rgb(&[]).is_none());
+    }
+
+    /// 整帧同色的 BGRA 缓冲。
+    fn solid_bgra(rgb: [u8; 3], width: u32, height: u32) -> Vec<u8> {
+        [[rgb[2], rgb[1], rgb[0], 255]]
+            .repeat((width * height) as usize)
+            .concat()
+    }
+
+    #[test]
+    fn 从合成帧统计与从文件统计等价() {
+        let frame = sample_bgra(&solid_bgra([255, 255, 255], 320, 180), 320, 180).unwrap();
+        let file = ScopeFrame::from_rgb(&solid([255, 255, 255])).unwrap();
+        assert_eq!(frame.luma.white_ratio(), file.luma.white_ratio());
+        assert!((frame.luma.mean() - file.luma.mean()).abs() < 1e-6);
+        assert!(sample_bgra(&[], 0, 0).is_none(), "空帧不统计");
+    }
+
+    #[test]
+    fn 合成帧的左右不会被颠倒() {
+        // 左半黑右半白：波形图前半列落在最暗档，后半列落在最亮档。
+        let (width, height) = (320u32, 180u32);
+        let mut bgra = vec![0u8; (width * height * 4) as usize];
+        for row in 0..height as usize {
+            for column in 0..width as usize {
+                let index = (row * width as usize + column) * 4;
+                let value = if column < width as usize / 2 { 0 } else { 255 };
+                bgra[index..index + 4].copy_from_slice(&[value, value, value, 255]);
+            }
+        }
+        let frame = sample_bgra(&bgra, width, height).unwrap();
+        let dark = 0;
+        let bright = WAVEFORM_ROWS - 1;
+        assert!(frame.waveform[dark] > 0, "第一列应该是暗的");
+        assert!(frame.waveform[bright] == 0, "第一列不该有亮的像素");
+        let last = SAMPLE_WIDTH - 1;
+        assert!(
+            frame.waveform[last * WAVEFORM_ROWS + bright] > 0,
+            "最后一列应该是亮的"
+        );
     }
 
     #[test]

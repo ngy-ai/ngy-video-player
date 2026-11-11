@@ -52,6 +52,8 @@ const SEEK_TIMEOUT: Duration = Duration::from_secs(3);
 const SEEK_TOLERANCE: f64 = 0.08;
 /// 空闲时醒来的间隔：既要不影响播放的跟手程度，又不至于空转烧 CPU。
 const TICK: Duration = Duration::from_millis(4);
+/// 等合成线程回传一帧的上限。它空闲时每 `TICK` 醒一次，正常都在一毫秒内回来。
+const SNAPSHOT_TIMEOUT: Duration = Duration::from_millis(400);
 
 /// 一层画面要放什么。
 #[derive(Clone, Debug, PartialEq)]
@@ -65,6 +67,13 @@ pub(crate) struct LayerSpec {
     pub opacity: f32,
 }
 
+/// 合成好的一帧（紧密 BGRA），给截图 / 示波器这类「要真的这张图」的地方用。
+pub(crate) struct Snapshot {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
+}
+
 enum Request {
     /// 换一整套图层。`seek` 为假表示只更新透明度与播放状态（播放中的动画），
     /// 不去动位置——每帧都补 seek 会让声音和画面一起打嗝。
@@ -72,6 +81,8 @@ enum Request {
         layers: Vec<LayerSpec>,
         seek: bool,
     },
+    /// 把当前合成结果拷一份回传。
+    Snapshot(mpsc::Sender<Option<Snapshot>>),
     /// 两路都卸掉，留着实例等下一次。
     Stop,
     Shutdown,
@@ -132,6 +143,19 @@ impl Compositor {
     /// 下发一整套图层（自下而上）。
     pub(crate) fn present(&self, layers: Vec<LayerSpec>, seek: bool) {
         let _ = self.requests.send(Request::Present { layers, seek });
+    }
+
+    /// 取一份当前合成结果（截图、示波器用）。
+    ///
+    /// 合成线程空闲时每 4ms 醒一次，回包基本是「一次 2MB 拷贝」的时间，所以在界面
+    /// 线程上同步等是可以接受的；等待上限只是兜底——合成器不响应时返回 `None`，
+    /// 调用方退回自己那条老路。
+    pub(crate) fn snapshot(&self) -> Option<Snapshot> {
+        let (sender, receiver) = mpsc::channel();
+        if self.requests.send(Request::Snapshot(sender)).is_err() {
+            return None;
+        }
+        receiver.recv_timeout(SNAPSHOT_TIMEOUT).ok().flatten()
     }
 
     pub(crate) fn stop(&self) {
@@ -430,6 +454,9 @@ impl Worker {
                         layer.unload(&self.api);
                     }
                 }
+                Ok(Request::Snapshot(reply)) => {
+                    let _ = reply.send(self.snapshot());
+                }
                 Ok(Request::Present { layers, seek }) => {
                     // 拖动播放头时请求是一串一串来的：只做最后一条，
                     // 中间那些位置用户早就划过去了。
@@ -445,6 +472,9 @@ impl Worker {
                                 for layer in &mut self.layers {
                                     layer.unload(&self.api);
                                 }
+                            }
+                            Ok(Request::Snapshot(reply)) => {
+                                let _ = reply.send(self.snapshot());
                             }
                             Ok(Request::Present { layers, seek }) => work = (layers, seek),
                             Err(_) => break,
@@ -581,11 +611,14 @@ impl Worker {
         }
     }
 
-    /// 把就绪的层自下而上叠成一张图，交给界面。
-    fn composite_and_send(&mut self) {
+    /// 把就绪的层自下而上叠成一块紧密 BGRA。一层就绪时直接拷它，不必过画布。
+    ///
+    /// 上屏与「截图 / 示波器」共用这一条路径：两边拿到的必须是同一张图，否则
+    /// 用户截出来的和看到的不一样。
+    fn canvas(&self) -> Option<(u32, u32, Vec<u8>)> {
         let (width, height) = self.size;
         if width < 2 || height < 2 {
-            return;
+            return None;
         }
         let ready: Vec<usize> = self
             .layers
@@ -594,36 +627,50 @@ impl Worker {
             .filter(|(_, layer)| layer.ready && layer.media.is_some())
             .map(|(index, _)| index)
             .collect();
-        if ready.is_empty() {
-            return;
+        let first = *ready.first()?;
+        if ready.len() == 1 {
+            // 只有一层有画面（另一路还在加载 / 打不开）：不必过一遍画布。
+            return Some((width, height, self.layers[first].buffer.to_bgra()));
         }
+        let mut canvas = vec![0u8; width as usize * height as usize * 4];
+        for (order, &index) in ready.iter().enumerate() {
+            // 最底下那层是不透明底：拿它开画布，不能再按透明度压暗一次。
+            let opacity = if order == 0 {
+                1.0
+            } else {
+                self.layers[index].opacity
+            };
+            self.layers[index].buffer.blend_into(&mut canvas, opacity);
+        }
+        Some((width, height, canvas))
+    }
+
+    /// 把就绪的层自下而上叠成一张图，交给界面。
+    fn composite_and_send(&mut self) {
         // 界面还没画完上一帧：这一帧丢掉，与主引擎的背压同一套语义。
         if self.pending.load(Ordering::SeqCst) {
             return;
         }
-
-        let image = if ready.len() == 1 {
-            // 只有一层有画面（另一路还在加载 / 打不开）：不必过一遍画布。
-            self.layers[ready[0]].buffer.to_image(0)
-        } else {
-            let mut canvas = vec![0u8; width as usize * height as usize * 4];
-            for (order, &index) in ready.iter().enumerate() {
-                // 最底下那层是不透明底：拿它开画布，不能再按透明度压暗一次。
-                let opacity = if order == 0 {
-                    1.0
-                } else {
-                    self.layers[index].opacity
-                };
-                self.layers[index].buffer.blend_into(&mut canvas, opacity);
-            }
-            let buffer: ImageBuffer<Rgba<u8>, Vec<u8>> =
-                ImageBuffer::from_raw(width, height, canvas).expect("画布尺寸由我们自己分配");
-            RenderImage::new([Frame::new(buffer)])
+        let Some((width, height, canvas)) = self.canvas() else {
+            return;
         };
+        let buffer: ImageBuffer<Rgba<u8>, Vec<u8>> =
+            ImageBuffer::from_raw(width, height, canvas).expect("画布尺寸由我们自己分配");
+        let image = RenderImage::new([Frame::new(buffer)]);
 
         self.pending.store(true, Ordering::SeqCst);
         let _ = self.events.unbounded_send(PlayerEvent::Composite {
             image: Arc::new(image),
         });
+    }
+
+    /// 给截图 / 示波器回一份当前合成结果。
+    fn snapshot(&self) -> Option<Snapshot> {
+        let (width, height, pixels) = self.canvas()?;
+        Some(Snapshot {
+            width,
+            height,
+            pixels,
+        })
     }
 }

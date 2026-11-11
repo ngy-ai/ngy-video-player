@@ -189,14 +189,27 @@ impl PlayerApp {
             cx.notify();
             return;
         }
-        if !self.snapshot.has_video() {
+        // 多轨合成时屏幕上是合成图，而 mpv 的 `screenshot-to-file` 只能截它自己那一路：
+        // 走合成器取当前帧，落盘的就是用户看到的那张。
+        let composed = self
+            .compositor
+            .as_ref()
+            .filter(|_| self.composite_layers.len() > 1)
+            .and_then(|compositor| compositor.snapshot());
+
+        if composed.is_none() && !self.snapshot.has_video() {
             self.flash("没有可截图的画面");
             cx.notify();
             return;
         }
 
         let video = self.snapshot.path.clone();
-        let target = match crate::screenshot::target(video.as_deref(), self.snapshot.position) {
+        // 工程模式下有意义的时刻是序列播放头，不是预览实例里那个素材位置。
+        let position = match self.project.as_ref() {
+            Some(project) => project.ui.playhead.secs(),
+            None => self.snapshot.position,
+        };
+        let target = match crate::screenshot::target(video.as_deref(), position) {
             Ok(path) => path,
             Err(error) => {
                 log_warn!("准备截图失败: {error:#}");
@@ -205,6 +218,22 @@ impl PlayerApp {
                 return;
             }
         };
+        if let Some(snapshot) = composed {
+            match crate::screenshot::save_bgra(
+                &target,
+                snapshot.width,
+                snapshot.height,
+                &snapshot.pixels,
+            ) {
+                Ok(()) => self.show_screenshot_card(target, cx),
+                Err(error) => {
+                    log_warn!("合成帧截图失败: {error:#}");
+                    self.flash(format!("截图失败：{error}"));
+                    cx.notify();
+                }
+            }
+            return;
+        }
         self.send(Command::Screenshot(target.to_string_lossy().into_owned()));
         cx.notify();
     }

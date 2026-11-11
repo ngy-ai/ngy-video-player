@@ -37,6 +37,31 @@ fn pictures_dir() -> Option<PathBuf> {
     }
 }
 
+/// 把一块紧密 BGRA（合成预览的当前帧）存成 PNG。
+///
+/// 多轨合成时画面并不在 mpv 手里——主实例被压着、只负责取帧——所以
+/// `screenshot-to-file` 截到的是某一路素材，不是用户看到的那张。这条路留在
+/// 应用层：把合成器的结果原样落盘，顺便保证截出来的和屏幕上一致。
+pub fn save_bgra(path: &Path, width: u32, height: u32, bgra: &[u8]) -> Result<()> {
+    let expected = width as usize * height as usize * 4;
+    if bgra.len() < expected {
+        return Err(anyhow!(
+            "合成帧尺寸不对：{} 字节，应为 {expected}",
+            bgra.len()
+        ));
+    }
+    let mut rgba = Vec::with_capacity(expected);
+    for pixel in bgra[..expected].chunks_exact(4) {
+        // BGRA -> RGBA，alpha 一律写满：合成结果本来就是不透明的。
+        rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
+    }
+    let image = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(width, height, rgba)
+        .ok_or_else(|| anyhow!("合成帧尺寸不对：{width}x{height}"))?;
+    image
+        .save(path)
+        .with_context(|| format!("写入截图失败：{}", path.display()))
+}
+
 /// 为一次截图挑一个不会覆盖已有文件的目标路径。
 ///
 /// 系统图片目录不可用时退回视频所在目录：用户至少知道东西存在哪儿，
@@ -170,6 +195,21 @@ mod tests {
         assert_eq!(timecode(0.0), "00-00-00");
         assert_eq!(timecode(59.9), "00-00-59");
         assert_eq!(timecode(3725.0), "01-02-05");
+    }
+
+    #[test]
+    fn 合成帧按_bgra_顺序存成_png() {
+        // 2×1：左边 B=255（蓝），右边 R=255（红），alpha 故意留 0。
+        let bgra: [u8; 8] = [255, 0, 0, 0, 0, 0, 255, 0];
+        let path = std::env::temp_dir().join(format!("ngy-shot-{}.png", std::process::id()));
+        save_bgra(&path, 2, 1, &bgra).unwrap();
+        let image = image::open(&path).unwrap().to_rgba8();
+        assert_eq!(image.dimensions(), (2, 1));
+        assert_eq!(image.get_pixel(0, 0).0, [0, 0, 255, 255], "B 通道要落到蓝");
+        assert_eq!(image.get_pixel(1, 0).0, [255, 0, 0, 255]);
+        let _ = std::fs::remove_file(&path);
+
+        assert!(save_bgra(&path, 4, 1, &bgra).is_err(), "字节数对不上要报错");
     }
 
     #[test]

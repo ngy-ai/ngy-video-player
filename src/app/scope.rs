@@ -125,10 +125,25 @@ impl PlayerApp {
     /// 按当前播放位置重新抽样。
     fn refresh_scope(&mut self, cx: &mut Context<Self>) {
         let position = self.snapshot.position.max(0.0);
+        // 合成预览时统计的是屏幕上那一帧：多轨叠加后每个素材文件都不等于成品，
+        // 按「时间 + 文件」抽一帧只会得到某一路。
+        let composed = self
+            .compositor
+            .as_ref()
+            .filter(|_| self.composite_layers.len() > 1)
+            .and_then(|compositor| compositor.snapshot())
+            .and_then(|snapshot| {
+                scope_core::sample_bgra(&snapshot.pixels, snapshot.width, snapshot.height)
+            });
         let Some(dialog) = self.scope.as_mut() else {
             return;
         };
         dialog.time = position;
+        if let Some(scope) = composed {
+            dialog.state = ScopeState::Ready(Box::new(scope));
+            cx.notify();
+            return;
+        }
         dialog.state = ScopeState::Loading;
         let path = dialog.path.clone();
         let generation = dialog.generation;
