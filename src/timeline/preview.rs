@@ -50,20 +50,67 @@ pub fn enabled_video_tracks(sequence: &Sequence) -> impl Iterator<Item = &Track>
 ///
 /// 素材内时刻走 [`crate::timeline::ClipItem::source_at`]，倍率与片尾定格都在那里算：
 /// 2 倍速的片段在 0.5 秒处要取素材的 1.0 秒，定格段则一直取最后一帧。
+///
+/// 单路预览只看「最上面那条」，不透明度在这里不生效——真要按透明度叠，走 [`layers`]。
 pub fn resolve(sequence: &Sequence, at: Tick) -> Option<PreviewFrame> {
-    enabled_video_tracks(sequence).find_map(|track| {
-        track.clips.iter().find_map(|clip| {
-            let source = clip.source_at(at)?;
-            Some(PreviewFrame {
-                asset: clip.asset_id,
-                source,
-                track: track.id,
-                clip: clip.id,
-                // 定格段里 `source_at` 一直给最后一帧；播放器要知道「别再往下走了」。
-                frozen: at - clip.start >= clip.motion(),
-            })
+    enabled_video_tracks(sequence).find_map(|track| frame_at(track, at))
+}
+
+/// 一条轨在 `at` 这一刻要出的画面。
+fn frame_at(track: &Track, at: Tick) -> Option<PreviewFrame> {
+    track.clips.iter().find_map(|clip| {
+        let source = clip.source_at(at)?;
+        Some(PreviewFrame {
+            asset: clip.asset_id,
+            source,
+            track: track.id,
+            clip: clip.id,
+            // 定格段里 `source_at` 一直给最后一帧；播放器要知道「别再往下走了」。
+            frozen: at - clip.start >= clip.motion(),
         })
     })
+}
+
+/// 合成用的一层画面：要放什么 + 这一层有多不透明。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PreviewLayer {
+    pub frame: PreviewFrame,
+    /// 0 = 完全透明，1 = 完全不透明。取自片段的不透明度关键帧，没记过就是 1。
+    pub opacity: f32,
+}
+
+/// 播放头在 `at` 时该叠的整套画面，**自下而上**（列表末尾是上面那层）。
+///
+/// 选轨规则与 [`resolve`] 同一条（静音 / 空轨跳过），区别是把每一层都取出来而不是
+/// 只留最上面那条：单路预览解不了两路，多路合成（`player::compositor`）按这份叠。
+/// 不透明度为 0 的层不出现——它在成片里也看不见，留着只是白解一路。
+pub fn layers(sequence: &Sequence, at: Tick) -> Vec<PreviewLayer> {
+    // 轨道列表靠上的画在上面，所以反着走：先底后顶。
+    let mut tracks: Vec<&Track> = enabled_video_tracks(sequence).collect();
+    tracks.reverse();
+
+    let mut layers = Vec::new();
+    for track in tracks {
+        let Some(frame) = frame_at(track, at) else {
+            continue;
+        };
+        let clip = track
+            .clips
+            .iter()
+            .find(|clip| clip.id == frame.clip)
+            .expect("画面是从这条轨的片段里取出来的");
+        // 关键帧的时间是**片段内**的时刻（与导出侧的 `fade` 同一把尺子）。
+        let local = (at - clip.start).max(Tick::ZERO);
+        let opacity = clip
+            .keys
+            .value(crate::timeline::Property::Opacity, local)
+            .clamp(0.0, 1.0);
+        if opacity <= 0.0 {
+            continue;
+        }
+        layers.push(PreviewLayer { frame, opacity });
+    }
+    layers
 }
 
 /// 序列某一时刻该放的声音。
@@ -275,6 +322,45 @@ mod tests {
         let frame = resolve(&sequence, s(1.0)).expect("有画面");
         assert_eq!(frame.track, top, "列表靠上的轨优先");
         assert_eq!(frame.asset, AssetId::new(1));
+    }
+
+    #[test]
+    fn 合成层自下而上给出每条轨的画面() {
+        let mut sequence = sequence();
+        let top = sequence.tracks[0].id;
+        put(&mut sequence, top, 1, 0.0, 5.0, 0.0);
+        let lower = sequence.add_track(TrackKind::Video);
+        put(&mut sequence, lower, 2, 0.0, 5.0, 0.0);
+
+        let layers = layers(&sequence, s(1.0));
+        assert_eq!(layers.len(), 2, "两条轨各出一层");
+        assert_eq!(layers[0].frame.track, lower, "先给底下的那条");
+        assert_eq!(layers[1].frame.track, top, "上面那条在末尾");
+        assert_eq!(layers[0].opacity, 1.0, "没记过关键帧就是不透明");
+    }
+
+    #[test]
+    fn 上层的不透明度来自关键帧() {
+        let mut sequence = sequence();
+        let top = sequence.tracks[0].id;
+        put(&mut sequence, top, 1, 0.0, 5.0, 2.0);
+        let lower = sequence.add_track(TrackKind::Video);
+        put(&mut sequence, lower, 2, 0.0, 5.0, 0.0);
+
+        // 片段从 2 秒开始，关键帧记的是片段内时刻：第 0 秒全透明、第 2 秒不透明。
+        let clip = sequence.track_mut(top).unwrap();
+        let keys = &mut clip.clips[0].keys;
+        keys.ensure(crate::timeline::Property::Opacity)
+            .insert(Tick::ZERO, 0.0);
+        keys.ensure(crate::timeline::Property::Opacity)
+            .insert(s(2.0), 1.0);
+
+        assert_eq!(layers(&sequence, s(2.0)).len(), 1, "全透明的层不出现");
+        assert_eq!(layers(&sequence, s(2.0))[0].frame.asset, AssetId::new(2));
+        let with_top = layers(&sequence, s(3.0));
+        assert_eq!(with_top.len(), 2);
+        let opacity = with_top[1].opacity;
+        assert!((opacity - 0.5).abs() < 0.05, "半程半透明：{opacity}");
     }
 
     #[test]

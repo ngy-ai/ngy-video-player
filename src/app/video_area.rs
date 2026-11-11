@@ -158,6 +158,10 @@ impl PlayerApp {
             height = cap;
         }
         engine.set_render_target(width, height, self.settings.video_rotate.degrees());
+        // 合成预览用同一块画布：窗口一变，合成器跟着换尺寸重新叠。
+        if let Some(compositor) = &self.compositor {
+            compositor.set_target(width, height);
+        }
     }
 
     /// 画面该按什么比例排。

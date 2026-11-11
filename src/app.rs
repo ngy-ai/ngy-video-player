@@ -471,6 +471,14 @@ pub struct PlayerApp {
     timeline_audio_file: Option<PathBuf>,
     /// 是否正压着主画面自带的声音（音频轨片段优先）。
     timeline_audio_solo: bool,
+    /// 多轨合成预览（M10-T01）。两条以上视频轨同时有画面时才创建。
+    compositor: Option<crate::player::compositor::Compositor>,
+    /// 合成器最近一次拿到的图层（自下而上）。空表示这一帧不由合成器负责。
+    composite_layers: Vec<crate::player::compositor::LayerSpec>,
+    /// 合成预览尝试失败过：退回单路，别每次刷新都再起一个实例。
+    composite_failed: bool,
+    /// 已经提示过「超过合成路数上限」：只提示一次，别每帧刷屏。
+    composite_depth_warned: bool,
     /// 导出面板；`None` 表示没打开。
     export_dialog: Option<ExportDialog>,
     /// 字幕编辑面板；`None` 表示没打开。与导出面板互斥。

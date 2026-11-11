@@ -51,6 +51,60 @@ impl FrameBuffer {
         self.storage.fill(0);
     }
 
+    /// 把这一帧按 `opacity` 叠进 `dst`（紧密 BGRA，行宽 = `width * 4`）。
+    ///
+    /// 两块缓冲尺寸必须一致——合成器让每一路 mpv 都按同一个画布尺寸渲染，缩放与
+    /// 黑边都由 mpv 自己排，这里只做像素级的 alpha 混合，省掉二次缩放。
+    ///
+    /// `opacity >= 1` 走整行拷贝：导出侧的 `overlay` 就是不做 alpha 的整幅覆盖
+    /// （`pad` 出来的黑边也算上层的一部分），预览跟着一样才不会「叠出来不一样」。
+    /// alpha 一律写满 255，否则 GPUI 会把整帧当透明。
+    pub(crate) fn blend_into(&self, dst: &mut [u8], opacity: f32) {
+        let width = self.width as usize;
+        let height = self.height as usize;
+        debug_assert_eq!(dst.len(), width * height * 4, "画布尺寸必须与帧一致");
+        let opacity = if opacity.is_finite() {
+            opacity.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        if opacity <= 0.0 {
+            return;
+        }
+
+        if opacity >= 1.0 {
+            for y in 0..height {
+                let src_start = self.offset + y * self.stride;
+                let dst_start = y * width * 4;
+                let src = &self.storage[src_start..src_start + width * 4];
+                let dst = &mut dst[dst_start..dst_start + width * 4];
+                dst.copy_from_slice(src);
+                for pixel in dst.chunks_exact_mut(4) {
+                    pixel[3] = 255;
+                }
+            }
+            return;
+        }
+
+        // 定点混合：0..=256，`>> 8` 一步算完，不用每像素做两次浮点乘。
+        let weight = (opacity * 256.0).round() as u32;
+        let rest = 256 - weight;
+        for y in 0..height {
+            let src_start = self.offset + y * self.stride;
+            let src = &self.storage[src_start..src_start + width * 4];
+            let dst_start = y * width * 4;
+            let dst = &mut dst[dst_start..dst_start + width * 4];
+            for (src_pixel, dst_pixel) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
+                for channel in 0..3 {
+                    let mixed =
+                        src_pixel[channel] as u32 * weight + dst_pixel[channel] as u32 * rest;
+                    dst_pixel[channel] = (mixed >> 8) as u8;
+                }
+                dst_pixel[3] = 255;
+            }
+        }
+    }
+
     /// 拷成一张紧密排列、alpha 全不透明的 BGRA 图像，并按 `rotation` 顺时针转。
     ///
     /// 三个细节：
@@ -165,6 +219,47 @@ pub(crate) fn render_sw(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 造一块 1×1 的帧，像素值按 BGRA 写。
+    fn pixel(bgra: [u8; 3]) -> FrameBuffer {
+        let mut buffer = FrameBuffer::default();
+        buffer.resize(1, 1);
+        buffer.storage.fill(0);
+        let start = buffer.offset;
+        buffer.storage[start..start + 3].copy_from_slice(&bgra);
+        buffer
+    }
+
+    #[test]
+    fn 上层全不透明时整幅覆盖() {
+        let bottom = pixel([0, 0, 255]);
+        let top = pixel([10, 20, 30]);
+        let mut canvas = [0u8; 4];
+        bottom.blend_into(&mut canvas, 1.0);
+        top.blend_into(&mut canvas, 1.0);
+        assert_eq!(canvas, [10, 20, 30, 255], "不透明上层连 alpha 一起写满");
+    }
+
+    #[test]
+    fn 半透明上层按比例混合() {
+        let bottom = pixel([0, 100, 200]);
+        let top = pixel([200, 0, 100]);
+        let mut canvas = [0u8; 4];
+        bottom.blend_into(&mut canvas, 1.0);
+        top.blend_into(&mut canvas, 0.5);
+        // 0.5 * 200 + 0.5 * 0 = 100；0.5*0+0.5*100 = 50；0.5*100+0.5*200 = 150。
+        assert_eq!(canvas, [100, 50, 150, 255]);
+    }
+
+    #[test]
+    fn 全透明的层不动画布() {
+        let bottom = pixel([7, 8, 9]);
+        let top = pixel([200, 200, 200]);
+        let mut canvas = [0u8; 4];
+        bottom.blend_into(&mut canvas, 1.0);
+        top.blend_into(&mut canvas, 0.0);
+        assert_eq!(canvas, [7, 8, 9, 255]);
+    }
 
     #[test]
     fn 换片清缓冲后不会再打包出上一帧() {

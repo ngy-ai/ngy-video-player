@@ -109,6 +109,10 @@ impl PlayerApp {
             timeline_audio: None,
             timeline_audio_file: None,
             timeline_audio_solo: false,
+            compositor: None,
+            composite_layers: Vec::new(),
+            composite_failed: false,
+            composite_depth_warned: false,
             export_dialog: None,
             subtitle_dialog: None,
             export_settings: ExportSettings::default(),
@@ -318,11 +322,16 @@ impl PlayerApp {
                             // 告诉取帧线程「这一帧已被取走」，否则它会主动丢帧。
                             engine.frame_consumed();
                         }
+                        // 合成器接管时单路预览已经让位：它迟到的帧贴上去就把多轨
+                        // 画面盖掉了，而且暂停时不会再有新帧来纠正。
+                        let compositing = !this.composite_layers.is_empty();
                         // 换片之前渲染、却晚于 FrameCleared 才送达的旧帧一律丢掉：
                         // 放回去就是「播着音频，画面还是上一个视频」。
                         // 纯音频再单独挡一道：mpv 在 loadfile 期间会把它手里
                         // 上一部片子的最后一帧按新代次重新渲染出来，连代次都对得上。
-                        if frame_accepted(epoch, this.frame_epoch, this.loading_audio_only) {
+                        if !compositing
+                            && frame_accepted(epoch, this.frame_epoch, this.loading_audio_only)
+                        {
                             this.incoming = Some(image.clone());
                             // 小窗不自己解码，只是同一张帧的第二个窗口，这里转发一份。
                             if let Some(mini) = &this.mini {
@@ -352,6 +361,21 @@ impl PlayerApp {
                     }
                     PlayerEvent::Thumbnail { time, image } => {
                         this.on_thumbnail(time, image);
+                        cx.notify();
+                    }
+                    PlayerEvent::Composite { image } => {
+                        // 告诉合成线程「这一帧已被取走」，否则它会一直等着丢帧。
+                        if let Some(compositor) = &this.compositor {
+                            compositor.frame_consumed();
+                        }
+                        this.incoming = Some(image.clone());
+                        // 小窗也是同一张画面：转发一份，不自己再解一次。
+                        if let Some(mini) = &this.mini {
+                            mini.update(cx, |mini, cx| {
+                                mini.incoming = Some(image);
+                                cx.notify();
+                            });
+                        }
                         cx.notify();
                     }
                     PlayerEvent::Ended(reason) => {

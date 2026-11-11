@@ -346,6 +346,12 @@ impl Engine {
         &self.api
     }
 
+    /// 事件通道的发送端：多轨合成预览（`player::compositor`）要往同一条通道里
+    /// 推合成结果，这样界面只有一条接收循环，不必再开一路。
+    pub fn event_sender(&self) -> UnboundedSender<PlayerEvent> {
+        self.shared.events.clone()
+    }
+
     pub fn send(&self, command: Command) {
         if self.shared.shutdown.load(Ordering::SeqCst) {
             return;

@@ -218,6 +218,11 @@ pub enum PlayerEvent {
     /// 进度条预览图。`time` 是当初请求的时间点（不是实际画面时间，
     /// 因为实际帧会落在关键帧附近）。
     Thumbnail { time: f64, image: Arc<RenderImage> },
+    /// 多轨合成出来的整幅画面（`player::compositor`）。
+    ///
+    /// 与 [`PlayerEvent::Frame`] 分开：合成器有自己的背压与就绪节奏，也不参与主引擎
+    /// 的画面代次（换片清帧那套只对单实例有意义）。
+    Composite { image: Arc<RenderImage> },
     /// 当前文件播放结束。
     Ended(EndReason),
     /// 出错了，界面应该显示出来。

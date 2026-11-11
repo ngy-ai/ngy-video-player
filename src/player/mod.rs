@@ -13,6 +13,8 @@ pub mod probe;
 pub(crate) mod thumbnail;
 // 时间线预览里音频轨上的片段：同样是独立的纯音频实例。
 pub(crate) mod audio_preview;
+// 多轨合成预览：每条视频轨一个实例，CPU 叠成一幅再交给界面（ADR 0008 的架构 A）。
+pub(crate) mod compositor;
 
 pub use engine::{
     Chapter, Command, EndReason, Engine, EngineOptions, LoopMode, PlayerEvent, Snapshot, Track,

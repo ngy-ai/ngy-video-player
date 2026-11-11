@@ -219,6 +219,7 @@ impl PlayerApp {
     pub(super) fn switch_active_sequence(&mut self, id: Id, cx: &mut Context<Self>) {
         self.stop_timeline_playback(cx);
         self.stop_timeline_audio();
+        self.leave_composite();
         self.timeline_preview = None;
         self.timeline_loaded_at = None;
         self.timeline_menu = None;
