@@ -11,7 +11,7 @@ use std::process::Command;
 
 use ngy_video_player::export::{ExportEvent, ExportTask};
 use ngy_video_player::timeline::{
-    AssetId, ClipItem, ExportPlan, ExportSettings, Id, Project, Rational, SequenceSpec,
+    AssetId, ClipItem, ExportPlan, ExportSettings, Id, Project, Property, Rational, SequenceSpec,
     SubtitleItem, SubtitleMode, Tick, TrackKind, Transition, TransitionKind, plan_sequence,
     plan_sequence_range, plan_sequence_with,
 };
@@ -515,6 +515,54 @@ fn 只导出工作区那一段() {
     // 对照：成片 0.5 秒与素材 0.5 秒（另一个位置）必须明显不同，否则上面的相近毫无意义。
     let wrong = psnr_between(&output, "0.5", &clip, "0.5");
     assert!(wrong < 30.0, "对照帧应当不同，实测 {wrong:.1} dB");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// M9-T08：推近（`zoompan`）在成片里真的把画面放大了，而且是**逐步**放大。
+///
+/// 用一块「左三分之一白、其余黑」的静态图案当素材：放大以画面中心为锚点，
+/// 白区会逐渐被挤出画面，平均亮度单调下降。只看「滤镜字符串里有 zoompan」不够——
+/// 表达式写错（比如少了 `on/fps` 的换算）时字符串依然长得对，画面却不会动。
+#[test]
+#[ignore = "需要本机 ffmpeg"]
+fn 关键帧推近在成片里逐步放大() {
+    let dir = scratch("export-zoom");
+    let clip = dir.join("steps.mp4");
+    let status = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i"])
+        .arg("color=c=black:size=320x240:rate=30:duration=5,drawbox=x=0:y=0:w=107:h=240:color=white:t=fill")
+        .args(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-t", "5"])
+        .arg(&clip)
+        .status()
+        .expect("跑 ffmpeg 生成素材");
+    assert!(status.success(), "生成测试素材失败");
+
+    let mut project = Project::new_with(SequenceSpec::new(320, 240, Rational::FPS_30));
+    let asset = project.add_asset(&clip);
+    let video = project.sequence_mut().tracks[0].id;
+    let picture = put(&mut project, video, asset, 0.0, 5.0, 0.0);
+
+    // 0 秒 1.0×、5 秒 4.0×：线性插值，2.4 秒时约 2.4×。
+    let item = project.sequence_mut().clip_mut(picture).unwrap();
+    item.keys.ensure(Property::Scale).insert(Tick::ZERO, 1.0);
+    item.keys.ensure(Property::Scale).insert(second(5.0), 4.0);
+
+    let output = run_export(&dir, &project, "zoom.mp4");
+    assert_duration(&output, "00:00:05");
+
+    // 默认白色是 235、黑色 16：白区占比从约三分之一逐步掉到 0。
+    let first = average_luma(&output, "0.2");
+    let middle = average_luma(&output, "2.4");
+    let last = average_luma(&output, "4.8");
+    assert!(
+        first > middle + 20.0,
+        "前半段应当还看得见大片白区：{first:.1} → {middle:.1}"
+    );
+    assert!(
+        middle > last + 10.0,
+        "后半段白区应当继续缩小：{middle:.1} → {last:.1}"
+    );
+    assert!(last < 40.0, "4.8 秒时画面应当几乎全黑，实测 {last:.1}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
