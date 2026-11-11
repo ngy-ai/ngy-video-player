@@ -53,6 +53,7 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  timeline_keys（片段关键帧面板：在播放头处记录与删除）、
                  timeline_subtitle（字幕编辑模态面板、字幕块右键菜单与预览入口）、
                  sequence_manager（多序列管理面板：新建 / 切换 / 改名 / 删除与切换复位）、
+                 timecode_jump（跳到时间码：Ctrl/⌘+G 打开、打开即聚焦、超长夹到结尾）、
                  controls、menus、bar、
                  menu_bar、associations、ab_loop（A-B 循环）、
                  project_file（工程保存/另存为/未保存确认）、
@@ -108,6 +109,7 @@ src/player/engine/    state（对外类型）、event_loop、dispatch、render_l
 src/timeline.rs  剪辑时间线：入口只放文档、模块声明与 `pub use`
 src/timeline/time.rs  Tick（i64 微秒）与 Rational 帧率：全项目唯一的帧↔时间换算入口
 src/timeline/spec.rs  序列规格：分辨率预设、帧率表、奇数边校验、按素材推导
+src/timeline/timecode.rs  `HH:MM:SS:FF` 的显示与解析：整帧 / 丢帧（29.97、59.94）、省略短写
 src/timeline/media.rs  素材元信息、文件指纹与过期判断；不含 ffmpeg 调用
 src/timeline/model.rs  序列 → 轨道 → 片段、转场与标记；纯数据，不持有文件路径
 src/timeline/ops.rs    编辑操作纯函数：旧序列进、新序列出，非法操作返回错误

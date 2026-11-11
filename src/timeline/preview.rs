@@ -256,6 +256,39 @@ pub fn advance(playhead: Tick, elapsed: Duration, speed: f64, stop: Tick) -> Tic
     (playhead + Tick::from_secs(elapsed * speed)).min(stop)
 }
 
+/// 播放头往回走 `elapsed` 真实时间（乘倍速），到 `start` 停住。
+///
+/// 倒放没有「反向解码」这回事：mpv 只能正向解码，所以时间线这边照常按墙钟往回
+/// 走，画面靠每一拍补一次 seek 追上来（与拖播放头同一条路径，也因此倒放没有声音）。
+pub fn rewind(playhead: Tick, elapsed: Duration, rate: f64, start: Tick) -> Tick {
+    let elapsed = elapsed.min(MAX_STEP).as_secs_f64();
+    let rate = if rate.is_finite() && rate > 0.0 {
+        rate.clamp(0.1, 4.0)
+    } else {
+        1.0
+    };
+    playhead
+        .saturating_sub(Tick::from_secs(elapsed * rate))
+        .max(start)
+}
+
+/// J/K/L 的档位：`1x → 2x → 4x`，再按就停在 4x（专业剪辑器的习惯，不循环）。
+///
+/// `current` 是当前档位（方向由调用方决定，这里只看绝对值），返回下一档。
+pub fn shuttle_step(current: f64) -> f64 {
+    let current = if current.is_finite() {
+        current.abs().clamp(1.0, 4.0)
+    } else {
+        1.0
+    };
+    if current <= 1.0 {
+        2.0
+    } else {
+        // 2x 的下一档就是 4x；已经在 4x 时再按也还是 4x，不循环回 1x。
+        4.0
+    }
+}
+
 /// 预览画面与时间线的偏差是否大到值得补一次 seek。
 ///
 /// `source` 是播放头对应的素材内时刻，`position` 是 mpv 报的当前时刻。位置不是
@@ -592,6 +625,38 @@ mod tests {
                 "{speed} 不是可用倍速"
             );
         }
+    }
+
+    #[test]
+    fn 倒放按倍速往回走并停在工作区入点() {
+        assert_eq!(
+            rewind(s(2.0), Duration::from_millis(100), 1.0, s(0.0)),
+            s(1.9)
+        );
+        assert_eq!(
+            rewind(s(2.0), Duration::from_millis(100), 2.0, s(0.0)),
+            s(1.8)
+        );
+        assert_eq!(
+            rewind(s(10.2), Duration::from_millis(250), 1.0, s(10.0)),
+            s(10.0),
+            "退到入点就停住"
+        );
+        // 卡顿上限与正向一致。
+        assert_eq!(rewind(s(5.0), Duration::from_secs(2), 1.0, s(0.0)), s(4.75));
+    }
+
+    #[test]
+    fn 变速档位是一二三档不循环() {
+        assert_eq!(
+            shuttle_step(0.0),
+            2.0,
+            "没在播时按一下先给 1x，由调用方处理"
+        );
+        assert_eq!(shuttle_step(1.0), 2.0);
+        assert_eq!(shuttle_step(2.0), 4.0);
+        assert_eq!(shuttle_step(4.0), 4.0, "到 4x 就不再往上");
+        assert_eq!(shuttle_step(-2.0), 4.0, "只看绝对值，方向由调用方决定");
     }
 
     #[test]

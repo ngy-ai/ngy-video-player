@@ -55,6 +55,14 @@ impl PlayerApp {
         if self.composite_failed {
             return false;
         }
+        // 合成里那两路也是 mpv 在放：变速要一层层下发，否则它们按 1x 走，
+        // 与按 2x / 4x 推进的播放头越离越远。倒放走「按住 + 逐拍 seek」，
+        // 这里只给正数。
+        let rate = if playing {
+            self.timeline_shuttle.abs().max(0.1)
+        } else {
+            1.0
+        };
         let Some(project) = self.project.as_ref() else {
             return false;
         };
@@ -76,6 +84,7 @@ impl PlayerApp {
                 path: path.to_path_buf(),
                 source: layer.frame.source.secs(),
                 playing: playing && !layer.frame.frozen,
+                rate,
                 opacity: layer.opacity,
             });
         }
@@ -114,10 +123,12 @@ impl PlayerApp {
                 .iter()
                 .zip(&specs)
                 .all(|(old, new)| old.path == new.path);
-        // 只是播放状态或透明度变了：要更新，但绝不能顺手 seek 一下。
+        // 只是播放状态、速率或透明度变了：要更新，但绝不能顺手 seek 一下。
         let state_moved = !same_count
             || self.composite_layers.iter().zip(&specs).any(|(old, new)| {
-                old.playing != new.playing || (old.opacity - new.opacity).abs() > 0.01
+                old.playing != new.playing
+                    || (old.rate - new.rate).abs() > 0.001
+                    || (old.opacity - new.opacity).abs() > 0.01
             });
 
         if (force_seek || !same_paths || state_moved)
@@ -190,6 +201,65 @@ impl PlayerApp {
         true
     }
 
+    /// `L`：正向播放，连按 1x → 2x → 4x（不循环，专业剪辑器的习惯）。
+    pub(super) fn shuttle_forward(&mut self, cx: &mut Context<Self>) {
+        self.shuttle(1.0, cx);
+    }
+
+    /// `J`：倒放，连按 1x → 2x → 4x。倒放没有声音（见 `preview::rewind`）。
+    pub(super) fn shuttle_backward(&mut self, cx: &mut Context<Self>) {
+        self.shuttle(-1.0, cx);
+    }
+
+    /// `K`：停下，并把档位清回原速（由 [`Self::stop_timeline_playback`] 负责）。
+    pub(super) fn shuttle_stop(&mut self, cx: &mut Context<Self>) {
+        if self.timeline_playing {
+            self.stop_timeline_playback(cx);
+        }
+        cx.notify();
+    }
+
+    fn shuttle(&mut self, direction: f64, cx: &mut Context<Self>) {
+        if !self.timeline_playing {
+            // 没在播：J 从 -1x 起，L 从 1x 起。
+            self.timeline_shuttle = direction;
+            self.start_timeline_playback(cx);
+            return;
+        }
+        let current = self.timeline_shuttle;
+        self.timeline_shuttle = if current == 0.0 || current.signum() != direction {
+            // 换了方向：回到 1x 重新起档，不然按一下就从 4x 倒放，容易失控。
+            direction
+        } else {
+            direction * preview::shuttle_step(current.abs())
+        };
+        self.apply_shuttle();
+        cx.notify();
+    }
+
+    /// 把档位落到播放上：正向交给 mpv 的 `speed`，反向按住 mpv 由时钟补 seek。
+    fn apply_shuttle(&mut self) {
+        let rate = self.timeline_shuttle;
+        if self.timeline_preview.is_some() {
+            self.send(Command::SetSpeed(rate.abs().max(0.1)));
+            if rate < 0.0 {
+                // 倒放时 mpv 不能自己往回走：按住它，画面每拍补一次 seek。
+                self.send(Command::SetPaused(true));
+            }
+        }
+        // 音频轨那一路是独立实例：倒放按住，正放跟上同一个倍速。
+        if let Some(player) = self.timeline_audio.as_ref() {
+            if rate < 0.0 {
+                player.pause();
+            } else {
+                player.set_speed(rate.abs());
+            }
+        }
+        // 变速之后重新起算：不然上一段真实时间会按新倍速再乘一遍。
+        self.timeline_last_tick = Instant::now();
+        self.poke();
+    }
+
     /// 播放 / 暂停预览。空格与标题条上的播放键共用这里。
     pub(super) fn toggle_timeline_playback(&mut self, cx: &mut Context<Self>) {
         if self.timeline_playing {
@@ -201,15 +271,19 @@ impl PlayerApp {
 
     fn start_timeline_playback(&mut self, cx: &mut Context<Self>) {
         let Some(project) = self.project.as_ref() else {
+            // 起不来就别把档位留在那里：下一次按空格会带着上次的方向起跑。
+            self.timeline_shuttle = 0.0;
             return;
         };
         if self.engine.is_none() {
+            self.timeline_shuttle = 0.0;
             self.flash("播放引擎没有加载，无法预览");
             cx.notify();
             return;
         }
         let duration = project.sequence().duration();
         if duration <= Tick::ZERO {
+            self.timeline_shuttle = 0.0;
             self.flash("时间线还是空的");
             cx.notify();
             return;
@@ -223,10 +297,16 @@ impl PlayerApp {
 
         self.timeline_playing = true;
         self.timeline_last_tick = Instant::now();
+        if self.timeline_shuttle == 0.0 {
+            self.timeline_shuttle = 1.0;
+        }
+        // 倒放时 mpv 只能被按住：`playing` 为假，画面靠时钟补 seek。
+        let forward = self.timeline_shuttle > 0.0;
         // 先把画面挪到起点再放：从暂停处直接 PlayPause 会沿用 mpv 自己的位置，
         // 而它可能比播放头慢半拍（上一帧解码完到按下播放之间的那点时间）。
-        self.preview_frame(at, true);
+        self.preview_frame(at, forward);
         self.follow_playhead();
+        self.apply_shuttle();
         self.start_timeline_clock(cx);
         self.poke();
         cx.notify();
@@ -239,10 +319,13 @@ impl PlayerApp {
         }
         self.timeline_playing = false;
         self.timeline_loaded_at = None;
+        // 档位回到 1x：停一次再按播放必须是正常速度，不能接着上次的 4x 跑。
+        self.timeline_shuttle = 0.0;
         // mpv 还在照原速往下走：不按住它，暂停之后声音还会继续播，画面也会
-        // 跑出片段的出点。
+        // 跑出片段的出点。速率还给用户设的播放倍速，别把播放器那边的偏好改掉。
         if self.timeline_preview.is_some() {
             self.send(Command::SetPaused(true));
+            self.send(Command::SetSpeed(self.settings.speed));
         }
         // 音频轨那一路是独立实例，主画面暂停管不到它。
         if let Some(player) = self.timeline_audio.as_ref() {
@@ -293,20 +376,38 @@ impl PlayerApp {
             return;
         };
         let stop = preview::stop_at(project.sequence().duration(), project.ui.range());
-        // 倍速是 mpv 的播放速度：时钟必须乘同一个数，否则改了倍速之后音画和
-        // 播放头会越离越远。
-        let speed = self.snapshot.speed;
+        let rate = self.timeline_shuttle;
         let elapsed = self.timeline_last_tick.elapsed();
-        let next = preview::advance(project.ui.playhead, elapsed, speed, stop);
-        let reached_end = next >= stop;
+        let (next, reached_end) = if rate < 0.0 {
+            let start = project
+                .ui
+                .range()
+                .map(|(start, _)| start)
+                .unwrap_or(Tick::ZERO);
+            let next = preview::rewind(project.ui.playhead, elapsed, -rate, start);
+            (next, next <= start)
+        } else {
+            // 倍速是 mpv 的播放速度：时钟必须乘同一个数，否则改了倍速之后音画和
+            // 播放头会越离越远。
+            let next = preview::advance(project.ui.playhead, elapsed, self.snapshot.speed, stop);
+            (next, next >= stop)
+        };
         if let Some(project) = self.project.as_mut() {
             project.ui.playhead = next;
         }
         self.timeline_last_tick = Instant::now();
 
         if reached_end {
+            let message = if rate < 0.0 {
+                "退到工作区入点"
+            } else {
+                "预览播放到结尾"
+            };
             self.stop_timeline_playback(cx);
-            self.flash("预览播放到结尾");
+            self.flash(message);
+        } else if rate < 0.0 {
+            // 倒放：mpv 自己不会往回走，每一拍补一次 seek（与拖播放头同一条路径）。
+            self.preview_frame(next, false);
         } else {
             self.preview_follow(next);
         }

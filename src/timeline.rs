@@ -23,6 +23,7 @@ mod speed;
 mod subtitle;
 mod three_point;
 mod time;
+pub mod timecode;
 mod transition;
 mod undo;
 mod view;

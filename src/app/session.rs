@@ -113,6 +113,8 @@ impl PlayerApp {
             composite_layers: Vec::new(),
             composite_failed: false,
             composite_depth_warned: false,
+            timeline_shuttle: 0.0,
+            timecode_dialog: None,
             export_dialog: None,
             subtitle_dialog: None,
             export_settings: ExportSettings::default(),

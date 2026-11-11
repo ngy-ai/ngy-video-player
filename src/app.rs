@@ -67,6 +67,11 @@ actions!(
         NextFile,
         PreviousFile,
         TakeScreenshot,
+        // J/K/L 一套：倒放 / 停 / 正放，连按换档（M10-T04）。
+        ShuttleBackward,
+        ShuttleStop,
+        ShuttleForward,
+        JumpToTimecode,
         SpeedUp,
         SpeedDown,
         StopPlayback,
@@ -142,6 +147,7 @@ mod settings_panel;
 mod source_edit;
 #[cfg(test)]
 mod tests;
+mod timecode_jump;
 mod timeline_color;
 mod timeline_effects;
 mod timeline_header;
@@ -180,6 +186,7 @@ use self::scope::ScopeDialog;
 use self::sequence_dialog::{SequenceDialog, SequencePurpose};
 use self::sequence_manager::SequenceManagerDialog;
 use self::settings_panel::SettingsTab;
+use self::timecode_jump::TimecodeDialog;
 use self::timeline_menu::TimelineMenu;
 use self::timeline_subtitle::SubtitleDialog;
 use self::timeline_tracks::{KeyframeDrop, TimelineDrop};
@@ -479,6 +486,10 @@ pub struct PlayerApp {
     composite_failed: bool,
     /// 已经提示过「超过合成路数上限」：只提示一次，别每帧刷屏。
     composite_depth_warned: bool,
+    /// J/K/L 的当前档位：0 = 没在变速播放，正负是方向，绝对值是 1 / 2 / 4 倍。
+    timeline_shuttle: f64,
+    /// 「跳到时间码」面板；`None` 表示没打开。与其余模态互斥。
+    timecode_dialog: Option<TimecodeDialog>,
     /// 导出面板；`None` 表示没打开。
     export_dialog: Option<ExportDialog>,
     /// 字幕编辑面板；`None` 表示没打开。与导出面板互斥。

@@ -63,8 +63,23 @@ pub(crate) struct LayerSpec {
     pub source: f64,
     /// 这一层要不要跟着时间走。定格段与暂停时为假。
     pub playing: bool,
+    /// 播放速率（1 = 原速）。J/K/L 变快时画面也得跟着快，否则合成出来的
+    /// 那两路会按 1x 走，与按 2x / 4x 推进的播放头越离越远。
+    ///
+    /// 只给正数：倒放靠「按住 + 每拍补 seek」实现，由 `playing` 表达。
+    pub rate: f64,
     /// 0 = 完全透明。
     pub opacity: f32,
+}
+
+/// 一层播放速率的合法范围：mpv 的 `speed` 认 0.01–100，这里收得比它更紧，
+/// 与时间线 J/K/L 的档位（1 / 2 / 4）对得上；坏值退回原速。
+fn normalize_rate(rate: f64) -> f64 {
+    if rate.is_finite() && rate > 0.0 {
+        rate.clamp(0.1, 4.0)
+    } else {
+        1.0
+    }
 }
 
 /// 合成好的一帧（紧密 BGRA），给截图 / 示波器这类「要真的这张图」的地方用。
@@ -189,6 +204,8 @@ struct Layer {
     buffer: FrameBuffer,
     media: Option<PathBuf>,
     source: f64,
+    /// 已经下发给 mpv 的速率：没变就不再发命令。
+    rate: f64,
     opacity: f32,
     /// 缓冲里是不是这一层的有效画面。换文件、改尺寸时置假。
     ready: bool,
@@ -265,6 +282,7 @@ impl Layer {
                 buffer: FrameBuffer::default(),
                 media: None,
                 source: 0.0,
+                rate: 1.0,
                 opacity: 1.0,
                 ready: false,
             })
@@ -388,6 +406,20 @@ impl Layer {
         if let Err(error) = api.run_command(self.handle.get(), &["set", "pause", value]) {
             log_debug!("合成实例暂停失败: {error}");
         }
+    }
+
+    /// 播放速率。每帧都发一条 `set speed` 没必要，值没变就跳过。
+    fn set_speed(&mut self, api: &MpvApi, rate: f64) {
+        let rate = normalize_rate(rate);
+        if (self.rate - rate).abs() < 0.001 {
+            return;
+        }
+        let value = format!("{rate:.3}");
+        if let Err(error) = api.run_command(self.handle.get(), &["set", "speed", &value]) {
+            log_debug!("合成实例变速失败: {error}");
+            return;
+        }
+        self.rate = rate;
     }
 
     fn unload(&mut self, api: &MpvApi) {
@@ -532,10 +564,11 @@ impl Worker {
             };
             let switched = layer.media.as_deref() != Some(spec.path.as_path());
             log_debug!(
-                "合成层 {} @ {:.3}s opacity={:.2} seek={} switched={switched}",
+                "合成层 {} @ {:.3}s opacity={:.2} rate={:.2} seek={} switched={switched}",
                 spec.path.display(),
                 spec.source,
                 layer.opacity,
+                spec.rate,
                 seek || switched
             );
             if switched && !layer.load(&self.api, &spec.path) {
@@ -551,6 +584,7 @@ impl Worker {
             }
             layer.source = spec.source;
             layer.set_pause(&self.api, !spec.playing);
+            layer.set_speed(&self.api, spec.rate);
         }
 
         // 摆好就立刻出一帧，别等下一次新帧（暂停时永远等不到）。
@@ -672,5 +706,24 @@ impl Worker {
             height,
             pixels,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 播放速率坏值退回原速() {
+        assert_eq!(normalize_rate(1.0), 1.0);
+        assert_eq!(normalize_rate(2.0), 2.0);
+        assert_eq!(normalize_rate(4.0), 4.0);
+        // 时间线只会给 1 / 2 / 4；太快的一律夹住，零与负数（倒放 / 定格，本来
+        // 也不该送到这里）退回原速，免得 mpv 收到离谱的 speed。
+        assert_eq!(normalize_rate(0.0), 1.0);
+        assert_eq!(normalize_rate(-2.0), 1.0);
+        assert_eq!(normalize_rate(8.0), 4.0);
+        assert_eq!(normalize_rate(f64::NAN), 1.0);
+        assert_eq!(normalize_rate(f64::INFINITY), 1.0);
     }
 }

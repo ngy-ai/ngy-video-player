@@ -37,6 +37,20 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("t", ToggleMini, None),
         KeyBinding::new("a", OpenPictureSettings, None),
         KeyBinding::new("l", TogglePlaylist, None),
+        // J/K/L：工程模式里 `l` 交给「正向变速」（播放列表在工程模式下不出现），
+        // `j` / `k` 专给变速，播放器模式下按下去什么也不做。
+        KeyBinding::new("j", ShuttleBackward, None),
+        KeyBinding::new("k", ShuttleStop, None),
+        // 跳到时间码：与常见 NLE 的「按时间码定位」同一颗键。
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "cmd-g"
+            } else {
+                "ctrl-g"
+            },
+            JumpToTimecode,
+            None,
+        ),
         // 工程模式的素材库与播放列表不是一回事（前者是工程素材，后者是播放列表），
         // 键位错开：Ctrl/⌘ + Shift + E，与常见剪辑软件的「项目素材」位置一致。
         KeyBinding::new(
