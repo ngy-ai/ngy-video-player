@@ -100,6 +100,9 @@ pub enum EditOp {
     /// 改调色。整套参数一起换：面板每次改动都是一份完整的 `ColorGrade`，
     /// 单个字段的增删在界面层算好，落一步撤销。
     SetColor { clip: Id, color: ColorGrade },
+    /// 把片段内 `from` 处的整组关键帧挪到 `to`（都是片段内相对时间）。
+    /// 越界不报错，夹到片段两端；`from` 处没有点时序列原样。
+    MoveKeyframe { clip: Id, from: Tick, to: Tick },
     /// 在字幕轨上加一条文字条目。id 由调用方从序列分配，重叠就拒绝。
     AddSubtitle { track: Id, item: SubtitleItem },
     /// 改一条字幕的全部内容（文本、起止、样式）。id 不变。
@@ -191,6 +194,7 @@ pub fn apply(sequence: &Sequence, op: &EditOp) -> Result<Sequence, EditError> {
         EditOp::SetSpeed { clip, speed } => set_speed(&mut next, *clip, *speed)?,
         EditOp::SetHold { clip, hold } => set_hold(&mut next, *clip, *hold)?,
         EditOp::SetColor { clip, color } => set_color(&mut next, *clip, color)?,
+        EditOp::MoveKeyframe { clip, from, to } => move_keyframe(&mut next, *clip, *from, *to)?,
         EditOp::AddSubtitle { track, item } => add_subtitle(&mut next, *track, item)?,
         EditOp::SetSubtitle { id, item } => set_subtitle(&mut next, *id, item)?,
         EditOp::RemoveSubtitle { id } => remove_subtitle(&mut next, *id)?,
@@ -557,6 +561,23 @@ fn roll(sequence: &mut Sequence, clip_id: Id, by: Tick) -> Result<(), EditError>
     track.clips[clip_index].source_out = source_out;
     track.clips[clip_index + 1].source_in = after_in;
     track.clips[clip_index + 1].start = after.start + by;
+    Ok(())
+}
+
+/// 挪一组关键帧。同一时刻的标记是所有属性共用的，所以挪的是整组，不是单条曲线。
+///
+/// `to` 夹进片段内部而不是报错：拖着标记在片段上换位置时越过两端是常态，
+/// 弹一句错误只会打断手感。`from` 处没有点时序列原样返回，界面据此不落撤销。
+fn move_keyframe(
+    sequence: &mut Sequence,
+    clip_id: Id,
+    from: Tick,
+    to: Tick,
+) -> Result<(), EditError> {
+    let (track_index, clip_index) = locate(sequence, clip_id)?;
+    let item = &mut sequence.tracks[track_index].clips[clip_index];
+    let to = to.max(Tick::ZERO).min(item.duration());
+    item.keys.move_marks(from, to);
     Ok(())
 }
 

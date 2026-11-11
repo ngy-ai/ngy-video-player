@@ -88,6 +88,24 @@ impl PlayerApp {
             .on_drop(cx.listener(move |this, drag: &AssetDrag, _window, cx| {
                 this.drop_assets(track_id, drag, cx);
             }))
+            // 拖关键帧标记：落点按「片段内相对时间」算，所以要先知道标记属于哪个片段。
+            .on_drag_move(cx.listener(
+                move |this, event: &DragMoveEvent<KeyframeDrag>, _window, cx| {
+                    let position = event.event.position;
+                    if !event.bounds.contains(&position) {
+                        return;
+                    }
+                    let (clip, from) = {
+                        let drag = event.drag(cx);
+                        (drag.clip, drag.from)
+                    };
+                    let lane_x = f32::from(position.x) - f32::from(event.bounds.origin.x);
+                    this.set_keyframe_drop(track_id, clip, from, lane_x, cx);
+                },
+            ))
+            .on_drop(cx.listener(move |this, drag: &KeyframeDrag, _window, cx| {
+                this.drop_keyframe(drag, cx);
+            }))
             // 点轨道空白处取消选中；点片段时片段自己截断了事件。
             .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
                 this.clear_selection(cx);
@@ -238,23 +256,48 @@ impl PlayerApp {
 
             // 关键帧标记：片段内相对时间换成序列时间，画成贴着片段下沿的小竖条。
             // 每帧重算一遍，只扫视口内的片段，几万个点的工程也不会卡。
+            //
+            // 外面那层是 11 像素宽的抓手：3 像素的竖条好看但抓不住，而拖动阈值只有
+            // 2 像素。抓手是透明的，画出来的仍是那根竖条。
             for mark in clip.keys.marks() {
                 let x = view.x_of((clip.start + mark).secs());
                 if x < 0.0 || x > lane_width {
                     continue;
                 }
+                let ghost: SharedString = format!("{:.2}s", mark.secs()).into();
                 lane = lane.child(
                     div()
+                        .id(format!("timeline-key-{}-{}", clip_id.raw(), mark.micros()))
                         .absolute()
-                        .left(px(x - 1.5))
-                        .bottom(px(4.0))
-                        .w(px(3.0))
-                        .h(px(7.0))
-                        .rounded(px(1.5))
-                        .bg(gpui_kit::rgba(0xffffffff))
-                        .border_1()
-                        .border_color(gpui_kit::rgba(0x00000066))
-                        .opacity(if track.muted { 0.4 } else { 1.0 }),
+                        .left(px(x - 5.5))
+                        .bottom(px(2.0))
+                        .w(px(11.0))
+                        .h(px(12.0))
+                        .flex()
+                        .items_end()
+                        .justify_center()
+                        .cursor(CursorStyle::ResizeLeftRight)
+                        .opacity(if track.muted { 0.4 } else { 1.0 })
+                        .child(
+                            div()
+                                .w(px(3.0))
+                                .h(px(9.0))
+                                .rounded(px(1.5))
+                                .bg(gpui_kit::rgba(0xffffffff))
+                                .border_1()
+                                .border_color(gpui_kit::rgba(0x00000066)),
+                        )
+                        .on_drag(
+                            KeyframeDrag {
+                                clip: clip_id,
+                                from: mark,
+                            },
+                            move |_drag, _offset, _window, cx| {
+                                cx.new(|_| TimelineGhost {
+                                    name: ghost.clone(),
+                                })
+                            },
+                        ),
                 );
             }
         }
@@ -294,6 +337,26 @@ impl PlayerApp {
                             this.open_transition_menu(after_id, event.position, cx);
                         }),
                     ),
+            );
+        }
+
+        // 拖关键帧时画一条竖线。`has_active_drag` 是必须的：拖到别的轨道上松手时
+        // `on_drop` 不会触发，只看 `keyframe_drop` 会让竖线留在原地。
+        if let Some(drop) = self.keyframe_drop
+            && cx.has_active_drag()
+            && track.clip(drop.clip).is_some()
+            && let Some(clip) = project.sequence().clip(drop.clip)
+        {
+            let x = view.x_of((clip.start + drop.to).secs());
+            lane = lane.child(
+                div()
+                    .absolute()
+                    .left(px(x - 0.75))
+                    .top(px(2.0))
+                    .bottom(px(2.0))
+                    .w(px(1.5))
+                    .bg(ui::accent())
+                    .opacity(0.9),
             );
         }
 
@@ -390,6 +453,70 @@ impl PlayerApp {
             return;
         }
         self.timeline_drop = Some(drop);
+        cx.notify();
+    }
+
+    /// 记下关键帧标记的落点。落点没变就不重绘：拖动时每移动一个像素都重绘整窗太浪费。
+    ///
+    /// 标记只在片段自己的轨道上落：拖到别的轨道既不挪片段，也没有明确语义。
+    fn set_keyframe_drop(
+        &mut self,
+        track: Id,
+        clip: Id,
+        from: Tick,
+        lane_x: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
+        if project.sequence().clip_track(clip) != Some(track) {
+            return;
+        }
+        let fps = project.sequence().fps;
+        let Some(item) = project.sequence().clip(clip) else {
+            return;
+        };
+        let seconds = self.timeline.time_at(lane_x).max(0.0);
+        let to = (snap_to_frame(Tick::from_secs(seconds), fps) - item.start)
+            .max(Tick::ZERO)
+            .min(item.duration());
+        let drop = KeyframeDrop { clip, from, to };
+        if self.keyframe_drop == Some(drop) {
+            return;
+        }
+        self.keyframe_drop = Some(drop);
+        cx.notify();
+    }
+
+    /// 松手：把「哪个时刻的点挪到哪儿」交给 `timeline::ops`，锁轨与夹取都在那边。
+    fn drop_keyframe(&mut self, drag: &KeyframeDrag, cx: &mut Context<Self>) {
+        let Some(drop) = self.keyframe_drop.take() else {
+            cx.notify();
+            return;
+        };
+        // 拖了一下又放回原处不该占一步历史。
+        if drop.clip != drag.clip || drop.from != drag.from || drop.to == drop.from {
+            cx.notify();
+            return;
+        }
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
+        let op = EditOp::MoveKeyframe {
+            clip: drop.clip,
+            from: drop.from,
+            to: drop.to,
+        };
+        let outcome = apply_edit(project.sequence(), &op);
+        match outcome {
+            Ok(sequence) => {
+                self.commit_edit(sequence, "移动关键帧");
+                self.flash(format!("关键帧挪到 {:.2} 秒（片段内）", drop.to.secs()));
+            }
+            Err(error) => self.flash(format!("移动关键帧失败：{error}")),
+        }
+        self.poke();
         cx.notify();
     }
 

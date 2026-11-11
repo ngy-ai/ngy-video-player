@@ -746,3 +746,7 @@ mod color;
 // 字幕条目的增删改，见 `tests/subtitle.rs`。
 #[path = "tests/subtitle.rs"]
 mod subtitle;
+
+// 关键帧标记的拖动，见 `tests/keyframe.rs`。
+#[path = "tests/keyframe.rs"]
+mod keyframe;

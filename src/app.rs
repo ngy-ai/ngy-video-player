@@ -182,7 +182,7 @@ use self::sequence_manager::SequenceManagerDialog;
 use self::settings_panel::SettingsTab;
 use self::timeline_menu::TimelineMenu;
 use self::timeline_subtitle::SubtitleDialog;
-use self::timeline_tracks::TimelineDrop;
+use self::timeline_tracks::{KeyframeDrop, TimelineDrop};
 use self::widgets::*;
 
 #[derive(Clone, Debug, Default)]
@@ -451,6 +451,8 @@ pub struct PlayerApp {
     timeline_drop: Option<TimelineDrop>,
     /// 从素材库往轨道上拖时算出来的落点；`None` 表示没在拖素材。
     asset_drop: Option<AssetDrop>,
+    /// 拖关键帧标记时算出来的落点；`None` 表示没在拖标记。
+    keyframe_drop: Option<KeyframeDrop>,
     /// 时间线片段上的右键菜单；`None` 表示没展开。
     timeline_menu: Option<TimelineMenu>,
     /// 工程模式预览正在放的那个素材文件。同一个文件只 seek，换文件才重新加载。

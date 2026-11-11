@@ -31,6 +31,22 @@ pub(crate) struct TimelineGhost {
     pub(crate) name: SharedString,
 }
 
+/// 拖动片段上的关键帧标记。一根标记代表「片段内这个时刻的所有属性」，
+/// 所以拖的是整组点，不是某条曲线上的单个点。
+pub(crate) struct KeyframeDrag {
+    pub(crate) clip: Id,
+    /// 抓取时这个点在片段内的相对时间。
+    pub(crate) from: Tick,
+}
+
+/// 拖动关键帧时算出来的落点：片段内相对时间，已经夹进片段。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct KeyframeDrop {
+    pub(crate) clip: Id,
+    pub(crate) from: Tick,
+    pub(crate) to: Tick,
+}
+
 impl Render for TimelineGhost {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()

@@ -288,6 +288,27 @@ impl Keyframes {
             .unwrap_or(property.default_value())
     }
 
+    /// 把 `from` 时刻的点整体挪到 `to`，取值不变。返回是否真的动过。
+    ///
+    /// 时间线上一根标记代表「这个时刻的所有属性」，所以挪的时候要把所有曲线上的点
+    /// 一起挪走：只挪一条会让同一个标记下面的曲线错位，看上去就像动画自己变了。
+    /// 目标时刻已经有点时后写的覆盖，与 [`Animation::insert`] 的语义一致。
+    pub fn move_marks(&mut self, from: Tick, to: Tick) -> bool {
+        if from == to {
+            return false;
+        }
+        let mut moved = false;
+        for curve in &mut self.curves {
+            let Some(index) = curve.keys.iter().position(|key| key.at == from) else {
+                continue;
+            };
+            let value = curve.keys.remove(index).value;
+            curve.insert(to, value);
+            moved = true;
+        }
+        moved
+    }
+
     /// 所有曲线里出现过的时刻（点上画的菱形用），升序去重。
     pub fn marks(&self) -> Vec<Tick> {
         let mut marks: Vec<Tick> = self
@@ -497,6 +518,29 @@ mod tests {
         keys.ensure(Property::Scale).clear();
         assert!(keys.is_empty());
         assert_eq!(keys.value(Property::Scale, s(1.0)), 1.0);
+    }
+
+    #[test]
+    fn 挪标记时整组点一起走() {
+        let mut keys = Keyframes::default();
+        keys.ensure(Property::Scale).insert(s(1.0), 2.0);
+        keys.ensure(Property::Opacity).insert(s(1.0), 0.0);
+        keys.ensure(Property::Opacity).insert(s(2.0), 1.0);
+
+        assert!(keys.move_marks(s(1.0), s(3.0)));
+        assert_eq!(keys.marks(), vec![s(2.0), s(3.0)]);
+        assert_eq!(keys.value(Property::Scale, s(3.0)), 2.0);
+        assert_eq!(keys.value(Property::Opacity, s(3.0)), 0.0);
+
+        // 目标时刻已有点：后写的覆盖，同一个时刻只留一个。
+        assert!(keys.move_marks(s(3.0), s(2.0)));
+        assert_eq!(keys.marks(), vec![s(2.0)]);
+        assert_eq!(keys.curve(Property::Scale).unwrap().keys[0].value, 2.0);
+        assert_eq!(keys.curve(Property::Opacity).unwrap().keys[0].value, 0.0);
+
+        // 没有点的时刻、以及原地挪，都返回 false。
+        assert!(!keys.move_marks(s(0.5), s(1.5)));
+        assert!(!keys.move_marks(s(2.0), s(2.0)));
     }
 
     #[test]

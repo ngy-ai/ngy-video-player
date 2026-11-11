@@ -99,6 +99,7 @@ impl PlayerApp {
             timeline_snap: false,
             timeline_drop: None,
             asset_drop: None,
+            keyframe_drop: None,
             timeline_menu: None,
             timeline_preview: None,
             timeline_playing: false,
