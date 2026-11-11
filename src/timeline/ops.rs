@@ -13,9 +13,16 @@
 //! 素材长度不在这里校验：片段只知道 `AssetId`，素材时长要等 M1-T07 登记进工程。
 //! 这里只保证「素材入点不为负、时长为正、同轨不重叠」这三件模型能自己判断的事。
 
-use crate::timeline::{AssetId, ClipItem, ColorGrade, Id, Sequence, SubtitleItem, Tick, TrackKind};
+mod params;
+mod placement;
+mod subtitle;
+
+use crate::timeline::{AssetId, ClipItem, ColorGrade, Id, Sequence, SubtitleItem, Tick};
+use params::{set_color, set_hold, set_speed};
+use placement::{clear_range, insert, insert_at, overwrite, shift_open};
 use std::collections::HashSet;
 use std::fmt;
+use subtitle::{add_subtitle, remove_subtitle, set_subtitle};
 
 /// 新建片段需要的素材信息。素材入出点都在素材自己的时间轴上。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -234,7 +241,9 @@ pub fn split_at(sequence: &Sequence, at: Tick) -> Result<Option<(Sequence, usize
 /// 找到片段所在的（轨道下标，片段下标）。
 ///
 /// 锁定轨道的片段在这里就拒绝：所有按片段定位的操作都走这个入口，锁定一处生效一片。
-fn locate(sequence: &Sequence, clip: Id) -> Result<(usize, usize), EditError> {
+///
+/// 子模块（参数、字幕）也要用它，所以是 `pub(super)` 而不是私有。
+pub(super) fn locate(sequence: &Sequence, clip: Id) -> Result<(usize, usize), EditError> {
     let (track_index, clip_index) = sequence
         .tracks
         .iter()
@@ -249,165 +258,6 @@ fn locate(sequence: &Sequence, clip: Id) -> Result<(usize, usize), EditError> {
         return Err(EditError::TrackLocked(sequence.tracks[track_index].id));
     }
     Ok((track_index, clip_index))
-}
-
-fn insert(
-    sequence: &mut Sequence,
-    track_id: Id,
-    at: Tick,
-    spec: &ClipSpec,
-) -> Result<(), EditError> {
-    let (track_index, duration) = prepare_placement(sequence, track_id, at, spec)?;
-    if sequence.tracks[track_index]
-        .overlap(at, at + duration, None)
-        .is_some()
-    {
-        return Err(EditError::Overlap(track_id));
-    }
-    place(sequence, track_index, at, spec);
-    Ok(())
-}
-
-/// 插入：在落点把后面的内容整体让开，再放进去。
-fn insert_at(
-    sequence: &mut Sequence,
-    track_id: Id,
-    at: Tick,
-    spec: &ClipSpec,
-) -> Result<(), EditError> {
-    let (track_index, duration) = prepare_placement(sequence, track_id, at, spec)?;
-    shift_open(sequence, track_index, at, duration);
-    place(sequence, track_index, at, spec);
-    Ok(())
-}
-
-/// 覆盖：先清掉落点区间里的内容，再放进去。不产生重叠片段。
-fn overwrite(
-    sequence: &mut Sequence,
-    track_id: Id,
-    at: Tick,
-    spec: &ClipSpec,
-) -> Result<(), EditError> {
-    let (track_index, duration) = prepare_placement(sequence, track_id, at, spec)?;
-    clear_range(sequence, track_index, at, at + duration);
-    place(sequence, track_index, at, spec);
-    Ok(())
-}
-
-/// 放素材前的公共校验：时长与落点合法、轨道存在且没锁。返回轨道下标与素材时长。
-fn prepare_placement(
-    sequence: &Sequence,
-    track_id: Id,
-    at: Tick,
-    spec: &ClipSpec,
-) -> Result<(usize, Tick), EditError> {
-    if spec.source_out <= spec.source_in {
-        return Err(EditError::EmptyClip);
-    }
-    if at.is_negative() {
-        return Err(EditError::NegativeTime);
-    }
-    let track_index = sequence
-        .track_index(track_id)
-        .ok_or(EditError::UnknownTrack(track_id))?;
-    if sequence.tracks[track_index].locked {
-        return Err(EditError::TrackLocked(track_id));
-    }
-    Ok((track_index, spec.source_out - spec.source_in))
-}
-
-/// 把新片段放到 `at`。调用方负责已经腾好位置与校验过轨道。
-fn place(sequence: &mut Sequence, track_index: usize, at: Tick, spec: &ClipSpec) {
-    let id = sequence.alloc_id();
-    let clip = ClipItem::new(id, spec.asset_id, spec.source_in, spec.source_out, at)
-        .with_name(spec.name.clone());
-    let track = &mut sequence.tracks[track_index];
-    track.clips.push(clip);
-    track.sort_clips();
-}
-
-/// 在 `at` 处让开 `duration`：跨过落点的片段先切开，再把 `at` 及之后的整体右移。
-///
-/// 切开这一步是必要的：只右移的话，跨过落点的片段会被新素材压住一截，
-/// 而片段是原子对象，没法「只挪后半段」。
-fn shift_open(sequence: &mut Sequence, track_index: usize, at: Tick, duration: Tick) {
-    let splits: Vec<Id> = sequence.tracks[track_index]
-        .clips
-        .iter()
-        .filter(|clip| clip.start < at && at < clip.end())
-        .map(|clip| clip.id)
-        .collect();
-    for id in splits {
-        // `split` 会再查一次锁定；这里已经查过，失败只能是并发改序列，忽略即可。
-        let _ = split(sequence, id, at);
-    }
-    for clip in &mut sequence.tracks[track_index].clips {
-        if clip.start >= at {
-            clip.start = clip.start + duration;
-        }
-    }
-    sequence.tracks[track_index].sort_clips();
-}
-
-/// 让出 `[at, end)`：完全被盖住的删掉，压住两端的收边或切开。
-///
-/// 四种情形分开处理，别指望「先删后补」能省事——被切开的那一段要拿新 id，
-/// 素材入点也得跟着落点走，补不回来。
-fn clear_range(sequence: &mut Sequence, track_index: usize, at: Tick, end: Tick) {
-    let originals: Vec<ClipItem> = sequence.tracks[track_index].clips.clone();
-    let mut remove: Vec<Id> = Vec::new();
-    let mut trim: Vec<(Id, Tick)> = Vec::new();
-    let mut shift: Vec<(Id, Tick, Tick)> = Vec::new();
-    let mut created: Vec<ClipItem> = Vec::new();
-
-    for clip in &originals {
-        let (start, stop) = (clip.start, clip.end());
-        if stop <= at || start >= end {
-            continue;
-        }
-        match (start < at, stop > end) {
-            // 整段都在区间里：删掉。
-            (false, false) => remove.push(clip.id),
-            // 只被压住右半：出点收到 `at`，素材出点跟着走。
-            (true, false) => trim.push((clip.id, clip.source_in + (at - start))),
-            // 只被压住左半：起点拉到 `end`，素材入点跟着走。
-            (false, true) => shift.push((clip.id, end, clip.source_in + (end - start))),
-            // 区间正压在中间：左边留下，右边切一段新的出来。
-            (true, true) => {
-                trim.push((clip.id, clip.source_in + (at - start)));
-                created.push(
-                    ClipItem::new(
-                        sequence.alloc_id(),
-                        clip.asset_id,
-                        clip.source_in + (end - start),
-                        clip.source_out,
-                        end,
-                    )
-                    .with_name(clip.name.clone()),
-                );
-            }
-        }
-    }
-
-    let track = &mut sequence.tracks[track_index];
-    for (id, source_out) in trim {
-        if let Some(clip) = track.clips.iter_mut().find(|clip| clip.id == id) {
-            clip.source_out = source_out;
-        }
-    }
-    for (id, start, source_in) in shift {
-        if let Some(clip) = track.clips.iter_mut().find(|clip| clip.id == id) {
-            clip.start = start;
-            clip.source_in = source_in;
-        }
-    }
-    let gone: HashSet<Id> = remove.iter().copied().collect();
-    track.clips.retain(|clip| !gone.contains(&clip.id));
-    track.transitions.retain(|transition| {
-        !gone.contains(&transition.before) && !gone.contains(&transition.after)
-    });
-    track.clips.extend(created);
-    track.sort_clips();
 }
 
 fn move_clip(
@@ -553,7 +403,7 @@ fn trim_end(sequence: &mut Sequence, clip_id: Id, to: Tick) -> Result<(), EditEr
     Ok(())
 }
 
-fn split(sequence: &mut Sequence, clip_id: Id, at: Tick) -> Result<(), EditError> {
+pub(super) fn split(sequence: &mut Sequence, clip_id: Id, at: Tick) -> Result<(), EditError> {
     let (track_index, clip_index) = locate(sequence, clip_id)?;
     let id = sequence.alloc_id();
     let track = &mut sequence.tracks[track_index];
@@ -710,35 +560,6 @@ fn roll(sequence: &mut Sequence, clip_id: Id, by: Tick) -> Result<(), EditError>
     Ok(())
 }
 
-/// 改倍率。夹取与波纹让位都在 [`crate::timeline::set_speed`] 里，这里只做前置校验。
-///
-/// 值没变不算错误（界面上点同一个档位很常见），返回 `Ok` 但序列原样。
-fn set_speed(sequence: &mut Sequence, clip_id: Id, speed: f32) -> Result<(), EditError> {
-    if !speed.is_finite() {
-        return Err(EditError::BadRate);
-    }
-    locate(sequence, clip_id)?;
-    crate::timeline::set_speed(sequence, clip_id, speed);
-    Ok(())
-}
-
-/// 加 / 取消片尾定格。负数定格没有意义：取消要显式给 `Tick::ZERO`。
-fn set_hold(sequence: &mut Sequence, clip_id: Id, hold: Tick) -> Result<(), EditError> {
-    if hold.is_negative() {
-        return Err(EditError::BadRate);
-    }
-    locate(sequence, clip_id)?;
-    crate::timeline::set_hold(sequence, clip_id, hold);
-    Ok(())
-}
-
-/// 改调色。值没变时序列与原样相等，界面据此不落撤销。
-fn set_color(sequence: &mut Sequence, clip_id: Id, color: &ColorGrade) -> Result<(), EditError> {
-    let (track, index) = locate(sequence, clip_id)?;
-    sequence.tracks[track].clips[index].color = color.clone();
-    Ok(())
-}
-
 /// 删掉整条轨道。片段与转场都挂在轨道上，一起走，不留悬空引用。
 ///
 /// 允许删到一条轨道都不剩：序列空着是合法状态，界面有「这条序列还没有轨道」的提示，
@@ -751,99 +572,6 @@ fn remove_track(sequence: &mut Sequence, track_id: Id) -> Result<(), EditError> 
         return Err(EditError::TrackLocked(track_id));
     }
     sequence.tracks.remove(index);
-    Ok(())
-}
-
-/// 字幕编辑的轨道定位：轨道存在、是字幕轨、没锁，三件事一次查完。
-fn subtitle_lane(sequence: &Sequence, track: Id) -> Result<usize, EditError> {
-    let index = sequence
-        .track_index(track)
-        .ok_or(EditError::UnknownTrack(track))?;
-    let lane = &sequence.tracks[index];
-    if lane.locked {
-        return Err(EditError::TrackLocked(track));
-    }
-    if lane.kind != TrackKind::Subtitle {
-        return Err(EditError::WrongTrackKind);
-    }
-    Ok(index)
-}
-
-/// 字幕的时间区间要合法，且同一轨上不与别的条目重叠（首尾相接不算重叠）。
-fn check_subtitle(
-    sequence: &Sequence,
-    index: usize,
-    item: &SubtitleItem,
-    except: Option<Id>,
-) -> Result<(), EditError> {
-    if item.start.is_negative() {
-        return Err(EditError::NegativeTime);
-    }
-    if item.end <= item.start {
-        return Err(EditError::EmptyClip);
-    }
-    let lane = &sequence.tracks[index];
-    let overlap = lane
-        .subtitles
-        .iter()
-        .any(|other| Some(other.id) != except && other.start < item.end && item.start < other.end);
-    if overlap {
-        return Err(EditError::Overlap(lane.id));
-    }
-    Ok(())
-}
-
-fn add_subtitle(sequence: &mut Sequence, track: Id, item: &SubtitleItem) -> Result<(), EditError> {
-    let index = subtitle_lane(sequence, track)?;
-    if sequence.id_is_used(item.id) {
-        return Err(EditError::DuplicateId(item.id));
-    }
-    // 负起点是数据错误，不该被 `normalize` 悄悄夹成 0；其余坏值（空区间、
-    // 空文本、字号越界）规整后落盘。
-    if item.start.is_negative() {
-        return Err(EditError::NegativeTime);
-    }
-    let mut item = item.clone();
-    item.normalize();
-    check_subtitle(sequence, index, &item, None)?;
-    sequence.tracks[index].subtitles.push(item);
-    sequence.tracks[index].sort_subtitles();
-    // 直接给 id 的调用方（导入、测试）未必动过计数器。
-    sequence.repair_next_id();
-    Ok(())
-}
-
-fn set_subtitle(sequence: &mut Sequence, id: Id, item: &SubtitleItem) -> Result<(), EditError> {
-    let track = sequence
-        .subtitle_track(id)
-        .ok_or(EditError::UnknownSubtitle(id))?;
-    let index = subtitle_lane(sequence, track)?;
-    if item.start.is_negative() {
-        return Err(EditError::NegativeTime);
-    }
-    let mut item = item.clone();
-    item.id = id;
-    item.normalize();
-    check_subtitle(sequence, index, &item, Some(id))?;
-    let lane = &mut sequence.tracks[index];
-    let position = lane
-        .subtitles
-        .iter()
-        .position(|entry| entry.id == id)
-        .ok_or(EditError::UnknownSubtitle(id))?;
-    lane.subtitles[position] = item;
-    lane.sort_subtitles();
-    Ok(())
-}
-
-fn remove_subtitle(sequence: &mut Sequence, id: Id) -> Result<(), EditError> {
-    let track = sequence
-        .subtitle_track(id)
-        .ok_or(EditError::UnknownSubtitle(id))?;
-    let index = subtitle_lane(sequence, track)?;
-    sequence.tracks[index]
-        .subtitles
-        .retain(|entry| entry.id != id);
     Ok(())
 }
 
