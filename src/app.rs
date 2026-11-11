@@ -34,10 +34,10 @@ use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, AnyWindowHandle, App, AppContext, Bounds, ClickEvent, Context, Corners,
     CursorStyle, ElementId, Entity, ExternalPaths, FocusHandle, Hsla, IntoElement, KeyBinding,
-    KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, Render, RenderImage, ScrollDelta, ScrollEvent, SharedString, Size, Styled, WeakEntity,
-    Window, WindowBounds, WindowHandle, WindowKind, WindowOptions, WindowVisibility, actions,
-    canvas, div, img, point, px, size,
+    KeyDownEvent, KeyUpEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    Pixels, Point, Render, RenderImage, ScrollDelta, ScrollEvent, SharedString, Size, Styled,
+    WeakEntity, Window, WindowBounds, WindowHandle, WindowKind, WindowOptions, WindowVisibility,
+    actions, canvas, div, img, point, px, size,
 };
 use std::{
     cell::Cell,
@@ -488,6 +488,8 @@ pub struct PlayerApp {
     composite_depth_warned: bool,
     /// J/K/L 的当前档位：0 = 没在变速播放，正负是方向，绝对值是 1 / 2 / 4 倍。
     timeline_shuttle: f64,
+    /// `K` 是不是还按着：按着时 `J` / `L` 是逐帧，不按就是变速播放。
+    shuttle_key_held: bool,
     /// 「跳到时间码」面板；`None` 表示没打开。与其余模态互斥。
     timecode_dialog: Option<TimecodeDialog>,
     /// 导出面板；`None` 表示没打开。

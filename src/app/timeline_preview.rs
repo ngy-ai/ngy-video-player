@@ -220,6 +220,12 @@ impl PlayerApp {
     }
 
     fn shuttle(&mut self, direction: f64, cx: &mut Context<Self>) {
+        // 按住 `K` 再按 `J` / `L`：逐帧（`K` 已经把播放停住，这里只挪一帧）。
+        // 与常见剪辑器一致，松手之前每按一下就一帧。
+        if self.shuttle_key_held {
+            self.step_timeline_frame(direction as i32, cx);
+            return;
+        }
         if !self.timeline_playing {
             // 没在播：J 从 -1x 起，L 从 1x 起。
             self.timeline_shuttle = direction;

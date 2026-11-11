@@ -114,6 +114,7 @@ impl PlayerApp {
             composite_failed: false,
             composite_depth_warned: false,
             timeline_shuttle: 0.0,
+            shuttle_key_held: false,
             timecode_dialog: None,
             export_dialog: None,
             subtitle_dialog: None,

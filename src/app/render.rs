@@ -271,12 +271,22 @@ impl Render for PlayerApp {
                     cx.stop_propagation();
                     return;
                 }
+                // `K` 按住时 `J` / `L` 是逐帧（剪辑器的老规矩）：键位表只能给出
+                // 「按下」这一下，按住状态得自己记，松手在 `on_key_up` 里清。
+                if event.keystroke.key == "k" && !event.keystroke.modifiers.modified() {
+                    this.shuttle_key_held = true;
+                }
                 // `?` 不走键位表：GPUI 的键位串匹配的是**键帽字符**（`/` 而不是
                 // `?`），而且不同键盘布局上 `?` 落在哪个键也不一样。直接看实际
                 // 打出来的字符，`shift-/`、法语 AZERTY、德语 QWERTZ 都能命中。
                 if event.keystroke.key_char.as_deref() == Some("?") {
                     this.toggle_settings(SettingsTab::Shortcuts);
                     cx.notify();
+                }
+            }))
+            .on_key_up(cx.listener(|this, event: &KeyUpEvent, _window, _cx| {
+                if event.keystroke.key == "k" && !event.keystroke.modifiers.modified() {
+                    this.shuttle_key_held = false;
                 }
             }))
             .on_mouse_down(
