@@ -122,7 +122,11 @@ impl From<String> for Property {
 }
 
 /// 两个关键帧之间怎么走。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Bezier` 是 CSS 那套 `cubic-bezier(x1, y1, x2, y2)` 的**缓动函数**：两条控制点都在
+/// 单位方格内，`x` 是时间进度、`y` 是取值进度。控制点由界面上的曲线编辑器拖，
+/// 预设见 [`Interpolation::PRESETS`]。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Interpolation {
     /// 匀速：推近时速度是恒定的。
@@ -130,38 +134,154 @@ pub enum Interpolation {
     Linear,
     /// 两头慢中间快：起手与收尾都软一点，看起来更自然。
     EaseInOut,
+    /// 自定义三次贝塞尔。`x1/x2` 会被夹到 0–1（否则时间可能倒流），`y` 留在 0–1。
+    Bezier { x1: f32, y1: f32, x2: f32, y2: f32 },
 }
 
+/// 曲线编辑器的预设：点一下就把控制点摆成这样。
+///
+/// 前两个是模型里原有的两档，后面三个是新的贝塞尔，编辑器只认这张表。
+pub const EASING_PRESETS: [(&str, Interpolation); 5] = [
+    ("线性", Interpolation::Linear),
+    (
+        "缓入缓出",
+        Interpolation::Bezier {
+            x1: 0.42,
+            y1: 0.0,
+            x2: 0.58,
+            y2: 1.0,
+        },
+    ),
+    (
+        "缓入",
+        Interpolation::Bezier {
+            x1: 0.42,
+            y1: 0.0,
+            x2: 1.0,
+            y2: 1.0,
+        },
+    ),
+    (
+        "缓出",
+        Interpolation::Bezier {
+            x1: 0.0,
+            y1: 0.0,
+            x2: 0.58,
+            y2: 1.0,
+        },
+    ),
+    (
+        "强缓动",
+        Interpolation::Bezier {
+            x1: 0.7,
+            y1: 0.0,
+            x2: 0.3,
+            y2: 1.0,
+        },
+    ),
+];
+
 impl Interpolation {
+    /// 面板上并排摆的那几个（不含自定义，自定义是编辑器里拖出来的）。
     pub const ALL: [Interpolation; 2] = [Interpolation::Linear, Interpolation::EaseInOut];
 
     pub fn label(self) -> &'static str {
         match self {
             Interpolation::Linear => "线性",
             Interpolation::EaseInOut => "缓动",
+            Interpolation::Bezier { .. } => "曲线",
+        }
+    }
+
+    pub fn is_bezier(self) -> bool {
+        matches!(self, Interpolation::Bezier { .. })
+    }
+
+    /// 贝塞尔的两个控制点；非贝塞尔返回默认的中点控制点（让编辑器有个起点）。
+    pub fn controls(self) -> (f32, f32, f32, f32) {
+        match self {
+            Interpolation::Bezier { x1, y1, x2, y2 } => (x1, y1, x2, y2),
+            Interpolation::EaseInOut => (0.42, 0.0, 0.58, 1.0),
+            Interpolation::Linear => (1.0 / 3.0, 1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0),
+        }
+    }
+
+    /// 拖控制点：先夹进合法范围（`x` 必须单调，`y` 不许跳出 0–1，免得画面越界）。
+    pub fn with_controls(x1: f32, y1: f32, x2: f32, y2: f32) -> Self {
+        let x1 = x1.clamp(0.0, 1.0);
+        let x2 = x2.clamp(0.0, 1.0);
+        Interpolation::Bezier {
+            x1,
+            y1: y1.clamp(0.0, 1.0),
+            x2,
+            y2: y2.clamp(0.0, 1.0),
         }
     }
 
     /// 把 0–1 的进度曲成实际比例。
-    fn ease(self, t: f32) -> f32 {
+    pub fn ease(self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
         match self {
             Interpolation::Linear => t,
             // smoothstep：两端导数为 0，不会有「突然起步」的顿挫。
             Interpolation::EaseInOut => t * t * (3.0 - 2.0 * t),
+            Interpolation::Bezier { x1, y1, x2, y2 } => bezier_y(t, x1, y1, x2, y2),
         }
     }
 }
 
-/// 一个关键帧：片段内相对时间 + 取值。
+/// 三次贝塞尔的 `y` 轴取值：给定时间进度 `x`，先解出参数 `t`，再算 `y(t)`。
+///
+/// 用二分而不是牛顿：这个函数每帧每个属性都要调，二分 20 次在这个量级上足够准
+/// （误差 < 1e-4），而且不会因为控制点贴着边界而发散。
+fn bezier_y(x: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    if x >= 1.0 {
+        return 1.0;
+    }
+    // 单位方格上的三次贝塞尔：P0=(0,0)、P3=(1,1)。
+    let curve = |a: f32, b: f32, t: f32| {
+        let u = 1.0 - t;
+        3.0 * u * u * t * a + 3.0 * u * t * t * b + t * t * t
+    };
+    let (mut low, mut high) = (0.0f32, 1.0f32);
+    for _ in 0..20 {
+        let middle = (low + high) * 0.5;
+        if curve(x1, x2, middle) < x {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    curve(y1, y2, (low + high) * 0.5)
+}
+
+/// 一个关键帧：片段内相对时间 + 取值，外加「从我这个点到下一个点怎么走」。
+///
+/// `easing` 为 `None` 时用整条曲线的 `interpolation`——老工程里只有曲线级插值，
+/// 这样读出来行为不变；新拖出来的点会带上自己的缓动，导出的表达式也按点走。
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Keyframe {
     pub at: Tick,
     pub value: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub easing: Option<Interpolation>,
 }
 
 impl Keyframe {
     pub fn new(at: Tick, value: f32) -> Self {
-        Self { at, value }
+        Self {
+            at,
+            value,
+            easing: None,
+        }
+    }
+
+    /// 这一段实际用的缓动。
+    pub fn easing_or(&self, fallback: Interpolation) -> Interpolation {
+        self.easing.unwrap_or(fallback)
     }
 }
 
@@ -217,7 +337,7 @@ impl Animation {
             return to.value;
         }
         let progress = (at - from.at).micros() as f32 / span as f32;
-        let eased = self.interpolation.ease(progress.clamp(0.0, 1.0));
+        let eased = from.easing_or(self.interpolation).ease(progress);
         from.value + (to.value - from.value) * eased
     }
 
@@ -358,22 +478,64 @@ fn expr(curve: &Animation, fps: f64) -> Option<String> {
         if span <= 0.0 {
             continue;
         }
-        let progress = format!("(({time}-{})/{:.6})", t(from.at), span);
-        let weight = match curve.interpolation {
-            Interpolation::Linear => progress.clone(),
-            Interpolation::EaseInOut => {
-                format!("(({p})*({p})*(3.0-2.0*({p})))", p = progress)
-            }
-        };
-        expr = format!(
-            "if(lt({time},{:.6}),{:.6}+({:.6})*{weight},{})",
-            t(to.at),
-            from.value,
-            to.value - from.value,
-            expr
-        );
+        let segment = segment_expr(&from, &to, span, curve.interpolation, &time);
+        expr = format!("if(lt({time},{:.6}),{segment},{expr})", t(to.at));
     }
     Some(expr)
+}
+
+/// 贝塞尔折线采样段数。
+///
+/// ffmpeg 的表达式里解不了三次方程（没有循环、没有求解器），所以把曲线切成若干段
+/// 直线。8 段在一段 1–2 秒的推近里肉眼看不出折角，误差远小于 1/255；预览走的是
+/// 真曲线（[`Interpolation::ease`]），两边取的是同一组采样值，不会各算一套。
+pub const BEZIER_STEPS: usize = 8;
+
+/// 一段（`from` → `to`）的取值表达式。
+fn segment_expr(
+    from: &Keyframe,
+    to: &Keyframe,
+    span: f64,
+    fallback: Interpolation,
+    time: &str,
+) -> String {
+    let easing = from.easing_or(fallback);
+    let delta = to.value - from.value;
+    let t = |tick: Tick| format!("{:.6}", tick.secs());
+    let base = t(from.at);
+    match easing {
+        Interpolation::Linear | Interpolation::EaseInOut => {
+            let progress = format!("(({time}-{base})/{span:.6})");
+            let weight = match easing {
+                Interpolation::Linear => progress,
+                // smoothstep，与 `Interpolation::ease` 同一条式子。
+                Interpolation::EaseInOut => {
+                    format!("(({p})*({p})*(3.0-2.0*({p})))", p = progress)
+                }
+                Interpolation::Bezier { .. } => unreachable!("外层已经分流"),
+            };
+            format!("{:.6}+({delta:.6})*{weight}", from.value)
+        }
+        Interpolation::Bezier { .. } => {
+            let steps = BEZIER_STEPS as f32;
+            let mut expr = format!("{:.6}", to.value);
+            for step in (0..BEZIER_STEPS).rev() {
+                let f0 = step as f32 / steps;
+                let f1 = (step + 1) as f32 / steps;
+                let v0 = from.value + delta * easing.ease(f0);
+                let v1 = from.value + delta * easing.ease(f1);
+                let start = from.at.secs() + span * f64::from(f0);
+                let width = span * f64::from(f1 - f0);
+                let weight = format!("(({time}-{start:.6})/{width:.6})");
+                expr = format!(
+                    "if(lt({time},{:.6}),{v0:.6}+({:.6})*{weight},{expr})",
+                    from.at.secs() + span * f64::from(f1),
+                    v1 - v0
+                );
+            }
+            expr
+        }
+    }
 }
 
 /// 缩放与位置合成一个 `zoompan`：它输出固定尺寸，正好接在 pad 之后。
@@ -452,167 +614,4 @@ pub fn fade_filters(keyframes: &Keyframes, duration: Tick) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::timeline::Rational;
-
-    fn s(n: f64) -> Tick {
-        Tick::from_micros((n * 1_000_000.0) as i64)
-    }
-
-    #[test]
-    fn 没有点时用默认值() {
-        let curve = Animation::new(Property::Scale);
-        assert_eq!(curve.value_at(s(1.0)), 1.0);
-        assert!(!curve.animated());
-    }
-
-    #[test]
-    fn 两个点之间线性插值两端钳制() {
-        let mut curve = Animation::new(Property::Scale);
-        curve.insert(s(0.0), 1.0);
-        curve.insert(s(2.0), 2.0);
-        assert_eq!(curve.value_at(s(0.0)), 1.0);
-        assert_eq!(curve.value_at(s(1.0)), 1.5);
-        assert_eq!(curve.value_at(s(2.0)), 2.0);
-        // 点外不再外推。
-        assert_eq!(curve.value_at(s(5.0)), 2.0);
-        assert_eq!(curve.value_at(s(-1.0)), 1.0);
-    }
-
-    #[test]
-    fn 缓动在中点相同两端更慢() {
-        let mut curve = Animation::new(Property::Scale);
-        curve.interpolation = Interpolation::EaseInOut;
-        curve.insert(s(0.0), 1.0);
-        curve.insert(s(2.0), 3.0);
-        // smoothstep 在 0.5 处也是 0.5，但在 0.25 处明显低于线性。
-        assert!((curve.value_at(s(1.0)) - 2.0).abs() < 1e-5);
-        assert!(curve.value_at(s(0.5)) < 1.5);
-    }
-
-    #[test]
-    fn 同一时刻只留一个点() {
-        let mut curve = Animation::new(Property::Scale);
-        assert!(curve.insert(s(1.0), 1.2));
-        assert!(!curve.insert(s(1.0), 1.8));
-        assert_eq!(curve.keys.len(), 1);
-        assert_eq!(curve.keys[0].value, 1.8);
-    }
-
-    #[test]
-    fn 取值被夹在属性的量程内() {
-        let mut curve = Animation::new(Property::Opacity);
-        curve.insert(s(0.0), 5.0);
-        assert_eq!(curve.keys[0].value, 1.0);
-        curve.insert(s(1.0), -3.0);
-        assert_eq!(curve.keys[1].value, 0.0);
-    }
-
-    #[test]
-    fn 删点后回到默认值() {
-        let mut keys = Keyframes::default();
-        keys.ensure(Property::Scale).insert(s(0.0), 1.0);
-        keys.ensure(Property::Scale).insert(s(2.0), 2.0);
-        assert!(keys.ensure(Property::Scale).remove_near(s(0.0), Tick::ZERO));
-        keys.ensure(Property::Scale).clear();
-        assert!(keys.is_empty());
-        assert_eq!(keys.value(Property::Scale, s(1.0)), 1.0);
-    }
-
-    #[test]
-    fn 挪标记时整组点一起走() {
-        let mut keys = Keyframes::default();
-        keys.ensure(Property::Scale).insert(s(1.0), 2.0);
-        keys.ensure(Property::Opacity).insert(s(1.0), 0.0);
-        keys.ensure(Property::Opacity).insert(s(2.0), 1.0);
-
-        assert!(keys.move_marks(s(1.0), s(3.0)));
-        assert_eq!(keys.marks(), vec![s(2.0), s(3.0)]);
-        assert_eq!(keys.value(Property::Scale, s(3.0)), 2.0);
-        assert_eq!(keys.value(Property::Opacity, s(3.0)), 0.0);
-
-        // 目标时刻已有点：后写的覆盖，同一个时刻只留一个。
-        assert!(keys.move_marks(s(3.0), s(2.0)));
-        assert_eq!(keys.marks(), vec![s(2.0)]);
-        assert_eq!(keys.curve(Property::Scale).unwrap().keys[0].value, 2.0);
-        assert_eq!(keys.curve(Property::Opacity).unwrap().keys[0].value, 0.0);
-
-        // 没有点的时刻、以及原地挪，都返回 false。
-        assert!(!keys.move_marks(s(0.5), s(1.5)));
-        assert!(!keys.move_marks(s(2.0), s(2.0)));
-    }
-
-    #[test]
-    fn 标记按时间升序去重() {
-        let mut keys = Keyframes::default();
-        keys.ensure(Property::Scale).insert(s(2.0), 2.0);
-        keys.ensure(Property::Scale).insert(s(0.0), 1.0);
-        keys.ensure(Property::Opacity).insert(s(0.0), 0.0);
-        assert_eq!(keys.marks(), vec![s(0.0), s(2.0)]);
-    }
-
-    #[test]
-    fn 缩放写成按帧号求值的表达式() {
-        let mut keys = Keyframes::default();
-        keys.ensure(Property::Scale).insert(s(0.0), 1.0);
-        keys.ensure(Property::Scale).insert(s(2.0), 2.0);
-
-        let mut sequence = Sequence::new(
-            "测试",
-            Rational::new(30, 1).expect("30 fps 合法"),
-            1920,
-            1080,
-        );
-        sequence.add_track(crate::timeline::TrackKind::Video);
-        let filter = motion_filter(&keys, &sequence);
-        assert!(filter.starts_with("zoompan="), "{filter}");
-        assert!(filter.contains("s=1920x1080"), "{filter}");
-        assert!(filter.contains("fps=30/1"), "{filter}");
-        assert!(
-            filter.contains("(on/30.000000)"),
-            "用帧号换算时间：{filter}"
-        );
-        assert!(filter.contains("if(lt("), "分段表达式：{filter}");
-    }
-
-    #[test]
-    fn 没有缩放或位置时不出动画滤镜() {
-        let mut sequence =
-            Sequence::new("测试", Rational::new(30, 1).expect("30 fps 合法"), 640, 360);
-        sequence.add_track(crate::timeline::TrackKind::Video);
-        let keys = Keyframes::default();
-        assert_eq!(motion_filter(&keys, &sequence), "");
-
-        // 只有不透明度时也不该插 zoompan。
-        let mut keys = Keyframes::default();
-        keys.ensure(Property::Opacity).insert(s(0.0), 0.0);
-        keys.ensure(Property::Opacity).insert(s(1.0), 1.0);
-        assert_eq!(motion_filter(&keys, &sequence), "");
-    }
-
-    #[test]
-    fn 不透明度写成淡入淡出() {
-        let mut keys = Keyframes::default();
-        keys.ensure(Property::Opacity).insert(s(0.5), 0.0);
-        keys.ensure(Property::Opacity).insert(s(1.5), 1.0);
-        let filters = fade_filters(&keys, s(3.0));
-        assert_eq!(
-            filters,
-            vec!["fade=t=in:st=0.500000:d=1.000000".to_string()]
-        );
-
-        // 中间值 fade 表达不了：宁可不做。
-        let mut keys = Keyframes::default();
-        keys.ensure(Property::Opacity).insert(s(0.0), 0.3);
-        keys.ensure(Property::Opacity).insert(s(1.0), 0.8);
-        assert!(fade_filters(&keys, s(3.0)).is_empty());
-    }
-
-    #[test]
-    fn 认不出来的属性名落进未知() {
-        let property: Property = "hue".to_string().into();
-        assert_eq!(property, Property::Unknown);
-        assert_eq!(String::from(Property::Scale), "scale");
-    }
-}
+mod tests;

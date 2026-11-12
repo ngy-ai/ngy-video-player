@@ -13,6 +13,8 @@ use crate::timeline::{Id, Interpolation, Property, Tick};
 pub(super) struct KeysMenu {
     clip: Id,
     position: Point<Pixels>,
+    /// 曲线编辑器正在画哪条属性（点面板上的小标签切换）。
+    pub(super) property: Property,
 }
 
 const PANEL_WIDTH: f32 = 320.0;
@@ -30,12 +32,16 @@ impl PlayerApp {
         if project.sequence().clip(clip).is_none() {
             return;
         }
-        self.timeline_menu = Some(TimelineMenu::Keys(KeysMenu { clip, position }));
+        self.timeline_menu = Some(TimelineMenu::Keys(KeysMenu {
+            clip,
+            position,
+            property: Property::Scale,
+        }));
         cx.notify();
     }
 
     /// 关键帧的改动统一收口：拷一份序列改，成功才落一步撤销。
-    fn edit_keys(
+    pub(super) fn edit_keys(
         &mut self,
         clip: Id,
         cx: &mut Context<Self>,
@@ -96,9 +102,10 @@ impl PlayerApp {
             .count();
         // 标题 + 时刻 + 4 个属性 + 有点的属性 + 插值 + 提示。
         let rows = 3 + Property::ALL.len() + curve_rows + 1;
+        // 曲线编辑器（标签 + 画布 + 预设）比一行高得多，按估算的高度让菜单自己翻边。
         let origin = super::timeline_menu::menu_origin(
             menu.position,
-            super::timeline_menu::menu_height(rows, 0),
+            super::timeline_menu::menu_height(rows, 0) + CURVE_BLOCK_HEIGHT,
             window,
         );
 
@@ -251,6 +258,11 @@ impl PlayerApp {
                         let item = sequence.clip_mut(clip_id)?;
                         for curve in &mut item.keys.curves {
                             curve.interpolation = option;
+                            // 曲线上逐点的自定义缓动也一起抹掉：选了「线性」却还有两段
+                            // 在按贝塞尔走，用户会觉得按钮没生效。
+                            for key in &mut curve.keys {
+                                key.easing = None;
+                            }
                         }
                         Some(format!("插值：{}", option.label()))
                     });
@@ -258,6 +270,9 @@ impl PlayerApp {
             ));
         }
         body = body.child(interpolation);
+
+        // 曲线编辑器：画当前属性的曲线、标时刻与取值、拖贝塞尔控制点。
+        body = body.child(self.render_curve_editor(clip_id, menu.property, offset, duration, cx));
 
         let footer = if locked {
             "轨道已锁定，先解锁再改".to_string()
@@ -322,3 +337,6 @@ impl PlayerApp {
 }
 
 const INTERPOLATION_CHIP_IDS: [&str; 2] = ["key-interp-linear", "key-interp-ease"];
+
+/// 曲线编辑器那块的大致高度：标签行 + 画布 + 预设行 + 间距。
+pub(super) const CURVE_BLOCK_HEIGHT: f32 = 244.0;

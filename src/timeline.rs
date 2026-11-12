@@ -48,8 +48,8 @@ pub use export::{
     plan_sequence_with,
 };
 pub use keyframe::{
-    Animation, Interpolation, Keyframe, Keyframes, Property, fade_filters as keyframe_fades,
-    motion_filter as keyframe_motion,
+    Animation, EASING_PRESETS, Interpolation, Keyframe, Keyframes, Property,
+    fade_filters as keyframe_fades, motion_filter as keyframe_motion,
 };
 pub use media::{AssetState, ColorTags, MediaInfo, MediaStamp};
 pub use model::{

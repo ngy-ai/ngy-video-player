@@ -159,6 +159,7 @@ mod source_edit;
 mod tests;
 mod timecode_jump;
 mod timeline_color;
+mod timeline_curve;
 mod timeline_effects;
 mod timeline_header;
 mod timeline_keys;
@@ -400,6 +401,12 @@ pub struct PlayerApp {
     trim_token: u64,
     /// 时间线片段上的右键菜单；`None` 表示没展开。
     timeline_menu: Option<TimelineMenu>,
+    /// 曲线编辑器里正在拖的贝塞尔手柄落点（松手才写回，拖动过程只画预览）。
+    curve_drop: Option<timeline_curve::CurveDrop>,
+    /// 曲线编辑器里正拖着的框选范围。
+    curve_select: Option<timeline_curve::CurveSelect>,
+    /// 复制出来的关键帧（粘到别的属性 / 片段上）。
+    key_clipboard: Option<Vec<crate::timeline::Keyframe>>,
     /// 工程模式预览正在放的那个素材文件。同一个文件只 seek，换文件才重新加载。
     timeline_preview: Option<PathBuf>,
     /// 预览是不是在连续播放（播放头自己会走）。

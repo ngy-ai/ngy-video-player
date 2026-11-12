@@ -73,6 +73,8 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  keys（动作 → 键位串，一处集中）、
                  timeline_effects（片段效果栈面板：加 / 开关 / 换档 / 调序 / 删）、
                  timeline_keys（片段关键帧面板：在播放头处记录与删除）、
+                 timeline_curve（曲线编辑器：网格与刻度、折线、贝塞尔手柄拖动、
+                   框选删点、复制 / 粘贴曲线）、
                  timeline_subtitle（字幕编辑模态面板、字幕块右键菜单与预览入口）、
                  sequence_manager（多序列管理面板：新建 / 切换 / 改名 / 删除与切换复位）、
                  timecode_jump（跳到时间码：Ctrl/⌘+G 打开、打开即聚焦、超长夹到结尾）、
@@ -151,6 +153,7 @@ src/timeline/targets.rs  轨道目标：素材的音 / 视频分别落到哪条�
 src/timeline/transition.rs  转场编辑：两侧余量、加 / 改 / 去，时长按余量预钳（导出侧再兜底）
 src/timeline/effect.rs  片段效果栈：去隔行 / 降噪 / 锐化 / 防抖 / 插帧 / 水印的滤镜与增删改
 src/timeline/keyframe.rs  片段关键帧：缩放 / 位置 / 不透明度的曲线、求值与 ffmpeg 表达式
+                 （缓动含自定义贝塞尔；导出侧按 8 段折线采样，单测在 `keyframe/tests.rs`）
 src/timeline/color.rs  片段调色：亮度 / 对比度 / 饱和度 / 色温与 3D LUT 的滤镜映射
 src/timeline/subtitle.rs  字幕条目与样式、预览取字；`subtitle/ass.rs` 生成交给 libass 的 ASS
 src/timeline/otio.rs  OpenTimelineIO 交换：export（序列 → JSON）、import（JSON → 中间结构）

@@ -4,6 +4,12 @@
 
 ## 一句话状态
 
+**M10-T10（关键帧曲线编辑器）做完了**：模型加了 `Interpolation::Bezier{x1,y1,x2,y2}`
+与逐点的 `Keyframe::easing`（`None` 回落曲线级，老工程不变），导出表达式按 8 段折线采样；
+界面是「关键帧」面板下半截的画布：网格 + 时刻 / 取值刻度、折线、可点菱形、两颗可拖的
+贝塞尔手柄、五个缓动预设、复制 / 粘贴曲线、拖框删点。单测 24 条（keyframe 20 + curve 4）。
+界面交互没在真窗口里点过。
+
 **M10-T02（GPU 合成后端）阻塞**，只落了接口层：`player/compositor/backend.rs` 抽出
 `Backend::{Cpu, Gpu}` + `detect`（`NGY_COMPOSITE_BACKEND=cpu|gpu`），要 `gpu` 时退回 CPU
 并说明原因；决策与理由写进 `docs/adr/0010`。**没标完成**：验收要在独显 + 核显上逐帧比对
