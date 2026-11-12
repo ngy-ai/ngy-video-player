@@ -422,6 +422,24 @@ fn 素材缺失在生成计划时就报错() {
 }
 
 #[test]
+fn 代理素材拒绝导出() {
+    // 工程里挂的是 `*.proxy.mp4`：预览拿它凑合没问题，导出会得到一份低码率成片，
+    // 所以在生成计划这一步就拒绝，并让用户换回原片。
+    let scratch = Scratch::new("proxy-source");
+    let (mut project, _) = project_with(&scratch, &[(s(0), s(2), Tick::ZERO)]);
+    let proxy = scratch.dir.join("a.proxy.mp4");
+    std::fs::write(&proxy, b"x").unwrap();
+    project.assets[0].path = PathBuf::from("a.proxy.mp4");
+    project.assets[0].resolved = proxy;
+    project.assets[0].missing = false;
+
+    match plan_sequence(&project).unwrap_err() {
+        ExportError::ProxySource(name) => assert_eq!(name, "a.proxy.mp4"),
+        other => panic!("应当拒绝代理素材，实际是 {other:?}"),
+    }
+}
+
+#[test]
 fn 片段引用了不存在的素材时报错() {
     let mut project = Project::new();
     let track = project.sequence_mut().tracks[0].id;
