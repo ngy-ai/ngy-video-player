@@ -43,8 +43,12 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  session（初始化/事件循环）、playback、window（迷你窗/置顶）、
                  picture、playlist_ops、video_area、
                  timeline_view / timeline_tracks（工程模式时间线：布局、轨道行、片段与
-                   关键帧标记的拖动，`timeline_tracks/lane.rs` 是片段区各自画什么，
-                   `timeline_tracks/label.rs` 是轨道头与轨道右键面板的入口）、
+                   关键帧标记的拖动，`timeline_tracks/lane.rs` 是片段区各自画什么
+                   （含两端修剪抓手），`timeline_tracks/drop_ops.rs` 是各类落点与松手语义
+                   （含修剪的修饰键：Alt 波纹 / Shift 滚动 / Alt 滑移 / Ctrl 滑动），
+                   `timeline_tracks/label.rs` 是轨道头与轨道右键面板的入口；
+                   `timeline_view/` 下 `document` 是打开 / 新建 / 关闭、
+                   `history_ops` 是撤销重做、`zoom` 是播放头与缩放、`render` 是整块绘制）、
                  timeline_preview（工程模式预览：取帧与跟随，`timeline_preview/composite.rs`
                    是多轨合成接管，`playback.rs` 是 J/K/L 变速、播放时钟与 scrub，
                    `audio.rs` 是每条音频轨一路纯音频 mpv 实例的多路出声）、
@@ -201,8 +205,8 @@ src/timeline/view.rs    时间线视图状态：缩放（1 像素 = 1 帧 ~ 10 �
 
 现状（2026-11-12 用 `[System.IO.File]::ReadAllText($f).Split("`n").Count - 1` 数过；
 `(Get-Content $f).Count` 与 `Measure-Object -Line` 都少数几十到上百行，别再用它们）：
-**还超 700 行的有** `src/player/compositor.rs` 753、`src/app/timeline_view.rs` 751、
-`src/playlist.rs` 748、`src/app/overlays.rs` 705，下次动它们之前先拆。
+**还超 700 行的有** `src/player/compositor.rs` 753、`src/playlist.rs` 748、
+`src/app/overlays.rs` 705，下次动它们之前先拆。
 本轮已经拆过的：`app.rs`（870 → 入口 + `app/types.rs`）、
 `app/timeline_preview.rs`（751 → 入口 + `composite` / `playback` / `audio`）、
 `app/timeline_menu.rs`（802 → 入口 + `clip` / `ruler` / `panels`）、`timeline/preview.rs`

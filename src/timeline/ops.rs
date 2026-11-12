@@ -81,6 +81,13 @@ pub enum EditOp {
     TrimStart { clip: Id, to: Tick },
     /// 把片段终点拉到 `to`，素材出点跟着走。
     TrimEnd { clip: Id, to: Tick },
+    /// 波纹修剪头：从入点一侧收掉 `to` 给的那一段，**同轨后面的片段跟着往前补**。
+    ///
+    /// `to` 是「内容要收到哪儿」（片段内相对序列时间），不是片段的新起点：波纹修剪之后
+    /// 片段仍然顶在原来的位置上，长度变短、后面的片段整体左移，轨道上不留空隙。
+    RippleTrimStart { clip: Id, to: Tick },
+    /// 波纹修剪尾：出点收到 `to`，同轨后面的片段跟着往前补。
+    RippleTrimEnd { clip: Id, to: Tick },
     /// 在序列时间 `at` 处切成两段。左半段保留原 id，右半段拿新 id。
     Split { clip: Id, at: Tick },
     /// 删除片段，留下空隙。
@@ -185,6 +192,8 @@ pub fn apply(sequence: &Sequence, op: &EditOp) -> Result<Sequence, EditError> {
         } => move_insert(&mut next, *clip, *to_track, *start)?,
         EditOp::TrimStart { clip, to } => trim_start(&mut next, *clip, *to)?,
         EditOp::TrimEnd { clip, to } => trim_end(&mut next, *clip, *to)?,
+        EditOp::RippleTrimStart { clip, to } => ripple_trim_start(&mut next, *clip, *to)?,
+        EditOp::RippleTrimEnd { clip, to } => ripple_trim_end(&mut next, *clip, *to)?,
         EditOp::Split { clip, at } => split(&mut next, *clip, *at)?,
         EditOp::Remove { clips } => remove(&mut next, clips)?,
         EditOp::RippleDelete { clips } => ripple_delete(&mut next, clips)?,
@@ -404,6 +413,61 @@ fn trim_end(sequence: &mut Sequence, clip_id: Id, to: Tick) -> Result<(), EditEr
     }
 
     sequence.tracks[track_index].clips[clip_index].source_out = source_out;
+    Ok(())
+}
+
+/// 波纹修剪头：内容从头部收掉 `to - start`，`start` 不动，同轨后面的片段整体左移。
+///
+/// 与 [`trim_start`] 的区别只有一处：那边收头会在轨道上留下空隙，这边把空隙闭合。
+/// `to` 是「内容收到了哪儿」；负数方向（往左）= 把被剪掉的帧要回来，受素材入点约束。
+fn ripple_trim_start(sequence: &mut Sequence, clip_id: Id, to: Tick) -> Result<(), EditError> {
+    let (track_index, clip_index) = locate(sequence, clip_id)?;
+    let clip = &sequence.tracks[track_index].clips[clip_index];
+    let delta = to - clip.start;
+    if delta == Tick::ZERO {
+        return Ok(());
+    }
+    let source_in = clip.source_in + delta;
+    let old_end = clip.end();
+    if source_in.is_negative() || delta >= old_end - clip.start {
+        return Err(EditError::EmptyClip);
+    }
+
+    sequence.tracks[track_index].clips[clip_index].source_in = source_in;
+    // 头部收放 `delta` 之后终点跟着挪同样的量（与 `trim_start` 同一个 1:1 约定），
+    // 后面的片段补上这段差值，轨道上就不会留空隙。
+    let shift = Tick::ZERO - delta;
+    for other in &mut sequence.tracks[track_index].clips {
+        if other.id != clip_id && other.start >= old_end {
+            other.start = other.start + shift;
+        }
+    }
+    Ok(())
+}
+
+/// 波纹修剪尾：出点收到 `to`，同轨后面的片段整体跟着挪。
+///
+/// 不检查与下一段重叠——后面的片段本来就要一起让位；`trim_end` 的那条检查在这里
+/// 反而会把正常的波纹修剪拒掉。
+fn ripple_trim_end(sequence: &mut Sequence, clip_id: Id, to: Tick) -> Result<(), EditError> {
+    let (track_index, clip_index) = locate(sequence, clip_id)?;
+    let clip = &sequence.tracks[track_index].clips[clip_index];
+    let old_end = clip.end();
+    let delta = to - old_end;
+    if delta == Tick::ZERO {
+        return Ok(());
+    }
+    let source_out = clip.source_in + (to - clip.start);
+    if to <= clip.start || source_out <= clip.source_in {
+        return Err(EditError::EmptyClip);
+    }
+
+    sequence.tracks[track_index].clips[clip_index].source_out = source_out;
+    for other in &mut sequence.tracks[track_index].clips {
+        if other.id != clip_id && other.start >= old_end {
+            other.start = other.start + delta;
+        }
+    }
     Ok(())
 }
 

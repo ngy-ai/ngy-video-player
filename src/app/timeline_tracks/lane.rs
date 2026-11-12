@@ -43,6 +43,12 @@ impl PlayerApp {
                     // 抓取偏移只在 `on_drag` 的构造器里写得到，这里读出来还原片段左边缘。
                     let (clip, grab) = {
                         let drag = event.drag(cx);
+                        // 修饰键也在这里记一笔：松手时读不到键盘状态。
+                        drag.mods.set((
+                            event.event.modifiers.alt,
+                            event.event.modifiers.shift,
+                            event.event.modifiers.control,
+                        ));
                         (drag.clip, drag.grab.get())
                     };
                     let Some(project) = this.project.as_ref() else {
@@ -68,7 +74,7 @@ impl PlayerApp {
                 },
             ))
             .on_drop(cx.listener(move |this, drag: &TimelineDrag, _window, cx| {
-                this.drop_timeline_clip(drag.clip, cx);
+                this.drop_timeline_clip(drag, cx);
             }))
             // 素材库往轨道上拖。与片段拖动是两种拖拽值，GPUI 按类型分开派发，
             // 各自只收到自己那种。
@@ -105,6 +111,36 @@ impl PlayerApp {
             ))
             .on_drop(cx.listener(move |this, drag: &KeyframeDrag, _window, cx| {
                 this.drop_keyframe(drag, cx);
+            }))
+            // 拖两端修剪抓手：落点按被拖的那一端算，不需要抓取偏移。
+            .on_drag_move(
+                cx.listener(move |this, event: &DragMoveEvent<TrimDrag>, _window, cx| {
+                    let position = event.event.position;
+                    if !event.bounds.contains(&position) {
+                        return;
+                    }
+                    let (clip, side, grab) = {
+                        let drag = event.drag(cx);
+                        (drag.clip, drag.side, drag.grab.get())
+                    };
+                    let Some(project) = this.project.as_ref() else {
+                        return;
+                    };
+                    let fps = project.sequence().fps;
+                    let lane_x = f32::from(position.x) - f32::from(event.bounds.origin.x);
+                    let seconds = this.timeline.time_at(lane_x - grab).max(0.0);
+                    this.trim_drop = Some(TrimDrop {
+                        clip,
+                        side,
+                        at: snap_to_frame(Tick::from_secs(seconds), fps),
+                        alt: event.event.modifiers.alt,
+                        shift: event.event.modifiers.shift,
+                    });
+                    cx.notify();
+                }),
+            )
+            .on_drop(cx.listener(move |this, drag: &TrimDrag, _window, cx| {
+                this.drop_trim(drag, cx);
             }))
             // 点轨道空白处取消选中；点片段时片段自己截断了事件。
             .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
@@ -195,6 +231,7 @@ impl PlayerApp {
             let ghost_name: SharedString = name.clone().into();
             let grab = Rc::new(Cell::new(0.0f32));
             let drag_grab = grab.clone();
+            let mods = Rc::new(Cell::new((false, false, false)));
 
             lane = lane.child(
                 div()
@@ -244,6 +281,7 @@ impl PlayerApp {
                         TimelineDrag {
                             clip: clip_id,
                             grab,
+                            mods,
                         },
                         move |_drag, offset, _window, cx| {
                             drag_grab.set(f32::from(offset.x));
@@ -253,6 +291,51 @@ impl PlayerApp {
                         },
                     ),
             );
+
+            // 修剪抓手：两端各 6 像素。拖左端改入点、右端改出点，松手才落一步撤销。
+            // 修饰键的语义见 `drop_trim`：Alt 波纹修剪、Shift 拖右端是滚动编辑。
+            if !track.locked {
+                for side in [TrimSide::Start, TrimSide::End] {
+                    let side_grab = Rc::new(Cell::new(0.0f32));
+                    let write_grab = side_grab.clone();
+                    let x = match side {
+                        TrimSide::Start => left,
+                        TrimSide::End => (right - 6.0).max(left),
+                    };
+                    let id = format!(
+                        "trim-{}-{}",
+                        match side {
+                            TrimSide::Start => "start",
+                            TrimSide::End => "end",
+                        },
+                        clip_id.raw()
+                    );
+                    lane = lane.child(
+                        div()
+                            .id(id)
+                            .absolute()
+                            .left(px(x))
+                            .top(px(4.0))
+                            .bottom(px(4.0))
+                            .w(px(6.0))
+                            // 一直存在、只在悬停时才有颜色：看不见的抓手抓不住。
+                            .bg(gpui_kit::rgba(0xffffff1e))
+                            .on_drag(
+                                TrimDrag {
+                                    clip: clip_id,
+                                    side,
+                                    grab: side_grab,
+                                },
+                                move |_drag, offset, _window, cx| {
+                                    write_grab.set(f32::from(offset.x));
+                                    cx.new(|_| TimelineGhost {
+                                        name: "修剪".into(),
+                                    })
+                                },
+                            ),
+                    );
+                }
+            }
 
             // 关键帧标记：片段内相对时间换成序列时间，画成贴着片段下沿的小竖条。
             // 每帧重算一遍，只扫视口内的片段，几万个点的工程也不会卡。
@@ -445,116 +528,5 @@ impl PlayerApp {
         }
 
         lane.into_any_element()
-    }
-
-    /// 记下落点。相同落点直接返回，拖动时指针每移动一个像素都重绘整窗太浪费。
-    fn set_timeline_drop(&mut self, drop: TimelineDrop, cx: &mut Context<Self>) {
-        if self.timeline_drop == Some(drop) {
-            return;
-        }
-        self.timeline_drop = Some(drop);
-        cx.notify();
-    }
-
-    /// 记下关键帧标记的落点。落点没变就不重绘：拖动时每移动一个像素都重绘整窗太浪费。
-    ///
-    /// 标记只在片段自己的轨道上落：拖到别的轨道既不挪片段，也没有明确语义。
-    fn set_keyframe_drop(
-        &mut self,
-        track: Id,
-        clip: Id,
-        from: Tick,
-        lane_x: f32,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(project) = self.project.as_ref() else {
-            return;
-        };
-        if project.sequence().clip_track(clip) != Some(track) {
-            return;
-        }
-        let fps = project.sequence().fps;
-        let Some(item) = project.sequence().clip(clip) else {
-            return;
-        };
-        let seconds = self.timeline.time_at(lane_x).max(0.0);
-        let to = (snap_to_frame(Tick::from_secs(seconds), fps) - item.start)
-            .max(Tick::ZERO)
-            .min(item.duration());
-        let drop = KeyframeDrop { clip, from, to };
-        if self.keyframe_drop == Some(drop) {
-            return;
-        }
-        self.keyframe_drop = Some(drop);
-        cx.notify();
-    }
-
-    /// 松手：把「哪个时刻的点挪到哪儿」交给 `timeline::ops`，锁轨与夹取都在那边。
-    fn drop_keyframe(&mut self, drag: &KeyframeDrag, cx: &mut Context<Self>) {
-        let Some(drop) = self.keyframe_drop.take() else {
-            cx.notify();
-            return;
-        };
-        // 拖了一下又放回原处不该占一步历史。
-        if drop.clip != drag.clip || drop.from != drag.from || drop.to == drop.from {
-            cx.notify();
-            return;
-        }
-        let Some(project) = self.project.as_ref() else {
-            return;
-        };
-        let op = EditOp::MoveKeyframe {
-            clip: drop.clip,
-            from: drop.from,
-            to: drop.to,
-        };
-        let outcome = apply_edit(project.sequence(), &op);
-        match outcome {
-            Ok(sequence) => {
-                self.commit_edit(sequence, "移动关键帧");
-                self.flash(format!("关键帧挪到 {:.2} 秒（片段内）", drop.to.secs()));
-            }
-            Err(error) => self.flash(format!("移动关键帧失败：{error}")),
-        }
-        self.poke();
-        cx.notify();
-    }
-
-    /// 松手：把落点交给 `timeline::ops`，重叠 / 锁定 / 轨道类型这些校验都在那边。
-    fn drop_timeline_clip(&mut self, clip: Id, cx: &mut Context<Self>) {
-        let Some(drop) = self.timeline_drop.take() else {
-            return;
-        };
-        if drop.clip != clip || self.project.is_none() {
-            cx.notify();
-            return;
-        }
-
-        // 默认覆盖：拖到别的片段上就把那一段盖掉，而不是弹一句「重叠」拒收。
-        let op = match drop.mode {
-            Placement::Overwrite => EditOp::MoveOverwrite {
-                clip,
-                to_track: drop.to_track,
-                start: drop.start,
-            },
-            Placement::Insert => EditOp::MoveInsert {
-                clip,
-                to_track: drop.to_track,
-                start: drop.start,
-            },
-        };
-        let outcome = match self.project.as_ref() {
-            Some(project) => apply_edit(project.sequence(), &op),
-            None => return,
-        };
-        match outcome {
-            Ok(sequence) => {
-                self.commit_edit(sequence, "移动片段");
-                self.flash("已移动片段");
-            }
-            Err(error) => self.flash(format!("移动失败：{error}")),
-        }
-        self.poke();
-        cx.notify();
     }
 }

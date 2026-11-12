@@ -672,3 +672,7 @@ mod subtitle;
 // 关键帧标记的拖动，见 `tests/keyframe.rs`。
 #[path = "tests/keyframe.rs"]
 mod keyframe;
+
+// 波纹修剪：收短之后同轨后面的片段跟着补上，见 `tests/ripple.rs`。
+#[path = "tests/ripple.rs"]
+mod ripple;
