@@ -101,6 +101,7 @@ impl PlayerApp {
             asset_drop: None,
             keyframe_drop: None,
             trim_drop: None,
+            trim_tool: TrimTool::default(),
             trim_window: None,
             trim_token: 0,
             timeline_menu: None,

@@ -226,10 +226,48 @@ impl PlayerApp {
                             this.open_timecode_dialog(window, cx);
                         }),
                     ))
+                    // 修剪工具：常驻显示当前工具，点一下往后轮换；直接按 V/B/R/Y/U 也行。
+                    .child(trim_tool_chip(self.trim_tool, cx))
                     .child(format!("{:.1} 像素/秒", self.timeline.zoom())),
             )
             .into_any_element()
     }
+}
+
+/// 标题条上的修剪工具小标：显示当前工具与它对应的键，点一下切到下一个。
+///
+/// 工具影响「拖片段两端」的语义（波纹 / 滚动），也影响拖片段中部的（滑移 / 滑动），
+/// 所以必须有个常驻位置，不然按了键看不出变化。
+fn trim_tool_chip(tool: TrimTool, cx: &mut Context<PlayerApp>) -> AnyElement {
+    let key = match tool {
+        TrimTool::Trim => "V",
+        TrimTool::Ripple => "B",
+        TrimTool::Roll => "R",
+        TrimTool::Slip => "Y",
+        TrimTool::Slide => "U",
+    };
+    div()
+        .id("timeline-trim-tool")
+        .px(px(6.0))
+        .py(px(2.0))
+        .rounded(px(4.0))
+        // 普通修剪是默认值，画得最淡；换成别的工具时亮起来。
+        .bg(if tool == TrimTool::Trim {
+            gpui_kit::rgba(0x00000000)
+        } else {
+            gpui_kit::rgba(0x5aa9ff2e)
+        })
+        .text_color(if tool == TrimTool::Trim {
+            text_faint()
+        } else {
+            ui::accent()
+        })
+        .child(format!("修剪：{}（{key}）", tool.label()))
+        .cursor(CursorStyle::PointingHand)
+        .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
+            this.set_trim_tool(tool.next(), cx);
+        }))
+        .into_any_element()
 }
 
 /// 标题条上的工作区读数。

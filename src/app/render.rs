@@ -244,6 +244,22 @@ impl Render for PlayerApp {
                     this.delete_selected_clips(true, cx);
                 }
             }))
+            // 修剪工具：V / B / R / Y / U。播放模式没有时间线，`set_trim_tool` 自己会跳过。
+            .on_action(cx.listener(|this, _: &TrimToolTrim, _window, cx| {
+                this.set_trim_tool(TrimTool::Trim, cx);
+            }))
+            .on_action(cx.listener(|this, _: &TrimToolRipple, _window, cx| {
+                this.set_trim_tool(TrimTool::Ripple, cx);
+            }))
+            .on_action(cx.listener(|this, _: &TrimToolRoll, _window, cx| {
+                this.set_trim_tool(TrimTool::Roll, cx);
+            }))
+            .on_action(cx.listener(|this, _: &TrimToolSlip, _window, cx| {
+                this.set_trim_tool(TrimTool::Slip, cx);
+            }))
+            .on_action(cx.listener(|this, _: &TrimToolSlide, _window, cx| {
+                this.set_trim_tool(TrimTool::Slide, cx);
+            }))
             .on_action(
                 cx.listener(|this, _: &ExitOverlay, window, cx| this.exit_overlay(window, cx)),
             )

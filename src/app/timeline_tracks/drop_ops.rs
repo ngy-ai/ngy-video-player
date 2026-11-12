@@ -79,11 +79,26 @@ impl PlayerApp {
         cx.notify();
     }
 
+    /// 切换修剪工具。只影响之后的拖动语义，不进撤销栈（工具不是工程内容）。
+    pub(in crate::app) fn set_trim_tool(&mut self, tool: TrimTool, cx: &mut Context<Self>) {
+        if self.project.is_none() {
+            return;
+        }
+        if self.trim_tool != tool {
+            self.trim_tool = tool;
+            self.flash(format!(
+                "修剪工具：{}（拖片段两端用；点标题条上的工具名也能切）",
+                tool.label()
+            ));
+        }
+        cx.notify();
+    }
+
     /// 松手：把修剪落点交给 `timeline::ops`。
     ///
-    /// 修饰键决定语义：`Alt` 是波纹修剪（同轨后面的片段跟着补位），`Shift` 拖右端且下一段
-    /// 紧挨着时是**滚动编辑**（只挪接缝，两侧片段一起变），都不按就是普通修剪。
-    /// 拖回原处不占一步历史。
+    /// 语义由「当前工具 + 修饰键」决定，规则在 [`effective_trim`]：`Alt` 临时切成波纹，
+    /// `Shift` 拖右端且下一段紧挨着时是滚动编辑，其余按工具走（滚动拖左端 / 滑移 / 滑动
+    /// 这三种在端点上不成立，退回普通修剪）。拖回原处不占一步历史。
     pub(super) fn drop_trim(&mut self, drag: &TrimDrag, cx: &mut Context<Self>) {
         let Some(drop) = self.trim_drop.take() else {
             cx.notify();
@@ -102,22 +117,27 @@ impl PlayerApp {
         };
         let (start, end) = (clip.start, clip.end());
         let old_length = end - start;
-        // 右端 + Shift + 后面紧挨着：滚动编辑。别的组合不成立，按普通修剪走。
-        let roll = drop.shift
-            && drop.side == TrimSide::End
-            && sequence
-                .clip_track(drop.clip)
-                .and_then(|track| sequence.track(track))
-                .and_then(|track| {
-                    let index = track.clip_index(drop.clip)?;
-                    Some(
-                        track
-                            .clips
-                            .get(index + 1)
-                            .is_some_and(|next| next.start == end),
-                    )
-                })
-                .unwrap_or(false);
+        // 后面有没有紧挨着的片段：滚动编辑的前提。
+        let adjacent_next = sequence
+            .clip_track(drop.clip)
+            .and_then(|track| sequence.track(track))
+            .and_then(|track| {
+                let index = track.clip_index(drop.clip)?;
+                Some(
+                    track
+                        .clips
+                        .get(index + 1)
+                        .is_some_and(|next| next.start == end),
+                )
+            })
+            .unwrap_or(false);
+        let chosen = effective_trim(
+            self.trim_tool,
+            drop.side,
+            adjacent_next,
+            drop.alt,
+            drop.shift,
+        );
         // 没动过（落点还是原来那一端）就别落历史。
         let unmoved = match drop.side {
             TrimSide::Start => drop.at == start,
@@ -128,37 +148,37 @@ impl PlayerApp {
             return;
         }
 
-        let op = if roll {
-            EditOp::Roll {
+        let roll = chosen == TrimTool::Roll;
+        let op = match chosen {
+            TrimTool::Roll => EditOp::Roll {
                 clip: drop.clip,
                 by: drop.at - end,
-            }
-        } else {
-            match (drop.side, drop.alt) {
-                (TrimSide::Start, true) => EditOp::RippleTrimStart {
+            },
+            TrimTool::Ripple => match drop.side {
+                TrimSide::Start => EditOp::RippleTrimStart {
                     clip: drop.clip,
                     to: drop.at,
                 },
-                (TrimSide::End, true) => EditOp::RippleTrimEnd {
+                TrimSide::End => EditOp::RippleTrimEnd {
                     clip: drop.clip,
                     to: drop.at,
                 },
-                (TrimSide::Start, false) => EditOp::TrimStart {
+            },
+            _ => match drop.side {
+                TrimSide::Start => EditOp::TrimStart {
                     clip: drop.clip,
                     to: drop.at,
                 },
-                (TrimSide::End, false) => EditOp::TrimEnd {
+                TrimSide::End => EditOp::TrimEnd {
                     clip: drop.clip,
                     to: drop.at,
                 },
-            }
+            },
         };
-        let tool = if roll {
-            "滚动编辑"
-        } else if drop.alt {
-            "波纹修剪"
-        } else {
-            "修剪"
+        let tool = match chosen {
+            TrimTool::Roll => "滚动编辑",
+            TrimTool::Ripple => "波纹修剪",
+            _ => "修剪",
         };
         let outcome = apply_edit(sequence, &op);
         match outcome {
@@ -187,16 +207,18 @@ impl PlayerApp {
 
     /// 松手：把落点交给 `timeline::ops`，重叠 / 锁定 / 轨道类型这些校验都在那边。
     ///
-    /// 修饰键在这里改语义（拖动时读、松手时用）：
-    /// - 不按：移动片段；`Shift` 还是「插入」落位。
-    /// - `Alt`：滑移（片段位置不动，素材内容左右移）。
-    /// - `Ctrl`（`⌘`）：滑动（片段左右移动，两侧邻居跟着伸缩）。
+    /// 语义由「当前工具 + 修饰键」决定（拖动时读键、松手时用）：
+    /// - 工具是滑移（`Y`）或按着 `Alt`：滑移，片段位置不动、素材内容左右移。
+    /// - 工具是滑动（`U`）或按着 `Ctrl`（`⌘`）：滑动，片段左右移动、两侧邻居伸缩。
+    /// - 其余：移动片段；`Shift` 还是「插入」落位。
     ///
     /// 滑移 / 滑动只在同一轨道内成立；拖到别的轨上就按普通移动处理，免得「滑到一半
     /// 换了轨」把素材对错地方。
     pub(super) fn drop_timeline_clip(&mut self, drag: &TimelineDrag, cx: &mut Context<Self>) {
         let clip = drag.clip;
         let (alt, _shift, ctrl) = drag.mods.get();
+        let slip = alt || self.trim_tool == TrimTool::Slip;
+        let slide = !alt && (ctrl || self.trim_tool == TrimTool::Slide);
         let Some(drop) = self.timeline_drop.take() else {
             return;
         };
@@ -217,12 +239,12 @@ impl PlayerApp {
             .and_then(|project| project.sequence().clip(clip))
             .map(|item| item.start);
 
-        let op = if same_track && (alt || ctrl) {
+        let op = if same_track && (slip || slide) {
             let Some(from) = current_start else {
                 return;
             };
             let by = drop.start - from;
-            let (op, tool) = if alt {
+            let (op, tool) = if slip {
                 (EditOp::Slip { clip, by }, "滑移")
             } else {
                 (EditOp::Slide { clip, by }, "滑动")

@@ -98,6 +98,12 @@ actions!(
         FitTimeline,
         UndoEdit,
         RedoEdit,
+        // 修剪工具：V 修剪（选择）/ B 波纹 / R 滚动 / Y 滑移 / U 滑动。
+        TrimToolTrim,
+        TrimToolRipple,
+        TrimToolRoll,
+        TrimToolSlip,
+        TrimToolSlide,
     ]
 );
 
@@ -192,7 +198,7 @@ use self::timecode_jump::TimecodeDialog;
 use self::timeline_menu::TimelineMenu;
 use self::timeline_preview::TrackAudio;
 use self::timeline_subtitle::SubtitleDialog;
-use self::timeline_tracks::{KeyframeDrop, TimelineDrop, TrimDrop};
+use self::timeline_tracks::{KeyframeDrop, TimelineDrop, TrimDrop, TrimTool};
 use self::trim_window::TrimWindow;
 use self::widgets::*;
 // 界面自己的小状态类型（横幅、菜单、悬停预览、小窗观察状态……）都在 `types`，
@@ -367,6 +373,8 @@ pub struct PlayerApp {
     keyframe_drop: Option<KeyframeDrop>,
     /// 拖片段两端修剪抓手时算的落点；`None` 表示没在修剪。
     trim_drop: Option<TrimDrop>,
+    /// 当前修剪工具（`V` / `B` / `R` / `Y` / `U`）。会话状态，不进工程、不进撤销栈。
+    trim_tool: TrimTool,
     /// 双画面修剪窗口。松手后才取帧，点一下关掉。
     trim_window: Option<TrimWindow>,
     /// 修剪窗口的代号：晚到的两帧只画到同一个窗口上。

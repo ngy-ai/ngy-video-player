@@ -143,6 +143,13 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         // 键位串按键帽字符匹配：写成 `comma` / `period` 永远匹配不上。
         KeyBinding::new(",", InsertFromSource, None),
         KeyBinding::new(".", OverwriteFromSource, None),
+        // 修剪工具：与常见 NLE 对齐（V 选择 / B 波纹 / R 滚动 / Y 滑移 / U 滑动）。
+        // 只在工程模式生效，处理函数里自己判断；播放模式下按了什么也不做。
+        KeyBinding::new("v", TrimToolTrim, None),
+        KeyBinding::new("b", TrimToolRipple, None),
+        KeyBinding::new("r", TrimToolRoll, None),
+        KeyBinding::new("y", TrimToolSlip, None),
+        KeyBinding::new("u", TrimToolSlide, None),
         // `?` 不在这里绑定：键位串按键帽字符匹配，`?` 得写成 `shift-/`，
         // 且随键盘布局变化。改由视图的 key_down 按实际字符处理。
     ]

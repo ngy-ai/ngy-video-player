@@ -70,6 +70,78 @@ pub(crate) struct TrimDrag {
     pub(crate) grab: Rc<Cell<f32>>,
 }
 
+/// 修剪工具：决定「直接拖」走哪种语义，修饰键仍然可以临时覆盖它。
+///
+/// 键位与常见 NLE 对齐（`V` 选择 / `B` 波纹 / `R` 滚动 / `Y` 滑移 / `U` 滑动）；这里
+/// 没有「选择工具」那种全局模式切换，`V` 就是「普通修剪 + 移动」。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum TrimTool {
+    /// 普通修剪：拖两端改入出点，拖中部移动片段。
+    #[default]
+    Trim,
+    /// 波纹修剪：收短之后同轨后面的片段补位。
+    Ripple,
+    /// 滚动编辑：只挪接缝，两侧片段一起变长短。
+    Roll,
+    /// 滑移：位置与时长不动，素材内容左右挪。
+    Slip,
+    /// 滑动：片段左右挪，两侧邻居跟着伸缩。
+    Slide,
+}
+
+impl TrimTool {
+    pub(crate) const ALL: [TrimTool; 5] = [
+        TrimTool::Trim,
+        TrimTool::Ripple,
+        TrimTool::Roll,
+        TrimTool::Slip,
+        TrimTool::Slide,
+    ];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            TrimTool::Trim => "修剪",
+            TrimTool::Ripple => "波纹",
+            TrimTool::Roll => "滚动",
+            TrimTool::Slip => "滑移",
+            TrimTool::Slide => "滑动",
+        }
+    }
+
+    /// 点一下工具指示器时切到下一个（键盘才是直接选）。
+    pub(crate) fn next(self) -> Self {
+        let index = Self::ALL.iter().position(|tool| *tool == self).unwrap_or(0);
+        Self::ALL[(index + 1) % Self::ALL.len()]
+    }
+}
+
+/// 落手时实际用哪种修剪：**修饰键优先于工具**，工具又受「这一端能不能这么剪」约束。
+///
+/// - `Alt` → 波纹修剪（任何一端都成立）。
+/// - `Shift` 拖右端且后面紧挨着片段 → 滚动编辑。
+/// - 工具是滚动但拖的是左端（`Roll` 只认本段与后一段的接缝）→ 退回普通修剪。
+/// - 工具是滑移 / 滑动（都是体上操作）→ 端点拖动退回普通修剪。
+pub(crate) fn effective_trim(
+    tool: TrimTool,
+    side: TrimSide,
+    adjacent_next: bool,
+    alt: bool,
+    shift: bool,
+) -> TrimTool {
+    if alt {
+        return TrimTool::Ripple;
+    }
+    if shift && side == TrimSide::End && adjacent_next {
+        return TrimTool::Roll;
+    }
+    match (tool, side) {
+        (TrimTool::Roll, TrimSide::Start) => TrimTool::Trim,
+        (TrimTool::Roll, TrimSide::End) if !adjacent_next => TrimTool::Trim,
+        (TrimTool::Slip | TrimTool::Slide, _) => TrimTool::Trim,
+        (tool, _) => tool,
+    }
+}
+
 /// 修剪拖到什么位置、按着哪些修饰键。松手时才真正改序列。
 ///
 /// 修饰键在 `on_drag_move` 里读到就存下来：`on_drop` 只拿得到拖拽值，拿不到当时的
@@ -145,6 +217,82 @@ fn range_message(project: &Project, waiting: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 修饰键优先于修剪工具() {
+        // Alt 拖任何一端都是波纹，不管当前工具是什么。
+        assert_eq!(
+            effective_trim(TrimTool::Trim, TrimSide::Start, false, true, false),
+            TrimTool::Ripple
+        );
+        assert_eq!(
+            effective_trim(TrimTool::Slip, TrimSide::End, true, true, false),
+            TrimTool::Ripple
+        );
+        // Shift 拖右端且后面紧挨着：滚动编辑，也压过工具。
+        assert_eq!(
+            effective_trim(TrimTool::Slip, TrimSide::End, true, false, true),
+            TrimTool::Roll
+        );
+        // 什么都不按就按工具走。
+        assert_eq!(
+            effective_trim(TrimTool::Ripple, TrimSide::End, false, false, false),
+            TrimTool::Ripple
+        );
+        assert_eq!(
+            effective_trim(TrimTool::Trim, TrimSide::End, false, false, false),
+            TrimTool::Trim
+        );
+    }
+
+    #[test]
+    fn 端点拖不成立的工具退回普通修剪() {
+        // 滚动只认本段与后一段的接缝：拖左端没有接缝可挪。
+        assert_eq!(
+            effective_trim(TrimTool::Roll, TrimSide::Start, true, false, false),
+            TrimTool::Trim
+        );
+        // 拖右端但后面没有紧挨着的片段。
+        assert_eq!(
+            effective_trim(TrimTool::Roll, TrimSide::End, false, false, false),
+            TrimTool::Trim
+        );
+        // 滑移 / 滑动都是体上操作，端点拖动退回普通修剪。
+        assert_eq!(
+            effective_trim(TrimTool::Slip, TrimSide::End, true, false, false),
+            TrimTool::Trim
+        );
+        assert_eq!(
+            effective_trim(TrimTool::Slide, TrimSide::Start, true, false, false),
+            TrimTool::Trim
+        );
+        // Shift 拖左端不是滚动（只有右端有接缝）。
+        assert_eq!(
+            effective_trim(TrimTool::Trim, TrimSide::Start, true, false, true),
+            TrimTool::Trim
+        );
+    }
+
+    #[test]
+    fn 工具按顺序轮换且能回到修剪() {
+        let mut tool = TrimTool::Trim;
+        let mut seen = vec![tool];
+        for _ in 0..TrimTool::ALL.len() - 1 {
+            tool = tool.next();
+            seen.push(tool);
+        }
+        assert_eq!(
+            seen,
+            vec![
+                TrimTool::Trim,
+                TrimTool::Ripple,
+                TrimTool::Roll,
+                TrimTool::Slip,
+                TrimTool::Slide
+            ]
+        );
+        assert_eq!(tool.next(), TrimTool::Trim, "转一圈回到默认工具");
+    }
 
     #[test]
     fn 落点吸附到最近的帧() {

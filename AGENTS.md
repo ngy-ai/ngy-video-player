@@ -44,8 +44,9 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  picture、playlist_ops、video_area、
                  timeline_view / timeline_tracks（工程模式时间线：布局、轨道行、片段与
                    关键帧标记的拖动，`timeline_tracks/lane.rs` 是片段区各自画什么
-                   （含两端修剪抓手），`timeline_tracks/drop_ops.rs` 是各类落点与松手语义
-                   （含修剪的修饰键：Alt 波纹 / Shift 滚动 / Alt 滑移 / Ctrl 滑动），
+                   （含两端修剪抓手与按工具切换的光标），`timeline_tracks/drop_ops.rs`
+                   是各类落点与松手语义（修剪工具 `TrimTool` 的 V/B/R/Y/U 与修饰键覆盖
+                   都走 `effective_trim`），
                    `timeline_tracks/label.rs` 是轨道头与轨道右键面板的入口；
                    `timeline_view/` 下 `document` 是打开 / 新建 / 关闭、
                    `history_ops` 是撤销重做、`zoom` 是播放头与缩放、`render` 是整块绘制）、

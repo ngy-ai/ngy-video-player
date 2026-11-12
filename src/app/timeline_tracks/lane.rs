@@ -257,6 +257,12 @@ impl PlayerApp {
                     .bg(clip_color(track.kind))
                     // 关掉的轨道整体压暗：不改颜色本身，缩放很小的时候也能看出它不参与输出。
                     .opacity(if track.muted { 0.4 } else { 1.0 })
+                    // 光标跟着修剪工具走：滑移 / 滑动是拖体，其余是拖两端。
+                    .cursor(match self.trim_tool {
+                        TrimTool::Slip | TrimTool::Slide => CursorStyle::ClosedHand,
+                        TrimTool::Ripple | TrimTool::Roll => CursorStyle::ResizeLeftRight,
+                        TrimTool::Trim => CursorStyle::PointingHand,
+                    })
                     .when(width > 44.0, |this| {
                         this.text_size(px(11.0))
                             .text_color(gpui_kit::rgba(0xffffffee))
