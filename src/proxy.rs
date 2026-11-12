@@ -75,6 +75,42 @@ impl ProxyQuality {
     }
 }
 
+/// 码率上限的合法区间（kbps）。低于 200 连预览都糊得没法看，高于 100M 就不叫代理了。
+pub const BITRATE_RANGE: (u32, u32) = (200, 100_000);
+
+/// 解析用户填的码率上限，单位 kbps。
+///
+/// 认这几种写法：`3000`、`3000k`、`3M`（大小写都认）、`2.5M`。空串由调用方当作
+/// 「用档位默认值」，这里只报错不猜。返回的错误文案直接给用户看。
+pub fn parse_bitrate(text: &str) -> std::result::Result<u32, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("填个数字，或者清空改用自动".to_string());
+    }
+    let lowered = trimmed.to_ascii_lowercase();
+    let (number, scale) = if let Some(rest) = lowered.strip_suffix('k') {
+        (rest, 1.0)
+    } else if let Some(rest) = lowered.strip_suffix('m') {
+        (rest, 1000.0)
+    } else {
+        (lowered.as_str(), 1.0)
+    };
+    let Ok(value) = number.trim().parse::<f64>() else {
+        return Err(format!("「{trimmed}」不是数字：可以写 3000、3000k 或 3M"));
+    };
+    if !value.is_finite() || value <= 0.0 {
+        return Err("码率要大于 0".to_string());
+    }
+    let kbps = (value * scale).round();
+    if kbps < f64::from(BITRATE_RANGE.0) || kbps > f64::from(BITRATE_RANGE.1) {
+        return Err(format!(
+            "码率要在 {}–{} kbps 之间（可以写 3M）",
+            BITRATE_RANGE.0, BITRATE_RANGE.1
+        ));
+    }
+    Ok(kbps as u32)
+}
+
 /// 一次代理生成请求。
 #[derive(Clone, Debug)]
 pub struct ProxyRequest {
@@ -83,6 +119,8 @@ pub struct ProxyRequest {
     /// 原片时长（秒），进度条的分母。
     pub duration: f64,
     pub quality: ProxyQuality,
+    /// 码率上限（kbps）。CRF 之外再封顶，默认取档位自带的那一档。
+    pub max_bitrate: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -231,9 +269,9 @@ fn build_command(executable: &Path, request: &ProxyRequest) -> Command {
         .arg("-crf")
         .arg(request.quality.crf().to_string())
         .arg("-maxrate")
-        .arg(format!("{}k", request.quality.max_bitrate()))
+        .arg(format!("{}k", request.max_bitrate))
         .arg("-bufsize")
-        .arg(format!("{}k", request.quality.max_bitrate() * 2))
+        .arg(format!("{}k", request.max_bitrate * 2))
         .arg("-vf")
         .arg(request.quality.scale_filter())
         .arg("-pix_fmt")
@@ -279,12 +317,14 @@ mod tests {
             output: PathBuf::from("课程 01.proxy.mp4"),
             duration: 600.0,
             quality: ProxyQuality::P480,
+            max_bitrate: ProxyQuality::P480.max_bitrate(),
         }
     }
 
     fn args_for(quality: ProxyQuality) -> Vec<String> {
         let mut request = request();
         request.quality = quality;
+        request.max_bitrate = quality.max_bitrate();
         build_command(Path::new("ffmpeg"), &request)
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
@@ -352,6 +392,43 @@ mod tests {
         // 档越高容许的码率越高。
         assert!(ProxyQuality::P480.max_bitrate() < ProxyQuality::P720.max_bitrate());
         assert!(ProxyQuality::P720.max_bitrate() < ProxyQuality::P1080.max_bitrate());
+    }
+
+    #[test]
+    fn 自定义码率盖过档位默认() {
+        let mut request = request();
+        request.quality = ProxyQuality::P720;
+        request.max_bitrate = 8_000;
+        let args: Vec<String> = build_command(Path::new("ffmpeg"), &request)
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(has(&args, &["-maxrate", "8000k"]));
+        assert!(has(&args, &["-bufsize", "16000k"]));
+        // 缩放与 CRF 仍按档位来：码率只是封顶，不改变分辨率与画质取向。
+        assert!(has(&args, &["-vf", "scale=-2:720:flags=fast_bilinear"]));
+        assert!(has(&args, &["-crf", "26"]));
+    }
+
+    #[test]
+    fn 码率写法() {
+        assert_eq!(parse_bitrate("3000"), Ok(3000));
+        assert_eq!(parse_bitrate(" 3000 "), Ok(3000));
+        assert_eq!(parse_bitrate("3000k"), Ok(3000));
+        assert_eq!(parse_bitrate("3M"), Ok(3000));
+        assert_eq!(parse_bitrate("2.5m"), Ok(2500));
+        assert_eq!(parse_bitrate("200"), Ok(200));
+        assert_eq!(parse_bitrate("100000"), Ok(100_000));
+        // 空串、垃圾输入与越界都要报错。
+        assert!(parse_bitrate("").is_err());
+        assert!(parse_bitrate("abc").is_err());
+        assert!(parse_bitrate("0").is_err());
+        assert!(parse_bitrate("-3M").is_err());
+        assert!(parse_bitrate("199").is_err());
+        assert!(parse_bitrate("101M").is_err());
+        // 报错文案要直接告诉用户能怎么写。
+        let message = parse_bitrate("abc").unwrap_err();
+        assert!(message.contains("3000k"), "错误文案没给写法：{message}");
     }
 
     #[test]

@@ -88,6 +88,28 @@ impl PlayerApp {
         total
     }
 
+    /// 跳过正在跑的那一个：杀掉进程、删半成品，队列接着跑下一个。
+    ///
+    /// 与 [`Self::cancel_proxy_queue`] 的区别：那个是整队作废，这个只是这一条不做了。
+    pub(crate) fn skip_current_proxy(&mut self, cx: &mut Context<Self>) {
+        let Some(running) = self
+            .proxy_queue
+            .as_mut()
+            .and_then(|queue| queue.running.take())
+        else {
+            return;
+        };
+        running.job.cancel();
+        if let Some(queue) = self.proxy_queue.as_mut() {
+            queue.done += 1;
+            queue.failed.push((running.name, "已跳过".to_string()));
+        }
+        // 代次一变，这条迟到的完成事件就碰不到队列了（否则会把下一条的状态顶掉）。
+        self.proxy_queue_generation += 1;
+        self.start_next_proxy(cx);
+        cx.notify();
+    }
+
     /// 取消整队：正在跑的那个杀掉并删半成品，排队的直接丢掉。
     pub(crate) fn cancel_proxy_queue(&mut self, cx: &mut Context<Self>) {
         let Some(queue) = self.proxy_queue.take() else {
@@ -121,6 +143,8 @@ impl PlayerApp {
             output: proxy_core::output_path(&task.input),
             duration: task.duration,
             quality: queue.quality,
+            // 队列没有逐条的参数面板，码率一律用档位自带的；要自定义就单条走对话框。
+            max_bitrate: queue.quality.max_bitrate(),
         };
         let (tx, mut rx) = futures::channel::mpsc::unbounded();
         match ProxyJob::start(request, tx) {

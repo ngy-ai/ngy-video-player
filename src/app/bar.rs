@@ -637,7 +637,7 @@ impl PlayerApp {
             BarAction::EditAudio => self.open_remux_dialog(EditTarget::Audio, window, cx),
             BarAction::EditSubtitle => self.open_remux_dialog(EditTarget::Subtitle, window, cx),
             BarAction::EditMetadata => self.open_metadata_dialog(window, cx),
-            BarAction::MakeProxy => self.open_proxy_dialog(cx),
+            BarAction::MakeProxy => self.open_proxy_dialog(window, cx),
             BarAction::ShowScope => self.open_scope_dialog(cx),
             BarAction::ShowScenes => self.open_scenes_dialog(cx),
             BarAction::MulticamExport => self.open_multicam_dialog(cx),

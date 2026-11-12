@@ -1,10 +1,14 @@
 //! 生成代理文件的确认 / 进度对话框。
 //!
-//! 代理是一次性的派生文件，不需要像裁切那样先选区间和参数：点开、确认、
-//! 等几秒到几分钟即可。所以这里只有一个按钮和一个进度条。
+//! 代理是一次性的派生文件，不需要像裁切那样先选区间和参数：点开、选档、确认、
+//! 等几秒到几分钟即可。
+//!
+//! 两个可调项：**规格档**（分辨率与 CRF）和**码率上限**（留空就用档位自带的）。
 
 use super::*;
 use crate::proxy::{self as proxy_core, ProxyEvent, ProxyJob, ProxyOutcome, ProxyQuality};
+use gpui_kit::Subscription;
+use gpui_kit::component::input::{Input, InputState};
 use std::path::Path;
 
 /// 档位 chip 的元素 id（`chip` 要 `&'static str`，档位是编译期就定下的三档）。
@@ -35,21 +39,47 @@ pub(super) struct ProxyDialog {
     ///
     /// 从素材库进来的素材与当前播放的文件无关，换片不该把它关掉。
     follow_playing: bool,
+    /// 码率上限输入框（kbps）。留空表示用档位自带的那一档。
+    bitrate_input: Entity<InputState>,
+    /// 从输入框解析出来的码率上限；`None` 表示「自动」。
+    bitrate: Option<u32>,
+    /// 输入框里的写法不合法时给出的提示，非空时「开始生成」不可点。
+    bitrate_error: Option<String>,
+    /// 输入框的观察者。丢掉它观察就没了，输入框还能敲但没人收。
+    _bitrate_changes: Subscription,
     state: ProxyState,
     job: Option<Arc<ProxyJob>>,
 }
 
+/// 这次要写到哪个文件：已经有代理就原地覆盖，没有就按命名规则算落点。
+///
+/// 拆成自由函数是为了能单测——对话框本身捏着 `Entity<InputState>`，测试里造不出来。
+fn output_for(path: &Path, overwrite: Option<&Path>) -> PathBuf {
+    overwrite
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| proxy_core::output_path(path))
+}
+
 impl ProxyDialog {
-    /// 这次要写到哪个文件。
     fn output(&self) -> PathBuf {
-        self.overwrite
-            .clone()
-            .unwrap_or_else(|| proxy_core::output_path(&self.path))
+        output_for(&self.path, self.overwrite.as_deref())
+    }
+}
+
+/// 输入框里的码率：空串表示「自动」（用档位自带的那一档），其余交给 `parse_bitrate`。
+fn parse_bitrate_field(text: &str) -> (Option<u32>, Option<String>) {
+    if text.trim().is_empty() {
+        (None, None)
+    } else {
+        match proxy_core::parse_bitrate(text) {
+            Ok(kbps) => (Some(kbps), None),
+            Err(message) => (None, Some(message)),
+        }
     }
 }
 
 impl PlayerApp {
-    pub(super) fn open_proxy_dialog(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn open_proxy_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.proxy.is_some() {
             self.close_proxy_dialog(cx);
             return;
@@ -69,13 +99,18 @@ impl PlayerApp {
             cx.notify();
             return;
         }
-        self.open_proxy_dialog_at(path, self.snapshot.duration, true, cx);
+        self.open_proxy_dialog_at(path, self.snapshot.duration, true, window, cx);
     }
 
     /// 给素材库里的某个素材生成代理：时长与有没有画面都来自探测结果。
     ///
     /// 代理丢了（文件被删 / 挪走）也走这里重新生成——落点还是同一个文件名规则。
-    pub(super) fn open_proxy_dialog_for_asset(&mut self, id: AssetId, cx: &mut Context<Self>) {
+    pub(super) fn open_proxy_dialog_for_asset(
+        &mut self,
+        id: AssetId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.proxy.is_some() {
             self.close_proxy_dialog(cx);
             return;
@@ -102,7 +137,7 @@ impl PlayerApp {
             cx.notify();
             return;
         }
-        self.open_proxy_dialog_at(path, duration, false, cx);
+        self.open_proxy_dialog_at(path, duration, false, window, cx);
     }
 
     fn open_proxy_dialog_at(
@@ -110,6 +145,7 @@ impl PlayerApp {
         path: PathBuf,
         duration: f64,
         follow_playing: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         // 代理与其它模态 / 面板一样互斥：叠着会抢按键，也会挡住进度条。
@@ -127,6 +163,23 @@ impl PlayerApp {
         } else {
             crate::timeline::find_proxy(&path, |candidate| candidate.exists())
         };
+        // 码率留空 = 自动（跟着档位走）；填了就按填的封顶。输入即时解析，
+        // 写错了按钮直接变灰并给出提示，不让它跑到 ffmpeg 那一步才失败。
+        let bitrate_input = cx.new(|cx| InputState::new(window, cx).placeholder("自动"));
+        let bitrate_changes = cx.observe(&bitrate_input, |this, state, cx| {
+            let text = state.read(cx).value().to_string();
+            let Some(dialog) = this.proxy.as_mut() else {
+                return;
+            };
+            let (bitrate, error) = parse_bitrate_field(&text);
+            // 光标移动也会触发通知，值没变就不重绘。
+            if dialog.bitrate == bitrate && dialog.bitrate_error == error {
+                return;
+            }
+            dialog.bitrate = bitrate;
+            dialog.bitrate_error = error;
+            cx.notify();
+        });
         self.proxy_generation += 1;
         self.proxy = Some(ProxyDialog {
             generation: self.proxy_generation,
@@ -135,6 +188,10 @@ impl PlayerApp {
             quality: ProxyQuality::default(),
             overwrite,
             follow_playing,
+            bitrate_input,
+            bitrate: None,
+            bitrate_error: None,
+            _bitrate_changes: bitrate_changes,
             state: ProxyState::Idle,
             job: None,
         });
@@ -181,11 +238,18 @@ impl PlayerApp {
         if !matches!(dialog.state, ProxyState::Idle | ProxyState::Failed(_)) {
             return;
         }
+        if dialog.bitrate_error.is_some() {
+            return;
+        }
         let request = proxy_core::ProxyRequest {
             output: dialog.output(),
             input: dialog.path.clone(),
             duration: dialog.duration,
             quality: dialog.quality,
+            // 留空就用档位自带的码率上限。
+            max_bitrate: dialog
+                .bitrate
+                .unwrap_or_else(|| dialog.quality.max_bitrate()),
         };
         let generation = dialog.generation;
 
@@ -335,6 +399,41 @@ impl PlayerApp {
             )
             .child(
                 div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(text_faint())
+                            .child("码率上限"),
+                    )
+                    .child(
+                        div()
+                            .w(px(110.0))
+                            .child(Input::new(&dialog.bitrate_input).id("proxy-bitrate")),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(if dialog.bitrate_error.is_some() {
+                                ui::danger()
+                            } else {
+                                text_faint()
+                            })
+                            .whitespace_normal()
+                            .child(match (&dialog.bitrate, &dialog.bitrate_error) {
+                                (Some(kbps), _) => format!("{kbps} kbps（2 倍作缓冲）"),
+                                (None, Some(error)) => error.clone(),
+                                (None, None) => format!(
+                                    "留空 = 自动（{} kbps），可写 3M 或 3000k",
+                                    dialog.quality.max_bitrate()
+                                ),
+                            }),
+                    ),
+            )
+            .child(
+                div()
                     .text_size(px(11.0))
                     .text_color(text_faint())
                     .whitespace_normal()
@@ -386,7 +485,8 @@ impl PlayerApp {
                 .child(primary_button(
                     "proxy-start",
                     "开始生成",
-                    true,
+                    // 码率写错了就先别让它跑：ffmpeg 那边报错要等半天才看得懂。
+                    dialog.bitrate_error.is_none(),
                     cx.listener(|this, _: &ClickEvent, _window, cx| {
                         this.start_proxy(cx);
                     }),
@@ -501,19 +601,6 @@ impl PlayerApp {
 mod tests {
     use super::*;
 
-    fn dialog(input: PathBuf, overwrite: Option<PathBuf>) -> ProxyDialog {
-        ProxyDialog {
-            generation: 1,
-            path: input,
-            duration: 60.0,
-            quality: ProxyQuality::P480,
-            overwrite,
-            follow_playing: false,
-            state: ProxyState::Idle,
-            job: None,
-        }
-    }
-
     #[test]
     fn 已有代理时原地覆盖() {
         // 目录不建出来：`output_path` 只做存在性判断，落点一定是无编号的那个。
@@ -522,10 +609,20 @@ mod tests {
         let expected = dir.join("a.proxy.mp4");
 
         // 已经有代理：写到原来那个文件，不攒 `(2)`。
-        let existing = dialog(input.clone(), Some(expected.clone()));
-        assert_eq!(existing.output(), expected);
+        assert_eq!(output_for(&input, Some(&expected)), expected);
         // 代理丢了（或从来没生成过）：按命名规则算落点。
-        let fresh = dialog(input, None);
-        assert_eq!(fresh.output(), expected);
+        assert_eq!(output_for(&input, None), expected);
+    }
+
+    #[test]
+    fn 码率输入框留空就是自动() {
+        // 空 / 只有空白都当作「用档位默认」，不报错。
+        assert_eq!(parse_bitrate_field(""), (None, None));
+        assert_eq!(parse_bitrate_field("   "), (None, None));
+        // 写对了给数字，写错了给提示（`start_proxy` 靠这个提示拦住任务）。
+        assert_eq!(parse_bitrate_field("3M"), (Some(3000), None));
+        let (bitrate, error) = parse_bitrate_field("很多");
+        assert_eq!(bitrate, None);
+        assert!(error.is_some());
     }
 }

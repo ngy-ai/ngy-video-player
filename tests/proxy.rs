@@ -42,6 +42,7 @@ fn 生成一份代理文件() {
         output: output.clone(),
         duration: 3.0,
         quality: ngy_video_player::proxy::ProxyQuality::P720,
+        max_bitrate: ngy_video_player::proxy::ProxyQuality::P720.max_bitrate(),
     };
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
     let _job = ProxyJob::start(request, tx).expect("启动代理失败");

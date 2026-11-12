@@ -104,8 +104,8 @@ impl PlayerApp {
                     "生成代理…"
                 },
                 true,
-                cx.listener(move |this, _: &ClickEvent, _window, cx| {
-                    this.open_proxy_dialog_for_asset(id, cx);
+                cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.open_proxy_dialog_for_asset(id, window, cx);
                 }),
             ))
         } else if missing > 0 {
@@ -129,6 +129,8 @@ impl PlayerApp {
         };
 
         let queue_status: Option<AnyElement> = self.proxy_queue.as_ref().map(|queue| {
+            // 「跳过」只杀当前这一条，队列接着往下走；「取消」是整队作废。
+            let busy = queue.running.is_some();
             let running = queue
                 .running
                 .as_ref()
@@ -150,8 +152,16 @@ impl PlayerApp {
                         .child(format!("补代理 {}/{} · {running}", queue.done, queue.total)),
                 )
                 .child(settings_button(
+                    "library-proxy-skip",
+                    "跳过",
+                    busy,
+                    cx.listener(|this, _: &ClickEvent, _window, cx| {
+                        this.skip_current_proxy(cx);
+                    }),
+                ))
+                .child(settings_button(
                     "library-proxy-cancel",
-                    "取消",
+                    "全取消",
                     true,
                     cx.listener(|this, _: &ClickEvent, _window, cx| {
                         this.cancel_proxy_queue(cx);
