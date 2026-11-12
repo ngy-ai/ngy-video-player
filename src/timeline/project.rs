@@ -11,6 +11,7 @@
 
 use crate::timeline::{
     AssetId, AssetState, Id, MediaInfo, MediaStamp, Rational, Sequence, SequenceSpec, Tick,
+    TrackKind,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -96,6 +97,10 @@ pub struct UiState {
     pub zoom: Option<f32>,
     /// 时间线左边界对应的时间（秒）。
     pub scroll: f64,
+    /// 视频素材的编辑目标轨。`None` 表示按「同类里第一条没锁的」挑。
+    pub target_video: Option<Id>,
+    /// 音频素材的编辑目标轨，规则同上。
+    pub target_audio: Option<Id>,
 }
 
 impl UiState {
@@ -144,6 +149,28 @@ impl UiState {
     pub fn clear_range(&mut self) {
         self.in_point = None;
         self.out_point = None;
+    }
+
+    /// 某一类的编辑目标轨。字幕轨没有目标（字幕条目自带归属）。
+    pub fn target(&self, kind: TrackKind) -> Option<Id> {
+        match kind {
+            TrackKind::Video => self.target_video,
+            TrackKind::Audio => self.target_audio,
+            TrackKind::Subtitle => None,
+        }
+    }
+
+    /// 切换某一类的编辑目标。点同一条轨就是取消（回到 `None`）。
+    ///
+    /// 返回切换后的值：`Some(id)` 表示这条轨成了目标，`None` 表示回到自动挑选。
+    pub fn toggle_target(&mut self, kind: TrackKind, id: Id) -> Option<Id> {
+        let slot = match kind {
+            TrackKind::Video => &mut self.target_video,
+            TrackKind::Audio => &mut self.target_audio,
+            TrackKind::Subtitle => return None,
+        };
+        *slot = if *slot == Some(id) { None } else { Some(id) };
+        *slot
     }
 }
 

@@ -21,6 +21,7 @@ mod project;
 mod spec;
 mod speed;
 mod subtitle;
+mod targets;
 mod three_point;
 mod time;
 pub mod timecode;
@@ -60,7 +61,10 @@ pub use subtitle::{
     SubtitlePosition, SubtitleStyle, ass_script as subtitle_ass_script, at as subtitle_at,
     items as subtitle_items,
 };
-pub use three_point::{ThreePoint, ThreePointError, three_point};
+pub use targets::resolve_target;
+pub use three_point::{
+    FourPoint, FourPointError, FourPointTrim, ThreePoint, ThreePointError, four_point, three_point,
+};
 pub use time::{MICROS_PER_SECOND, Rational, Tick};
 pub use transition::{
     DEFAULT_TRANSITION, MAX_TRANSITION, MIN_TRANSITION, TransitionApplied, TransitionError,

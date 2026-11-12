@@ -50,7 +50,9 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                    `audio.rs` 是每条音频轨一路纯音频 mpv 实例的多路出声）、
                  library（工程模式左侧素材库：导入 / 后台探测 / 封面 / 试听原片，
                    `library/drop.rs` 是拖到轨道的落点、兼容性与首尾相接排布）、
-                 source_edit（三点编辑：源入出点、`,` / `.` 落位，与试听分成两笔状态）、
+                 source_edit（三点 / 四点编辑：源入出点、`,` / `.` 落位，工作区两端都定了
+                   走四点并把画面与声音分别排到目标轨，与试听分成两笔状态）、
+                 types（界面自己的小状态类型：横幅、右键菜单、悬停预览、菜单栏条目、MiniState）、
                  history（工程模式右侧编辑历史侧栏）、
                  keys（动作 → 键位串，一处集中）、
                  timeline_effects（片段效果栈面板：加 / 开关 / 换档 / 调序 / 删）、
@@ -123,7 +125,8 @@ src/timeline/ops/subtitle.rs   字幕条目增删改：未锁定的字幕轨 + �
 src/timeline/project.rs  .ngyproj 工程文件：版本迁移、相对素材路径、原子写 + .bak
 src/timeline/project/sequences.rs  多序列：列表 + 当前指针、增删改切换、读盘自愈（ADR 0009）
 docs/adr/0009  工程持有多条序列、界面状态仍只有一份
-src/timeline/three_point.rs  三点编辑的时间换算：源入点 + 源出点 + 时间线入点，缺哪个退化成两点
+src/timeline/three_point.rs  三点 / 四点编辑的时间换算：源入点 + 源出点 + 时间线入点（有四点时按短边裁剪）
+src/timeline/targets.rs  轨道目标：素材的音 / 视频分别落到哪条轨（首选 → 同类第一条没锁的）
 src/timeline/transition.rs  转场编辑：两侧余量、加 / 改 / 去，时长按余量预钳（导出侧再兜底）
 src/timeline/effect.rs  片段效果栈：去隔行 / 降噪 / 锐化 / 防抖 / 插帧 / 水印的滤镜与增删改
 src/timeline/keyframe.rs  片段关键帧：缩放 / 位置 / 不透明度的曲线、求值与 ffmpeg 表达式
@@ -198,10 +201,10 @@ src/timeline/view.rs    时间线视图状态：缩放（1 像素 = 1 帧 ~ 10 �
 
 现状（2026-11-12 用 `[System.IO.File]::ReadAllText($f).Split("`n").Count - 1` 数过；
 `(Get-Content $f).Count` 与 `Measure-Object -Line` 都少数几十到上百行，别再用它们）：
-**还超 700 行的有** `src/app.rs` 870、`src/player/compositor.rs` 753、
-`src/app/timeline_view.rs` 751、`src/playlist.rs` 748、`src/app/overlays.rs` 705，
-下次动它们之前先拆。
-本轮已经拆过的：`app/timeline_preview.rs`（751 → 入口 + `composite` / `playback` / `audio`）、
+**还超 700 行的有** `src/player/compositor.rs` 753、`src/app/timeline_view.rs` 751、
+`src/playlist.rs` 748、`src/app/overlays.rs` 705，下次动它们之前先拆。
+本轮已经拆过的：`app.rs`（870 → 入口 + `app/types.rs`）、
+`app/timeline_preview.rs`（751 → 入口 + `composite` / `playback` / `audio`）、
 `app/timeline_menu.rs`（802 → 入口 + `clip` / `ruler` / `panels`）、`timeline/preview.rs`
 （777 → 入口 + `audio`）、`timeline/model.rs`（749 → 入口 + `track`）、
 `timeline/export/tests.rs`（775 → 入口 + `tests/audio.rs`）。

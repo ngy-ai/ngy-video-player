@@ -237,7 +237,20 @@ impl PlayerApp {
         }
 
         let mute_label = if audio { "静音" } else { "隐藏" };
+        // 编辑目标：三点 / 四点编辑往哪条轨上放。字幕轨没有这一项。
+        let is_target = project.ui.target(track.kind) == Some(id)
+            && track.kind != crate::timeline::TrackKind::Subtitle;
         let mut toggles = div().flex().flex_wrap().gap(px(4.0));
+        if track.kind != crate::timeline::TrackKind::Subtitle {
+            toggles = toggles.child(chip(
+                "track-menu-target",
+                "编辑目标",
+                is_target,
+                cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                    this.toggle_track_target(id, cx);
+                }),
+            ));
+        }
         // 独奏只给音频轨：画面是叠出来的，一条视频轨「独奏」没有定义。
         if audio {
             toggles = toggles.child(chip(

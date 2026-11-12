@@ -50,6 +50,27 @@ impl PlayerApp {
         let audio = track.kind == crate::timeline::TrackKind::Audio;
         let gain_note =
             (audio && (track.normalized_gain() - 1.0).abs() > 1e-3).then(|| track.gain_label());
+        // 编辑目标：三点 / 四点编辑往哪条轨上放。字幕轨没有目标（条目自带归属）。
+        let targetable = track.kind != crate::timeline::TrackKind::Subtitle;
+        let is_target = self
+            .project
+            .as_ref()
+            .and_then(|project| project.ui.target(track.kind))
+            == Some(track_id);
+        let target_icon = if is_target {
+            IconName::Pin
+        } else {
+            IconName::PinOff
+        };
+        let target_tip = if is_target {
+            format!(
+                "取消「{}」的目标标记（之后回到自动挑{}轨）",
+                track.name,
+                track.kind.label()
+            )
+        } else {
+            format!("把「{}」设成{}素材的目标轨", track.name, track.kind.label())
+        };
 
         let mut name_row = div()
             .flex()
@@ -103,7 +124,7 @@ impl PlayerApp {
             .border_b_1()
             .border_color(gpui_kit::rgb(0x22222a))
             // 右键任意位置开轨道菜单：音量 / 独奏 / 静音 / 锁定。轨道头就这么窄，
-            // 再塞第四个图标会挤成一排看不出含义的小点。
+            // 再往下塞图标会挤成一排看不出含义的小点——目标是最后一个常驻开关。
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
@@ -117,6 +138,18 @@ impl PlayerApp {
                     .flex()
                     .items_center()
                     .gap(px(2.0))
+                    // 目标标记：图钉钉住的轨就是三点 / 四点编辑的落点。
+                    .children(targetable.then(|| {
+                        ui::icon_toggle_small(
+                            format!("track-target-{}", track_id.raw()),
+                            target_icon,
+                            is_target,
+                            target_tip,
+                            cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                                this.toggle_track_target(track_id, cx);
+                            }),
+                        )
+                    }))
                     .child(ui::icon_toggle_small(
                         format!("track-mute-{}", track_id.raw()),
                         mute_icon,

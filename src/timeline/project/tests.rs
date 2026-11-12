@@ -110,6 +110,44 @@ fn 入出点成对才有效且顺序不对会清掉另一端() {
 }
 
 #[test]
+fn 编辑目标按轨道类型分开存且再点一次取消() {
+    let mut ui = UiState::default();
+    let video = Id::new(3);
+    let audio = Id::new(4);
+    assert_eq!(ui.target(TrackKind::Video), None, "默认没有目标");
+
+    assert_eq!(ui.toggle_target(TrackKind::Video, video), Some(video));
+    assert_eq!(ui.target(TrackKind::Video), Some(video));
+    assert_eq!(ui.target(TrackKind::Audio), None, "视频目标不该串到音频上");
+
+    // 点同一条轨：取消，回到「自动挑」。
+    assert_eq!(ui.toggle_target(TrackKind::Video, video), None);
+    assert_eq!(ui.target(TrackKind::Video), None);
+
+    ui.toggle_target(TrackKind::Audio, audio);
+    // 视频 / 音频各记各的。
+    ui.toggle_target(TrackKind::Video, video);
+    assert_eq!(ui.target(TrackKind::Audio), Some(audio));
+    assert_eq!(ui.target(TrackKind::Video), Some(video));
+
+    // 字幕轨没有目标这一说：调用它返回 None，也不会改掉别的目标。
+    assert_eq!(ui.toggle_target(TrackKind::Subtitle, Id::new(9)), None);
+    assert_eq!(ui.target(TrackKind::Subtitle), None);
+    assert_eq!(ui.target(TrackKind::Video), Some(video));
+
+    // 存进 JSON 再读回来：跟着工程存盘。
+    let text = serde_json::to_string(&ui).expect("序列化");
+    let back: UiState = serde_json::from_str(&text).expect("反序列化");
+    assert_eq!(back.target(TrackKind::Video), Some(video));
+    assert_eq!(back.target(TrackKind::Audio), Some(audio));
+    // 老工程没有这两个键：读出来是「没目标」，不会瞎指一条轨。
+    let legacy = r#"{"playhead":0,"selected":[],"scroll":0.0}"#;
+    let back: UiState = serde_json::from_str(legacy).expect("老工程");
+    assert_eq!(back.target(TrackKind::Video), None);
+    assert_eq!(back.target(TrackKind::Audio), None);
+}
+
+#[test]
 fn 入出点按像素容差清除() {
     let mut ui = UiState::default();
     // 8 像素/秒的默认缩放下，一个像素就是 125 毫秒。

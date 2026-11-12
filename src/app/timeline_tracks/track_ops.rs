@@ -114,6 +114,38 @@ impl PlayerApp {
         self.delete_track_now(track, cx);
     }
 
+    /// 切换轨道的编辑目标。目标只影响「素材放哪」，不改序列内容，所以不落撤销栈。
+    ///
+    /// 字幕轨没有目标：字幕条目自带归属轨道，不需要「下一段放哪」。
+    pub(crate) fn toggle_track_target(&mut self, track: Id, cx: &mut Context<Self>) {
+        let outcome = {
+            let Some(project) = self.project.as_mut() else {
+                return;
+            };
+            let Some((kind, name)) = project
+                .sequence()
+                .track(track)
+                .map(|target| (target.kind, target.name.clone()))
+            else {
+                return;
+            };
+            if kind == crate::timeline::TrackKind::Subtitle {
+                None
+            } else {
+                let target = project.ui.toggle_target(kind, track);
+                Some(match target {
+                    Some(_) => format!("「{name}」成了{}目标轨：素材会落到这里", kind.label()),
+                    None => format!("取消「{name}」的目标标记，回到自动挑{}轨", kind.label()),
+                })
+            }
+        };
+        match outcome {
+            Some(message) => self.flash(message),
+            None => self.flash("字幕轨不能当编辑目标：字幕条目自带归属"),
+        }
+        cx.notify();
+    }
+
     /// 设置轨道音量（线性增益）。值没变就不落撤销、不刷提示。
     ///
     /// 改完立刻刷新一次预览：音频实例是按「主音量 × 轨道增益」算的，要当场听见。
