@@ -208,7 +208,24 @@ impl PlayerApp {
                         this.child(div().text_color(ui::accent()).child(label))
                     })
                     .child(format_time(duration.secs()))
-                    .child(format_time_precise(playhead))
+                    // 播放头读数：秒数旁边给出时间码（`HH:MM:SS:FF`，NTSC 走丢帧），
+                    // 点一下就是「跳到时间码」——这是时间码在界面上唯一的常驻位置。
+                    .child(ui::text_button_with_tip(
+                        "timeline-timecode",
+                        format!(
+                            "{} · {}",
+                            format_time_precise(playhead),
+                            crate::timeline::timecode::format(
+                                project.ui.playhead,
+                                sequence.fps,
+                                crate::timeline::timecode::prefers_drop_frame(sequence.fps)
+                            )
+                        ),
+                        "播放头（点击跳到时间码）",
+                        cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.open_timecode_dialog(window, cx);
+                        }),
+                    ))
                     .child(format!("{:.1} 像素/秒", self.timeline.zoom())),
             )
             .into_any_element()

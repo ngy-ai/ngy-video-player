@@ -263,6 +263,43 @@ pub fn pill_button_with_tip(
         .into_any_element()
 }
 
+/// 纯文字的点击读数：标题条上的播放头时间码用它。
+///
+/// 与 [`pill_button_with_tip`] 的区别是没有图标、更矮：它显示的是**当前值**，
+/// 点一下跳到那个值的新输入（「跳到时间码」）。
+pub fn text_button_with_tip(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    tip: impl Into<SharedString>,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    let tip = tip.into();
+
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .h(px(22.0))
+        .px(px(5.0))
+        .rounded(px(6.0))
+        .cursor(CursorStyle::PointingHand)
+        .hover(|style| style.bg(surface_hover()).rounded(px(6.0)))
+        .tooltip(tip_builder(tip))
+        .child(
+            div()
+                .text_size(px(11.0))
+                .text_color(text())
+                .child(label.into()),
+        )
+        .on_click(
+            move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
+                cx.stop_propagation();
+                on_click(event, window, cx);
+            },
+        )
+        .into_any_element()
+}
+
 // ---------------------------------------------------------------------------
 // 时间
 // ---------------------------------------------------------------------------
