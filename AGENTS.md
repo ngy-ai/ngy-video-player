@@ -21,6 +21,7 @@ cargo run --release -- video.mkv  # 运行
 cargo test                        # 全部测试（不需要 ffmpeg）
 cargo test --test playlist        # 单个测试文件
 cargo test -- --ignored           # 端到端测试：需要本机 ffmpeg，默认忽略
+cargo test --test stress          # 长片压测：2h/300 片段与 3h/4K/1000 片段的结构层预算
 cargo fmt                         # 格式化
 cargo clippy --all-targets        # 静态检查
 ./scripts/fetch-libmpv.sh         # 拉取 libmpv 到 libs/<平台>/
