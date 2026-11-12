@@ -11,6 +11,9 @@ pub mod clipboard;
 pub mod ffmpeg;
 pub mod gpu;
 pub mod open;
+// 截图落点：Windows 的「图片」库可以被重定向，得问系统要真实位置。
+#[cfg(windows)]
+pub mod pictures;
 pub mod reveal;
 pub mod topmost;
 pub mod window;

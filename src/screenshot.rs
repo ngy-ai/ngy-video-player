@@ -13,8 +13,9 @@ use std::sync::Arc;
 fn pictures_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     {
-        let home = std::env::var_os("USERPROFILE").map(PathBuf::from)?;
-        Some(home.join("Pictures").join("影匣截图"))
+        // 「图片」库可以被重定向到别的盘（这台机器就被迁到了 D 盘），拼
+        // `%USERPROFILE%\Pictures` 会让用户在自己的「图片」里找不到截图。
+        Some(crate::platform::pictures::pictures_dir()?.join("影匣截图"))
     }
 
     #[cfg(target_os = "macos")]
