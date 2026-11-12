@@ -107,7 +107,6 @@ pub(super) fn range_duration(value: &Value) -> Tick {
     value.get("duration").map(tick_from).unwrap_or(Tick::ZERO)
 }
 
-
 /// 绝对路径 → `file://` URL。
 ///
 /// 只做「非保留字符以外一律百分号转义」这一件事：Resolve 与 Premiere 都按这个

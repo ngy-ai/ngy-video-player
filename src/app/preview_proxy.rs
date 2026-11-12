@@ -6,6 +6,7 @@
 use std::path::Path;
 
 use super::*;
+use crate::timeline::Id;
 
 impl PlayerApp {
     /// 预览要打开的文件。设置里关掉「预览用代理」时一律原片。
@@ -16,6 +17,41 @@ impl PlayerApp {
             return project.asset_path(asset).map(Path::to_path_buf);
         }
         crate::timeline::preview_for(project, asset).map(|file| file.path().to_path_buf())
+    }
+
+    /// 预览这一刻该打开哪个文件、从哪一秒开始放。
+    ///
+    /// 优先级是 **渲染缓存 > 代理 > 原片**：缓存文件里已经带上了效果、调色与推近，
+    /// 没有缓存时才有必要退回代理（省解码）或原片。缓存的第 0 秒是**片段**的开头，
+    /// 所以要换算成片段内偏移，而不是素材内的时刻。
+    pub(crate) fn preview_media(
+        &self,
+        project: &Project,
+        frame: &crate::timeline::preview::PreviewFrame,
+        at: Tick,
+    ) -> Option<(PathBuf, Tick)> {
+        if let Some(path) = self.render_cache_hit(project, frame.clip) {
+            let clip = project.sequence().clip(frame.clip)?;
+            return Some((path, (at - clip.start).max(Tick::ZERO)));
+        }
+        let path = self.preview_path(project, frame.asset)?;
+        Some((path, frame.source))
+    }
+
+    /// 这个片段有没有可用的渲染缓存文件（M10-T19）。
+    ///
+    /// 只看「文件在不在」：文件名就是指纹，参数一变路径就变，旧文件自然不会命中。
+    pub(crate) fn render_cache_hit(&self, project: &Project, clip: Id) -> Option<PathBuf> {
+        if !self.settings.render_cache {
+            return None;
+        }
+        let sequence = project.sequence();
+        let clip = sequence.clip(clip)?;
+        if !crate::timeline::worth_caching(clip) {
+            return None;
+        }
+        let path = crate::timeline::cache_path(&self.render_cache_dir(), project, sequence, clip);
+        path.exists().then_some(path)
     }
 
     /// 这个素材在预览里是不是正在用代理。时间线上据此打「代理」标记。

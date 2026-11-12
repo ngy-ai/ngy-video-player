@@ -8,6 +8,7 @@
 //! 禁止用 `f64` 秒做累加、比较或存盘——错一帧的 bug 在时间线上无法调试。
 
 pub mod autosave;
+mod cache;
 mod color;
 mod effect;
 mod export;
@@ -31,6 +32,10 @@ mod transition;
 mod undo;
 mod view;
 
+pub use cache::{
+    CACHE_SUFFIX, CacheEntry, DEFAULT_LIMIT_MB, DIR_NAME as CACHE_DIR_NAME, MAX_LIMIT_MB,
+    MIN_LIMIT_MB, cache_path, cache_plan, size_label, total_bytes, trim_plan, worth_caching,
+};
 pub use color::{COLOR_RANGE, COLOR_STEP, ColorGrade};
 pub use effect::{
     Effect, EffectKind, EffectParams, Knob, add_effect, cycle_knob, filter_chain as effect_chain,

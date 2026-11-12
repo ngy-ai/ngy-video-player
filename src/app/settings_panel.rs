@@ -9,6 +9,7 @@
 
 mod about;
 mod associations;
+mod cache;
 mod panel;
 mod picture;
 mod playback;

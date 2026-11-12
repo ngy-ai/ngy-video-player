@@ -279,6 +279,11 @@ impl PlayerApp {
                 items.push(BarItem::Entry(
                     BarEntry::new("设置…", OpenSettings(None)).checked(self.show_settings),
                 ));
+                // 剪片时最常调的是缓存，给个直达入口省得先开窗口再找页签。
+                items.push(BarItem::Entry(BarEntry::new(
+                    "渲染缓存…",
+                    OpenSettings(Some(SettingsTab::Cache)),
+                )));
                 items.push(BarItem::Separator);
                 items.push(BarItem::Entry(
                     BarEntry::new("设为默认视频播放器…", SetAsDefaultPlayer).enabled(supported),

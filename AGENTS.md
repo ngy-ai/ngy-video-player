@@ -59,6 +59,10 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                    覆盖写代理前把预览从该文件上撤下来；规则本身在 `timeline::proxy`）、
                  proxy_queue（批量补代理：素材库里「比序列大、还没有代理」的串行队列，
                    进度与取消在素材库底栏，换工程时整队作废）、
+                 render_cache_queue（渲染缓存队列：把「有效果 / 调色 / 关键帧」的片段按导出
+                   滤镜链渲成 `<素材>-<指纹>.cache.mp4`，一次一条，进度在设置窗口那一页）、
+                 render_cache_queue（渲染缓存队列：把「有效果 / 调色 / 关键帧」的片段按导出
+                   滤镜链渲成 `<素材>-<指纹>.cache.mp4`，一次一条，进度在设置窗口那一页）、
                  library（工程模式左侧素材库：导入 / 后台探测 / 封面 / 试听原片，
                    `library/drop.rs` 是拖到轨道的落点、兼容性与首尾相接排布）、
                  source_edit（三点 / 四点编辑：源入出点、`,` / `.` 落位，工作区两端都定了
@@ -87,7 +91,8 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  multicam（双机位并排导出对话框）、scope（示波器）、
                  scenes（镜头分割）、overlays、mini、render、format、constants、
                  widgets（模态外壳、按钮、互斥 chip 等通用小件）、
-                 settings_panel/（统一设置窗口：tabs + 各标签页 + 恢复默认）
+                 settings_panel/（统一设置窗口：tabs + 各标签页 + 恢复默认；
+                   `cache` 是渲染缓存的开关、上限与补缓存队列）
 src/ui.rs        配色、图标按钮、时间格式、等比画面
 src/formats.rs   扩展名清单（文件过滤器 + 拖入判断）
 src/clip.rs      裁切片段：时间解析、区间校验、ffmpeg 任务与进度
@@ -148,6 +153,8 @@ src/timeline/keyframe.rs  片段关键帧：缩放 / 位置 / 不透明度的曲
 src/timeline/color.rs  片段调色：亮度 / 对比度 / 饱和度 / 色温与 3D LUT 的滤镜映射
 src/timeline/subtitle.rs  字幕条目与样式、预览取字；`subtitle/ass.rs` 生成交给 libass 的 ASS
 src/timeline/otio.rs  OpenTimelineIO 交换：export（序列 → JSON）、import（JSON → 中间结构）
+src/timeline/cache.rs  预览渲染缓存：指纹、落点、LRU 清理计划、单片段渲染计划
+src/timeline/cache.rs  预览渲染缓存：指纹、落点、LRU 清理计划、单片段渲染计划
 src/timeline/export.rs  序列导出：`ExportPlan`、`ExportSettings`、字幕附件与 `render-presets.json` 预设
 src/export/task.rs  导出进程：临时 ASS 落盘 / 清理、软字幕按容器选编码器、进度与取消
 src/timeline/undo.rs    撤销 / 重做：状态快照栈，一次操作一步，上限 200 步

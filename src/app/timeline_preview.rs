@@ -72,10 +72,11 @@ impl PlayerApp {
             self.send(Command::SetPaused(true));
             return false;
         };
-        let Some(path) = self.preview_path(project, frame.asset) else {
+        // 缓存 / 代理 / 原片的选择在 `preview_media` 里；带缓存时时间换成片段内偏移。
+        let Some((path, source_tick)) = self.preview_media(project, &frame, at) else {
             return false;
         };
-        let source = frame.source.secs();
+        let source = source_tick.secs();
 
         if self.timeline_preview.as_deref() != Some(path.as_path()) {
             self.timeline_preview = Some(path.clone());
@@ -126,10 +127,10 @@ impl PlayerApp {
             }
             return;
         };
-        let Some(path) = self.preview_path(project, frame.asset) else {
+        let Some((path, source_tick)) = self.preview_media(project, &frame, at) else {
             return;
         };
-        let source = frame.source.secs();
+        let source = source_tick.secs();
 
         if self.timeline_preview.as_deref() != Some(path.as_path()) {
             self.timeline_preview = Some(path.clone());
@@ -166,7 +167,7 @@ impl PlayerApp {
         {
             return;
         }
-        if preview::out_of_sync(frame.source, self.snapshot.position) {
+        if preview::out_of_sync(source_tick, self.snapshot.position) {
             self.send(Command::SeekAbsolute(source));
             self.timeline_loaded_at = Some(Instant::now());
         }

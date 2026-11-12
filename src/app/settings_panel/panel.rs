@@ -18,6 +18,10 @@ impl PlayerApp {
         self.menu_bar = None;
         // 关联状态要现场读注册表，不能放进每帧都跑的渲染路径。
         self.refresh_association_status();
+        // 缓存占用同理：扫一次目录，别让渲染路径每帧去扫。
+        if self.settings_tab == SettingsTab::Cache {
+            self.refresh_cache_stats();
+        }
     }
 
     pub(in crate::app) fn set_settings_visible(&mut self, visible: bool) {
@@ -47,6 +51,7 @@ impl PlayerApp {
             SettingsTab::Picture => self.picture_page(cx),
             SettingsTab::Video => self.video_page(cx),
             SettingsTab::Playback => self.playback_page(on_top_supported, cx),
+            SettingsTab::Cache => self.cache_page(cx),
             SettingsTab::Associations => self.associations_page(cx),
             SettingsTab::Shortcuts => self.shortcuts_page(),
             SettingsTab::About => self.about_page(),
@@ -214,6 +219,10 @@ impl PlayerApp {
             .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
                 cx.stop_propagation();
                 this.settings_tab = tab;
+                // 占用要现场扫目录：每帧扫会把拖时间线拖成幻灯片，只在真的要看时扫。
+                if tab == SettingsTab::Cache {
+                    this.refresh_cache_stats();
+                }
                 cx.notify();
             }))
             .into_any_element()

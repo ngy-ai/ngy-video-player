@@ -147,6 +147,7 @@ mod proxy;
 mod proxy_queue;
 mod remux;
 mod render;
+mod render_cache_queue;
 mod scenes;
 mod scope;
 mod sequence_dialog;
@@ -193,6 +194,7 @@ use self::project_file::ProjectConfirm;
 use self::proxy::ProxyDialog;
 use self::proxy_queue::ProxyQueue;
 use self::remux::RemuxDialog;
+use self::render_cache_queue::RenderCacheQueue;
 use self::scenes::ScenesDialog;
 use self::scope::ScopeDialog;
 use self::sequence_dialog::{SequenceDialog, SequencePurpose};
@@ -284,6 +286,15 @@ pub struct PlayerApp {
     proxy_queue: Option<ProxyQueue>,
     /// 队列代次。重新排一次之后，上一轮还在路上的事件不再算数。
     proxy_queue_generation: u64,
+    /// 渲染缓存队列（M10-T19）；`None` 表示没在批量渲染。
+    cache_queue: Option<RenderCacheQueue>,
+    /// 队列代次，语义同上。
+    cache_queue_generation: u64,
+    /// 缓存目录的条目快照。只在打开设置页 / 队列收尾 / 清理后刷新，
+    /// 每帧去 `read_dir` 会把拖时间线拖成幻灯片。
+    cache_entries: Vec<crate::timeline::CacheEntry>,
+    /// 缓存目录当前占用（字节）。
+    cache_bytes: u64,
     /// 示波器对话框；`None` 表示没打开。
     scope: Option<ScopeDialog>,
     /// 示波器采样代次，作用同 `clip_generation`。

@@ -15,6 +15,8 @@ pub(in crate::app) enum SettingsTab {
     Video,
     /// 循环模式、置顶策略。
     Playback,
+    /// 预览渲染缓存的开关、上限与补缓存队列。
+    Cache,
     /// 文件关联的注册与撤销。
     Associations,
     /// 键位表。
@@ -24,10 +26,11 @@ pub(in crate::app) enum SettingsTab {
 }
 
 impl SettingsTab {
-    pub(in crate::app) const ALL: [SettingsTab; 6] = [
+    pub(in crate::app) const ALL: [SettingsTab; 7] = [
         SettingsTab::Picture,
         SettingsTab::Video,
         SettingsTab::Playback,
+        SettingsTab::Cache,
         SettingsTab::Associations,
         SettingsTab::Shortcuts,
         SettingsTab::About,
@@ -38,6 +41,7 @@ impl SettingsTab {
             SettingsTab::Picture => "画面设置",
             SettingsTab::Video => "视频设置",
             SettingsTab::Playback => "播放设置",
+            SettingsTab::Cache => "渲染缓存",
             SettingsTab::Associations => "文件关联",
             SettingsTab::Shortcuts => "快捷键设置",
             SettingsTab::About => "关于",
@@ -50,6 +54,7 @@ impl SettingsTab {
             SettingsTab::Picture => IconName::Image,
             SettingsTab::Video => IconName::Monitor,
             SettingsTab::Playback => IconName::Clapperboard,
+            SettingsTab::Cache => IconName::Film,
             SettingsTab::Associations => IconName::Link,
             SettingsTab::Shortcuts => IconName::Keyboard,
             SettingsTab::About => IconName::Info,

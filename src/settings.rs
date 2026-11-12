@@ -356,6 +356,15 @@ pub struct Settings {
     /// 记的是**用户意图**，不是「当前有没有注册」——后者每次现场问操作系统，
     /// 本地缓存一份只会漂移。
     pub maintain_associations: bool,
+    /// 剪辑预览是否改用「渲染缓存」文件（效果 / 调色 / 关键帧压过的片段）。
+    ///
+    /// 默认开：开着预览才看得见效果，关掉只会让预览与成片不一致。缓存文件不存在时
+    /// 照旧放原片，不会因为开了这个开关就黑屏。
+    #[serde(default = "default_render_cache")]
+    pub render_cache: bool,
+    /// 渲染缓存目录的容量上限（MB）。超出后按最旧优先删。
+    #[serde(default = "default_render_cache_limit_mb")]
+    pub render_cache_limit_mb: u64,
 }
 
 impl Default for Settings {
@@ -386,6 +395,8 @@ impl Default for Settings {
             preview_proxy: true,
             auto_proxy: false,
             maintain_associations: true,
+            render_cache: true,
+            render_cache_limit_mb: crate::timeline::DEFAULT_LIMIT_MB,
         }
     }
 }
@@ -420,6 +431,14 @@ fn default_preview_proxy() -> bool {
 
 fn default_auto_proxy() -> bool {
     false
+}
+
+fn default_render_cache() -> bool {
+    true
+}
+
+fn default_render_cache_limit_mb() -> u64 {
+    crate::timeline::DEFAULT_LIMIT_MB
 }
 
 fn default_mini_on_top() -> bool {
