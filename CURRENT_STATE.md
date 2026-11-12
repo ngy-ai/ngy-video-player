@@ -113,8 +113,20 @@ commit**（一步撤销）。为了让 `app.rs` 回到 700 行以内，先把界
 
 ## 已验证
 
-- `cargo test` 全绿（lib 637 通过、5 条 ignored；其余集成测试目标也全过；
-  `cargo fmt`、`cargo clippy --all-targets` 无告警）。
+- `cargo test` 全绿（lib 651 通过、6 条 ignored；其余集成测试目标也全过；
+  `cargo fmt`、`cargo clippy --all-targets` 无告警）。本轮新增：`timeline::otio` 9 条、
+  `timeline::cache` 7 条纯函数 + 1 条 ignored 端到端、`compositor::backend` 3 条、
+  `tests/stress.rs` 6 条（两档长片时间线）。
+- **渲染缓存的端到端真跑过**（`cargo test --lib timeline::cache -- --ignored`）：临时造
+  320x240 测试片 → 带降噪渲成 `<素材>-<指纹>.cache.mp4` → `media::probe` 读出 2.00 秒 →
+  同一组参数再算一次落点相同（也就是会命中）。界面上的按钮没点过。
+- **长片压测的实测数字**（debug 构建，`cargo test --test stress -- --nocapture`）：
+  300 片段 / 2h / 1080p 保存 7ms（167 KB）、打开 7ms；1000 片段 / 3h / 4K 保存 13ms
+  （553 KB）、打开 18ms、导出计划 1ms（6 个输入、滤镜链 152 KB）；自动保存 6ms；
+  缩放 + 标尺 + 吸附 200 次 0ms；撤销栈按上限保留 200 步。
+- **OTIO 往返**：导出 → 导入后片段起点 / 入出点 / 转场（种类与时长）/ 标记 / 字幕 /
+  轨道音量都对得上；手写的 Resolve 风格结构（没有 `metadata.ngy`）也能读，
+  `SMPTE_Dissolve` 落成交叉溶解，变速片段按 `LinearTimeWarp` 排后段。
 - 截图落点改问系统 known folder 之后重跑了上面那套 A/B：截图现在落在
   `D:\360MoveData\Users\admin\Pictures\影匣截图`（脚本里用 `[Environment]::GetFolderPath('MyPictures')`
   找得到），两次结果与改之前一致（854x480 绿 / 3840x2160 红）。`platform::pictures` 还有一条
@@ -705,6 +717,18 @@ commit**（一步撤销）。为了让 `app.rs` 回到 700 行以内，先把界
 - `TODO.md` 被 `.gitignore` 忽略，本地的勾选与说明只在工作区，不进库。
 
 ## 下一步建议
+
+**先定 M10-T02 怎么办**：它是 M10 里唯一没做完的 P0，卡在「没有带独显 + 核显的 Windows 机器
+逐帧比对」。接口（`NGY_COMPOSITE_BACKEND` 与 `Backend` 枚举）与 ADR 0010 已经就位，真实现只
+差 `detect` 里那一臂。按 `TODO.md` 第 4 条规则（上一阶段 P0 没全完就不开下一阶段 P1），
+**P1（T08 / T10 / T11 / T12 / T14）还没开工**——要开工得先决定 T02 是「降级为 P1 并放到
+真机上做」还是「先按阻塞挂着、P1 并行推进」。
+
+**本轮剩下的手工验收**（自动化到不了）：
+- M10-T19：设置窗口「渲染缓存」页点一次「为时间线补缓存」，确认进度在跑、取消能停、
+  「清理缓存」后占用归零；带缓存的片段拖播放头时画面应该带上效果（预览与成片一致）。
+- M10-T21：真素材长跑（3 小时 4K / 1000 片段）的滚动帧率与 8 小时内存曲线。
+- M10-T17：把导出的 `.otio` 拿到 Resolve / Premiere 里打开一次。
 
 **M10-T09 的手工验收**：~~① 4K 素材 + 代理，确认预览走代理~~（已用纯色素材在真窗口验过，
 `tmp/m10t09_proxy.ps1`，见「已验证」）；~~② 关掉开关回到原片~~（同上）；~~③ 导出被拒~~（已有

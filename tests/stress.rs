@@ -11,8 +11,8 @@
 //! 所以任何机器上都能跑，也不占空间。
 
 use ngy_video_player::timeline::{
-    AssetId, ClipItem, Id, Project, Rational, Sequence, Tick, Track, TrackKind, UndoHistory,
-    ViewState, visible_frames, visible_ticks,
+    AssetId, ClipItem, Id, Project, Rational, Sequence, Tick, TrackKind, UndoHistory, ViewState,
+    visible_frames, visible_ticks,
 };
 
 /// 2 小时 / 4 轨 / 300 片段：4 条轨各 75 段，每段 96 秒。
