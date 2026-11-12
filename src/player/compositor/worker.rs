@@ -13,6 +13,7 @@ use std::sync::{
 
 use super::{
     MAX_LAYERS, TICK,
+    backend::{self, Backend},
     handle::{Request, Snapshot, Target},
     layer::{Layer, LayerSpec},
 };
@@ -25,6 +26,9 @@ pub(super) struct Worker {
     layers: Vec<Layer>,
     /// 当前画布尺寸。与目标不一致时重新分配缓冲并补一次 seek（暂停时也得重画）。
     size: (u32, u32),
+    /// 谁负责叠帧。现在只可能是 CPU（ADR 0010），留着这个字段是为了切 GPU 时
+    /// 合成线程的其余部分一行都不用动。
+    backend: Backend,
 }
 
 impl Worker {
@@ -38,6 +42,13 @@ impl Worker {
         for index in 0..MAX_LAYERS {
             layers.push(Layer::new(&api).with_context(|| format!("第 {} 路合成实例", index + 1))?);
         }
+        // `gpu_supported` 现在是常量假：GPU 后端还没实现，写 `true` 等于骗人。
+        let (backend, reason) = backend::detect_from_env(false);
+        if let Some(reason) = reason {
+            log_warn!("{reason}");
+        }
+        log_debug!("多轨合成后端：{}", backend.label());
+
         Ok(Self {
             api,
             events,
@@ -45,6 +56,7 @@ impl Worker {
             pending,
             layers,
             size: (0, 0),
+            backend,
         })
     }
 
@@ -238,6 +250,16 @@ impl Worker {
             return Some((width, height, self.layers[first].buffer.to_bgra()));
         }
         let mut canvas = vec![0u8; width as usize * height as usize * 4];
+        // GPU 分支还没有实现（ADR 0010）：这里两条路都走 CPU，但选路的地方留着，
+        // 将来只需把 `Gpu` 那一臂换成「纹理上传 + compute + 读回」。
+        match self.backend {
+            Backend::Cpu | Backend::Gpu => self.blend_layers(&ready, &mut canvas),
+        }
+        Some((width, height, canvas))
+    }
+
+    /// CPU 混合：自下而上逐层 alpha 合成。
+    fn blend_layers(&self, ready: &[usize], canvas: &mut [u8]) {
         for (order, &index) in ready.iter().enumerate() {
             // 最底下那层是不透明底：拿它开画布，不能再按透明度压暗一次。
             let opacity = if order == 0 {
@@ -245,9 +267,8 @@ impl Worker {
             } else {
                 self.layers[index].opacity
             };
-            self.layers[index].buffer.blend_into(&mut canvas, opacity);
+            self.layers[index].buffer.blend_into(canvas, opacity);
         }
-        Some((width, height, canvas))
     }
 
     /// 把就绪的层自下而上叠成一张图，交给界面。

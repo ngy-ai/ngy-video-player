@@ -18,8 +18,10 @@
 //! 的输出一致。一层都没就绪时什么都不发——界面留着上一帧，比闪一下黑好。
 //!
 //! 文件分工：`handle` 是界面侧句柄与请求枚举，`layer` 是一路 mpv 的加载 / seek /
-//! 渲染，`worker` 是合成线程本体（收请求、叠帧、回传）。
+//! 渲染，`worker` 是合成线程本体（收请求、叠帧、回传），`backend` 是「谁来叠这一帧」的
+//! 选择点（ADR 0010：CPU 现在能用，GPU 接口留着、实现押后）。
 
+mod backend;
 mod handle;
 mod layer;
 mod worker;

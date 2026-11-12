@@ -4,6 +4,11 @@
 
 ## 一句话状态
 
+**M10-T02（GPU 合成后端）阻塞**，只落了接口层：`player/compositor/backend.rs` 抽出
+`Backend::{Cpu, Gpu}` + `detect`（`NGY_COMPOSITE_BACKEND=cpu|gpu`），要 `gpu` 时退回 CPU
+并说明原因；决策与理由写进 `docs/adr/0010`。**没标完成**：验收要在独显 + 核显上逐帧比对
+「与 T01 差 ≤ 2/255」，本机没有这样的环境。
+
 **M10-T21（长片压测）的结构层做完了**：新增 `tests/stress.rs`，两档时间线
 （300 片段 / 2h / 1080p 与 1000 片段 / 3h / 4K），压缩放 + 标尺 + 吸附、保存 / 打开、
 撤销栈上限、自动保存、导出计划。本机实测（debug）：1000 片段 4K 档保存 13ms、打开 18ms、
