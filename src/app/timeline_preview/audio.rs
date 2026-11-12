@@ -47,7 +47,7 @@ impl PlayerApp {
             preview::audio_layers(project.sequence(), at)
                 .into_iter()
                 .filter_map(|layer| {
-                    let path = project.asset_path(layer.asset)?.to_path_buf();
+                    let path = self.preview_path(project, layer.asset)?;
                     Some((layer.track, path, layer.source.secs(), layer.gain))
                 })
                 .collect();

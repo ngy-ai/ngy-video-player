@@ -339,6 +339,12 @@ pub struct Settings {
     pub mirror_h: bool,
     /// 垂直镜像（上下翻转）。
     pub mirror_v: bool,
+    /// 剪辑预览是否自动用代理（素材比序列大、旁边有 `<原名>.proxy.mp4` 时）。
+    ///
+    /// 默认开：4K 素材在 1080p 序列里预览，用原片常常卡成幻灯片。关掉只会让预览变慢，
+    /// 导出永远用原片，与这个开关无关。
+    #[serde(default = "default_preview_proxy")]
+    pub preview_proxy: bool,
     /// 启动时是否自动维护文件关联（把注册项按当前 exe 路径重写一遍）。
     ///
     /// 记的是**用户意图**，不是「当前有没有注册」——后者每次现场问操作系统，
@@ -371,6 +377,7 @@ impl Default for Settings {
             video_rotate: Rotation::None,
             mirror_h: false,
             mirror_v: false,
+            preview_proxy: true,
             maintain_associations: true,
         }
     }
@@ -398,6 +405,10 @@ fn default_playlist_width() -> f32 {
 
 fn default_mini_width() -> f32 {
     400.0
+}
+
+fn default_preview_proxy() -> bool {
+    true
 }
 
 fn default_mini_on_top() -> bool {

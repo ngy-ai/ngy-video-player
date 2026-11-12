@@ -21,7 +21,6 @@ mod audio;
 mod composite;
 mod playback;
 
-use std::path::Path;
 use std::time::{Duration, Instant};
 
 use super::*;
@@ -73,7 +72,7 @@ impl PlayerApp {
             self.send(Command::SetPaused(true));
             return false;
         };
-        let Some(path) = project.asset_path(frame.asset).map(Path::to_path_buf) else {
+        let Some(path) = self.preview_path(project, frame.asset) else {
             return false;
         };
         let source = frame.source.secs();
@@ -127,7 +126,7 @@ impl PlayerApp {
             }
             return;
         };
-        let Some(path) = project.asset_path(frame.asset).map(Path::to_path_buf) else {
+        let Some(path) = self.preview_path(project, frame.asset) else {
             return;
         };
         let source = frame.source.secs();

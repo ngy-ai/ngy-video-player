@@ -55,6 +55,8 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  timeline_preview（工程模式预览：取帧与跟随，`timeline_preview/composite.rs`
                    是多轨合成接管，`playback.rs` 是 J/K/L 变速、播放时钟与 scrub，
                    `audio.rs` 是每条音频轨一路纯音频 mpv 实例的多路出声）、
+                 preview_proxy（预览取文件的唯一入口：读「预览用代理」开关、判断哪段在用代理；
+                   规则本身在 `timeline::proxy`）、
                  library（工程模式左侧素材库：导入 / 后台探测 / 封面 / 试听原片，
                    `library/drop.rs` 是拖到轨道的落点、兼容性与首尾相接排布）、
                  source_edit（三点 / 四点编辑：源入出点、`,` / `.` 落位，工作区两端都定了
@@ -124,6 +126,7 @@ src/timeline/time.rs  Tick（i64 微秒）与 Rational 帧率：全项目唯一�
 src/timeline/spec.rs  序列规格：分辨率预设、帧率表、奇数边校验、按素材推导
 src/timeline/timecode.rs  `HH:MM:SS:FF` 的显示与解析：整帧 / 丢帧（29.97、59.94）、省略短写
 src/timeline/media.rs  素材元信息、文件指纹与过期判断；不含 ffmpeg 调用
+src/timeline/proxy.rs  代理选用规则：素材比序列大且代理在 → 预览用代理；导出拒绝代理素材
 src/timeline/model.rs  序列 → 轨道 → 片段、转场与标记；纯数据，不持有文件路径
 src/timeline/ops.rs    编辑操作纯函数：旧序列进、新序列出，非法操作返回错误
 src/timeline/ops/placement.rs  放置语义：严格插入 / 插入让位 / 覆盖清区（`shift_open`、`clear_range`）

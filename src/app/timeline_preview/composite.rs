@@ -38,7 +38,7 @@ impl PlayerApp {
         let mut specs = Vec::new();
         for layer in &layers[first..] {
             // 素材找不到的层没法解码，直接不叠（画面会缺一层，但不会整幅黑屏）。
-            let Some(path) = project.asset_path(layer.frame.asset) else {
+            let Some(path) = self.preview_path(project, layer.frame.asset) else {
                 continue;
             };
             specs.push(compositor::LayerSpec {

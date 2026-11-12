@@ -228,6 +228,12 @@ impl PlayerApp {
             };
             let clip_id = clip.id;
             let selected = project.ui.selected.contains(&clip_id);
+            // 预览正在用代理的片段打个标记：画面上看到的是低码率副本，导出仍是原片，
+            // 用户需要知道这件事，不然会以为画质掉了。
+            //
+            // 只问选中的那几段：判断要 stat 目录里最多十个候选文件，视口里每段都问一遍，
+            // 播放时每帧就是几百次系统调用。选中一段就看得到答案，够用了。
+            let on_proxy = selected && width > 96.0 && self.uses_proxy(project, clip.asset_id);
             let ghost_name: SharedString = name.clone().into();
             let grab = Rc::new(Cell::new(0.0f32));
             let drag_grab = grab.clone();
@@ -268,6 +274,19 @@ impl PlayerApp {
                             .text_color(gpui_kit::rgba(0xffffffee))
                             .whitespace_nowrap()
                             .child(name)
+                    })
+                    .when(on_proxy, |this| {
+                        this.child(
+                            div()
+                                .ml(px(4.0))
+                                .px(px(3.0))
+                                .rounded(px(3.0))
+                                .bg(gpui_kit::rgba(0x00000055))
+                                .text_size(px(9.0))
+                                .text_color(gpui_kit::rgba(0xffffffff))
+                                .whitespace_nowrap()
+                                .child("代理"),
+                        )
                     })
                     .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
                         // 片段叠在轨道上，不截断的话点片段也会被当成点空白。

@@ -117,6 +117,8 @@ pub enum ExportError {
     UnknownAsset(u64),
     /// 素材文件在打开工程时就已经找不到了。
     MissingAsset(String),
+    /// 素材本身就是代理文件（`*.proxy.mp4`）：导出必须用原片。
+    ProxySource(String),
     /// 工作区（入点 / 出点）夹到序列范围之后是空的。
     EmptyRange,
     /// 记下要导的序列之后，它被从工程里删掉了。
@@ -132,6 +134,10 @@ impl fmt::Display for ExportError {
             Self::MissingAsset(name) => {
                 write!(f, "素材「{name}」找不到了，先把它放回原处或重新链接")
             }
+            Self::ProxySource(name) => write!(
+                f,
+                "素材「{name}」是代理文件（*.proxy.mp4）：代理只给预览用，导出必须换成原片"
+            ),
             Self::EmptyRange => write!(f, "工作区是空的：入点要早于出点"),
             Self::SequenceGone => write!(f, "要导的序列已经被删掉了，重新打开导出面板再选一次"),
         }

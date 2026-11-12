@@ -137,6 +137,7 @@ mod playlist_menu;
 mod playlist_ops;
 mod playlist_sort;
 mod playlist_ui;
+mod preview_proxy;
 mod project_autosave;
 mod project_export;
 mod project_file;

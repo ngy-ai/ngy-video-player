@@ -18,6 +18,7 @@ mod ops;
 pub mod pack;
 pub mod preview;
 mod project;
+mod proxy;
 mod spec;
 mod speed;
 mod subtitle;
@@ -54,6 +55,7 @@ pub use project::{
     Asset, AssetRemoveError, PROJECT_EXTENSION, PROJECT_VERSION, Project, ProjectError,
     SequenceError, UiState,
 };
+pub use proxy::{PreviewFile, find_proxy, is_proxy_file, preview_for};
 pub use spec::{SequenceSpec, SpecError, rate_label};
 pub use speed::{set_hold, set_speed};
 pub use subtitle::{

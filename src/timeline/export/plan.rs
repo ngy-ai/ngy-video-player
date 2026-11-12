@@ -575,6 +575,11 @@ fn input_index(
         .ok_or(ExportError::UnknownAsset(asset_id.raw()))?
         .to_path_buf();
 
+    // 代理只是预览用的低码率副本：宁可在这里拒绝，也不要导出一个 480p 的成片。
+    if crate::timeline::is_proxy_file(&path) {
+        return Err(ExportError::ProxySource(asset.display_name().to_string()));
+    }
+
     if let Some(index) = inputs.iter().position(|existing| existing == &path) {
         return Ok(index);
     }
