@@ -101,6 +101,8 @@ impl PlayerApp {
             asset_drop: None,
             keyframe_drop: None,
             trim_drop: None,
+            trim_window: None,
+            trim_token: 0,
             timeline_menu: None,
             timeline_preview: None,
             timeline_playing: false,

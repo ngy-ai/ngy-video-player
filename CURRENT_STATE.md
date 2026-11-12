@@ -4,12 +4,16 @@
 
 ## 一句话状态
 
-**M10-T07（修剪工具）做到一半：纯操作与两端抓手都有了，双画面修剪窗口与实时预览还没做。**
-新增 `RippleTrimStart` / `RippleTrimEnd`（收头**不动片段起点**、同轨后面的片段补位 / 让位，
-5 条单测）；时间线片段两端各 6 像素抓手，拖动松手落一步撤销，修饰键语义：`Alt` 波纹修剪、
-`Shift` 拖右端滚动编辑、`Alt` 拖中部滑移、`Ctrl`（`⌘`）拖中部滑动，落点按帧对齐（
-`TrimDrag` / `TrimDrop`，修饰键在 `on_drag_move` 里记、松手时用）。缺：拖动中不实时预览
-长度、没有双画面修剪窗口、没有独立工具模式与光标反馈——所以 TODO 里那条**没有打勾**。
+**M10-T07（修剪工具）只差「独立的工具模式」：纯操作、两端抓手、拖动中的落点预览、
+双画面修剪窗口都有了。** 拖动中轨道上画落点竖线 + 时间码；松手后
+`app/trim_window.rs` 弹双画面窗口（切点前后两帧 + 两帧时间码，ffmpeg 单帧导出在后台线程跑，
+`trim_token` 防晚到的帧串窗口，纯音频片段不弹），抓手光标是左右调整。仍缺：独立的修剪
+工具模式（四种语义现在靠 `Alt` / `Shift` / `Ctrl` 区分），所以 TODO 那条还没打勾。
+
+**上一轮（T07 第一步）**：新增 `RippleTrimStart` / `RippleTrimEnd`（收头**不动片段起点**、
+同轨后面的片段补位 / 让位，5 条单测）；时间线片段两端各 6 像素抓手，拖动松手落一步撤销，
+修饰键语义：`Alt` 波纹修剪、`Shift` 拖右端滚动编辑、`Alt` 拖中部滑移、`Ctrl`（`⌘`）拖中部
+滑动，落点按帧对齐（`TrimDrag` / `TrimDrop`，修饰键在 `on_drag_move` 里记、松手时用）。
 
 **上一轮 M10-T06（轨道目标与四点编辑）**：
 轨道头新增图钉：点亮哪条视频 / 音频轨，三点 / 四点编辑就落到哪条（`UiState::target_video` /
@@ -52,8 +56,11 @@ commit**（一步撤销）。为了让 `app.rs` 回到 700 行以内，先把界
 
 ## 已验证
 
-- `cargo test` 全绿（lib 610 通过、5 条 ignored；其余集成测试目标也全过；
+- `cargo test` 全绿（lib 613 通过、5 条 ignored；其余集成测试目标也全过；
   `cargo fmt`、`cargo clippy --all-targets` 无告警）。
+- 修剪窗口的取帧时刻 3 条（`app::trim_window::tests`）：左端修剪取入点前后两帧（序列 5 秒
+  / 素材 2 秒 / 收到 6 秒 → 素材 2.96 与 3.00）、右端修剪取末帧与出点、素材开头附近不会
+  取到负时间。
 - M10-T07 的纯操作 5 条：波纹修剪尾把后面整段往前补（首尾仍严丝合缝）、波纹修剪头让片段
   原位变短并把后面拉过来、往回放会把后面的片段推开、收没了（跨过自己终点 / 收到起点之前 /
   素材入点不够）被拒且原序列不受影响、只动同一条轨（其它轨道不跟着走）。
@@ -284,6 +291,10 @@ commit**（一步撤销）。为了让 `app.rs` 回到 700 行以内，先把界
   里读到的 `modifiers.alt` / `.control` 在 Windows 上是否按预期为真、松手后落点是否真的
   对齐到帧——全部只有编译通过。滑移 / 滑动走 `Slip` / `Slide`（ops 里早就有），但界面这条
   路径从来没跑过；「拖到别的轨上退回普通移动」也只有代码路径。
+- **双画面修剪窗口没在窗口里看过**：`render_trim_window` 的布局、`img()` 显示的尺寸、
+  ffmpeg 单帧导出（`-ss` 在 `-i` 前 + `image2pipe` png）在本机的真实耗时与成败都没测过；
+  BGRA 换序是照封面那套写的，但没人看过这两格的颜色对不对。`trim_token` 的竞态
+  （连剪两次、先发起的那次晚到）只有代码保证。测试只钉住了「该取哪两个时刻」。
 - **转场近似没和成片逐帧比对**：预览是「淡到黑再淡回来」，导出是 `xfade` 交叉溶解，
   两者在同一时刻本来就不一样（README 已写进限制）；只核对了「接缝不是硬切」这一条。
 - **合成的 1080p 帧率没测到**：本机窗口最大只能给到 1280×720 的画布（debug 24–26fps、
@@ -566,9 +577,12 @@ commit**（一步撤销）。为了让 `app.rs` 回到 700 行以内，先把界
 
 ## 下一步建议
 
-**M10-T07 剩下的活**：拖动中的实时长度预览（拖时按 pending 落点画片段边缘）、双画面修剪
-窗口（切点前后两帧 + 两帧时间码，需要一次能取「指定素材时刻」的快照）、抓手与修剪中的光标
-反馈、工具模式与快捷键。做完这四项再按 TODO 的验收逐条核对，才给那条打勾。
+**M10-T07 剩下的活只有一件**：独立的修剪**工具模式**（现在四种语义靠 `Alt` / `Shift` /
+`Ctrl` 区分，没有「选工具 → 直接拖就是该工具」的切换键；光标也只有抓手那一种）。
+做法建议：在 `app/timeline_tracks.rs` 加一个 `TrimTool` 枚举与会话状态（不进工程），
+在 `keys.rs` 里给四个键（如 `B` / `N` / `Y` / `U`，先查有没有被占用），时间线上按工具
+决定 `drop_trim` 走哪个 op、抓手与接缝的光标跟着变；工具指示器画在时间线标题条上。
+做完之后按 TODO 的验收逐条核对，才给那条打勾。
 
 **M10-T06 的手工验收**（自动化到不了）：① 两条视频轨 + 一条音频轨，点第二条视频轨的图钉、
 再点音频轨的图钉，确认同一类只亮一个；② 试听一段带声音的素材，`Shift I` / `Shift O` 圈一段
@@ -586,17 +600,14 @@ commit**（一步撤销）。为了让 `app.rs` 回到 700 行以内，先把界
 
 0. **先把超过 700 行的文件拆掉**（2026-11-12 用 `[System.IO.File]::ReadAllText().Split`
    重数，`(Get-Content).Count` 会少数）：现在还超的有
-   `src/player/compositor.rs` 753、`src/app/timeline_view.rs` 751、`src/playlist.rs` 748、
-   `src/app/overlays.rs` 705。已经拆掉 `app/timeline_preview.rs`、`app/timeline_menu.rs`、
-   `timeline/preview.rs`、`timeline/model.rs`、`timeline/export/tests.rs`、`app.rs`（→
-   `app/types.rs`）六只（拆法照 `timeline/ops.rs`：入口只留类型与分发）。
-   剩下的四只（`compositor.rs` / `timeline_view.rs` / `playlist.rs` / `overlays.rs`）先拆再动，
+   `src/player/compositor.rs` 753、`src/playlist.rs` 748、`src/app/overlays.rs` 705。
+   已经拆掉 `app/timeline_preview.rs`、`app/timeline_menu.rs`、`timeline/preview.rs`、
+   `timeline/model.rs`、`timeline/export/tests.rs`、`app.rs`（→ `app/types.rs`）、
+   `app/timeline_view.rs`（→ `timeline_view/{document,history_ops,zoom,render}.rs`）、
+   `timeline_tracks/lane.rs`（→ `drop_ops.rs`）八只（拆法照 `timeline/ops.rs`：入口只留
+   类型与分发）。剩下的三只（`compositor.rs` / `playlist.rs` / `overlays.rs`）先拆再动，
    别再往上堆。
-1. **M10-T07：修剪工具与修剪窗口**（P0，`ops` 里 `Slip` / `Slide` / `Roll` 三个纯函数已经
-   有了，缺的是界面）。要做的：片段两端的修剪抓手换成按修饰键切 ripple / roll 的工具条、
-   `slip` / `slide` 的拖动入口（现在 ops 有能力但时间线上只有端点拖动与接缝拖动）、
-   双画面修剪窗口（切点前后两帧，`Request::Snapshot` 已经能取任意时刻的画面）、
-   精度到单帧与光标反馈。`timeline_view.rs` 751 行，动之前先拆。
+1. **M10-T07 收尾**：只剩独立的修剪工具模式（见上面「剩下的活」），半天能做完。
 2. **M10-T02：GPU 合成后端**（P0，T01 已完成）。做法照 ADR 0008：把 `player::compositor`
    里的 `blend_into` 换成 D3D11 → wgpu 纹理交换，mpv 那两路继续用 `vo=libmpv` 的 SW 渲染
    （先把像素拿到手，再消除拷贝），接口保持不变——`Compositor::present` /

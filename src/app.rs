@@ -158,6 +158,7 @@ mod timeline_speed;
 mod timeline_subtitle;
 mod timeline_tracks;
 mod timeline_view;
+mod trim_window;
 mod types;
 mod video_area;
 mod widgets;
@@ -192,6 +193,7 @@ use self::timeline_menu::TimelineMenu;
 use self::timeline_preview::TrackAudio;
 use self::timeline_subtitle::SubtitleDialog;
 use self::timeline_tracks::{KeyframeDrop, TimelineDrop, TrimDrop};
+use self::trim_window::TrimWindow;
 use self::widgets::*;
 // 界面自己的小状态类型（横幅、菜单、悬停预览、小窗观察状态……）都在 `types`，
 // 这里一次性接进来；`LaunchOptions` 由此仍然是 `app::LaunchOptions`。
@@ -365,6 +367,10 @@ pub struct PlayerApp {
     keyframe_drop: Option<KeyframeDrop>,
     /// 拖片段两端修剪抓手时算的落点；`None` 表示没在修剪。
     trim_drop: Option<TrimDrop>,
+    /// 双画面修剪窗口。松手后才取帧，点一下关掉。
+    trim_window: Option<TrimWindow>,
+    /// 修剪窗口的代号：晚到的两帧只画到同一个窗口上。
+    trim_token: u64,
     /// 时间线片段上的右键菜单；`None` 表示没展开。
     timeline_menu: Option<TimelineMenu>,
     /// 工程模式预览正在放的那个素材文件。同一个文件只 seek，换文件才重新加载。

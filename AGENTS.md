@@ -49,6 +49,8 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                    `timeline_tracks/label.rs` 是轨道头与轨道右键面板的入口；
                    `timeline_view/` 下 `document` 是打开 / 新建 / 关闭、
                    `history_ops` 是撤销重做、`zoom` 是播放头与缩放、`render` 是整块绘制）、
+                 trim_window（双画面修剪窗口：切点前后两帧 + 时间码，ffmpeg 单帧导出在
+                   后台线程跑，松手后才取帧）、
                  timeline_preview（工程模式预览：取帧与跟随，`timeline_preview/composite.rs`
                    是多轨合成接管，`playback.rs` 是 J/K/L 变速、播放时钟与 scrub，
                    `audio.rs` 是每条音频轨一路纯音频 mpv 实例的多路出声）、

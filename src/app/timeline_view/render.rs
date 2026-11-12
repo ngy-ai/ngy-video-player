@@ -302,6 +302,9 @@ impl PlayerApp {
             }
         }
 
+        // 双画面修剪窗口浮在最上面：它只在刚修剪完时出现，点一下就走。
+        root = root.child(self.render_trim_window(cx));
+
         root.into_any_element()
     }
 }

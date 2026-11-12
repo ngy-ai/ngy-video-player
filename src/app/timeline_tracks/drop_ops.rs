@@ -176,6 +176,8 @@ impl PlayerApp {
                 };
                 self.commit_edit(next, tool);
                 self.flash(message);
+                // 松手之后弹双画面窗口：切点前后两帧 + 两帧时间码。
+                self.open_trim_window(drop.clip, drop.side, cx);
             }
             Err(error) => self.flash(format!("{tool}失败：{error}")),
         }

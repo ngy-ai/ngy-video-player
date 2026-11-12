@@ -320,6 +320,8 @@ impl PlayerApp {
                             .w(px(6.0))
                             // 一直存在、只在悬停时才有颜色：看不见的抓手抓不住。
                             .bg(gpui_kit::rgba(0xffffff1e))
+                            // 两端修剪是左右方向的操作，光标照这个来。
+                            .cursor(gpui_kit::CursorStyle::ResizeLeftRight)
                             .on_drag(
                                 TrimDrag {
                                     clip: clip_id,
@@ -334,6 +336,44 @@ impl PlayerApp {
                                 },
                             ),
                     );
+                }
+            }
+
+            // 修剪中的落点：一条竖线 + 目标时刻。松手之前不改序列，靠这条线告诉用户
+            // 会切到哪一帧；双画面窗口要等松手才取帧（起 ffmpeg 太慢，不能每动一下都跑）。
+            if let Some(drop) = self.trim_drop
+                && project.sequence().clip_track(drop.clip) == Some(track_id)
+            {
+                let x = view.x_of(drop.at.secs());
+                if x >= 0.0 && x <= lane_width {
+                    let fps = project.sequence().fps;
+                    let drop_frame = crate::timeline::timecode::prefers_drop_frame(fps);
+                    lane = lane
+                        .child(
+                            div()
+                                .absolute()
+                                .left(px(x - 1.0))
+                                .top_0()
+                                .bottom_0()
+                                .w(px(2.0))
+                                .bg(ui::accent()),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                // 贴右边时往回收，别把读数挤出轨道。
+                                .left(px((x + 6.0).min((lane_width - 104.0).max(0.0))))
+                                .top(px(4.0))
+                                .h(px(16.0))
+                                .px(px(5.0))
+                                .flex()
+                                .items_center()
+                                .rounded(px(3.0))
+                                .bg(gpui_kit::rgba(0x1b1b24f2))
+                                .text_size(px(10.0))
+                                .text_color(ui::accent())
+                                .child(crate::timeline::timecode::format(drop.at, fps, drop_frame)),
+                        );
                 }
             }
 
