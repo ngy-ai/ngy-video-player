@@ -153,7 +153,11 @@ impl PlayerApp {
             .as_mut()
             .and_then(|project| project.sequence_mut().track_mut(track))
             .map(|target| {
-                target.solo = !target.solo;
+                // 先看类型再改：视频轨上点一下只该给提示，不该在工程里留一个永远不生效的
+                // `solo = true`。
+                if target.kind == crate::timeline::TrackKind::Audio {
+                    target.solo = !target.solo;
+                }
                 (
                     format!(
                         "轨道「{}」{}独奏",

@@ -237,18 +237,19 @@ impl PlayerApp {
         }
 
         let mute_label = if audio { "静音" } else { "隐藏" };
-        let toggles = div()
-            .flex()
-            .flex_wrap()
-            .gap(px(4.0))
-            .child(chip(
+        let mut toggles = div().flex().flex_wrap().gap(px(4.0));
+        // 独奏只给音频轨：画面是叠出来的，一条视频轨「独奏」没有定义。
+        if audio {
+            toggles = toggles.child(chip(
                 "track-menu-solo",
                 "独奏",
                 solo,
                 cx.listener(move |this, _: &ClickEvent, _window, cx| {
                     this.toggle_track_solo(id, cx);
                 }),
-            ))
+            ));
+        }
+        let toggles = toggles
             .child(chip(
                 "track-menu-mute",
                 mute_label,
