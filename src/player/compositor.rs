@@ -305,7 +305,12 @@ impl Layer {
         let deadline = Instant::now() + LOAD_TIMEOUT;
         while Instant::now() < deadline {
             match self.next_event(api, 0.02) {
-                Some(event::FILE_LOADED) => return true,
+                Some(event::FILE_LOADED) => {
+                    // `loadfile replace` 会先给旧文件发一条 `END_FILE(STOP)`，
+                    // 上面那一步会顺手把 `media` 清掉；这里是新文件，补回来。
+                    self.media = Some(path.to_path_buf());
+                    return true;
+                }
                 Some(event::END_FILE) => {
                     // 打不开（文件没了 / 格式不支持）：这一层空着，别把错误甩给用户，
                     // 但日志里要留一条——少一层画面时这是唯一线索。
@@ -330,6 +335,9 @@ impl Layer {
         if let Err(error) = api.run_command(self.handle.get(), &["seek", &target, "absolute+exact"])
         {
             log_debug!("合成实例跳转失败: {error}");
+            // 到过文件末尾、或者文件已被换掉时 seek 会一直失败：清掉媒体，
+            // 下一次 present 会重新 loadfile，从「这一层永远不动」里恢复。
+            self.forget_media();
             return false;
         }
 
@@ -429,12 +437,28 @@ impl Layer {
         self.ready = false;
     }
 
-    fn next_event(&self, api: &MpvApi, timeout: f64) -> Option<i32> {
+    /// 取一条事件。碰到 `END_FILE` 就把这一层降级成「没有素材」：mpv 到文件末尾
+    /// 之后会回到 idle，**之后所有 seek 都会失败**（`error running command`），
+    /// 而 `media` 还留着的话 `present` 认为「没换文件」不会重新加载，于是这一层
+    /// 永远卡在最后一帧上。清空之后下一次 `present` 会重新 `loadfile`。
+    fn next_event(&mut self, api: &MpvApi, timeout: f64) -> Option<i32> {
         let event = unsafe { (api.wait_event)(self.handle.get(), timeout) };
         if event.is_null() {
             return None;
         }
-        Some(unsafe { (*event).event_id })
+        let id = unsafe { (*event).event_id };
+        if id == event::END_FILE {
+            self.forget_media();
+        }
+        Some(id)
+    }
+
+    /// 这一层手里没有可解的东西了：下次 `present` 按「换了文件」处理，重新加载。
+    fn forget_media(&mut self) {
+        if self.media.take().is_some() {
+            log_debug!("合成实例已到文件末尾，下次展示时重新加载");
+        }
+        self.ready = false;
     }
 
     fn destroy(&mut self, api: &MpvApi) {

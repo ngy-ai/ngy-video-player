@@ -136,6 +136,13 @@ impl PlayerApp {
     /// 倍速是全局偏好：所有视频共用一个值，切歌不重置、下次启动照它恢复，
     /// 所以每次改动都立即落盘，不等窗口关闭——崩溃或被强杀时不能让用户白调。
     pub(super) fn set_speed(&mut self, speed: f64, cx: &mut Context<Self>) {
+        // 工程预览播放时倍速由 `J` / `K` / `L` 的档位独占：这里再改 mpv 的 speed，
+        // 时钟还按档位走，两边立刻分家（见 `tick_timeline_playback` 的说明）。
+        if self.timeline_playing {
+            self.flash("预览播放的倍速用 J / K / L 调");
+            cx.notify();
+            return;
+        }
         let next = normalize_speed(speed);
         // 已经顶到量程两端时按快捷键不再产生变化：不必重发命令、不必重写配置。
         if (self.snapshot.speed - next).abs() < 0.001 && (self.settings.speed - next).abs() < 0.001

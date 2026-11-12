@@ -536,6 +536,13 @@ impl PlayerApp {
         items.push(BarItem::Entry(
             BarEntry::new("快进 5 秒", Seek(SEEK_STEP)).hint("→"),
         ));
+        items.push(BarItem::Entry(
+            BarEntry::new("跳到时间码…", JumpToTimecode).hint(if cfg!(target_os = "macos") {
+                "⌘G"
+            } else {
+                "Ctrl+G"
+            }),
+        ));
         items.push(BarItem::Separator);
         items.push(BarItem::Entry(
             BarEntry::new("截图", TakeScreenshot)
@@ -584,6 +591,7 @@ impl PlayerApp {
                 self.request_project_action(AfterSaveConfirm::CloseProject, cx)
             }
             BarAction::TogglePreview => self.toggle_play(cx),
+            BarAction::JumpToTimecode => self.open_timecode_dialog(window, cx),
             BarAction::ExportSequence => self.open_export_dialog(window, cx),
             BarAction::Undo => self.undo_edit(cx),
             BarAction::Redo => self.redo_edit(cx),

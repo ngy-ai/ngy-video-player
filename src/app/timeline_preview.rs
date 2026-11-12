@@ -212,7 +212,12 @@ impl PlayerApp {
     }
 
     /// `K`：停下，并把档位清回原速（由 [`Self::stop_timeline_playback`] 负责）。
+    ///
+    /// 顺手记下「`K` 现在按着」：按住时 `J` / `L` 是逐帧。这里记账而不是
+    /// `on_key_down`，是因为 `k` 绑了动作——绑了键位的按键到不了元素的
+    /// `on_key_down` 监听（`on_key_up` 没有绑定，能到），松手就在那里清。
     pub(super) fn shuttle_stop(&mut self, cx: &mut Context<Self>) {
+        self.shuttle_key_held = true;
         if self.timeline_playing {
             self.stop_timeline_playback(cx);
         }
@@ -296,7 +301,14 @@ impl PlayerApp {
         }
         let range = project.ui.range();
         let stop = preview::stop_at(duration, range);
-        let at = preview::start_at(project.ui.playhead, stop, range);
+        let playhead = project.ui.playhead;
+        // 倒放从播放头原地起步：停在结尾时按 `J` 是想从最后往回退，不是「从头
+        // 再放一遍」——`start_at` 的那条「结尾回到入点」只对正向成立。
+        let at = if self.timeline_shuttle < 0.0 {
+            playhead.min(stop)
+        } else {
+            preview::start_at(playhead, stop, range)
+        };
         if let Some(project) = self.project.as_mut() {
             project.ui.playhead = at;
         }
@@ -381,6 +393,7 @@ impl PlayerApp {
             self.stop_timeline_playback(cx);
             return;
         };
+        let has_range = project.ui.range().is_some();
         let stop = preview::stop_at(project.sequence().duration(), project.ui.range());
         let rate = self.timeline_shuttle;
         let elapsed = self.timeline_last_tick.elapsed();
@@ -393,9 +406,11 @@ impl PlayerApp {
             let next = preview::rewind(project.ui.playhead, elapsed, -rate, start);
             (next, next <= start)
         } else {
-            // 倍速是 mpv 的播放速度：时钟必须乘同一个数，否则改了倍速之后音画和
-            // 播放头会越离越远。
-            let next = preview::advance(project.ui.playhead, elapsed, self.snapshot.speed, stop);
+            // 倍速取档位本身，不读 `snapshot.speed`：那是引擎回传的状态，改档之后
+            // 要过几拍才追上。追上的那几拍里播放头按旧倍速走、合成层按新倍速放，
+            // 实测 4x 时图层先跑到文件末尾，之后就再也 seek 不回去，画面永远停在
+            // 最后一帧。档位是这里唯一可信的真相。
+            let next = preview::advance(project.ui.playhead, elapsed, rate.abs(), stop);
             (next, next >= stop)
         };
         if let Some(project) = self.project.as_mut() {
@@ -405,7 +420,11 @@ impl PlayerApp {
 
         if reached_end {
             let message = if rate < 0.0 {
-                "退到工作区入点"
+                if has_range {
+                    "退到工作区入点"
+                } else {
+                    "退到序列开头"
+                }
             } else {
                 "预览播放到结尾"
             };
