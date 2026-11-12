@@ -20,6 +20,9 @@ pub(crate) struct LibraryPanel {
     pub(crate) search: Entity<InputState>,
     /// 搜索框当前的文本。输入框只会重绘自己，靠观察者同步到这里来过滤列表。
     pub(crate) query: String,
+    /// 批量打标签用的输入框与它的当前文本（与搜索框分开：两件事）。
+    pub(crate) tag_input: Entity<InputState>,
+    pub(crate) tag_draft: String,
     /// 选中的素材。移除按钮与拖拽都作用在整组上。
     pub(crate) selected: BTreeSet<AssetId>,
     /// 上一次点过的行。Shift 连选从它开始算区间。
@@ -36,6 +39,7 @@ pub(crate) struct LibraryPanel {
     /// 串行生成缩略图的后台线程。
     pub(crate) worker: ThumbWorker,
     pub(crate) _search_changes: Subscription,
+    pub(crate) _tag_changes: Subscription,
 }
 
 /// 一次批量导入的进度。导入完成就清空。

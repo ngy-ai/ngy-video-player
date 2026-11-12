@@ -21,6 +21,7 @@ pub mod pack;
 pub mod preview;
 mod project;
 mod proxy;
+pub mod query;
 mod spec;
 mod speed;
 mod subtitle;

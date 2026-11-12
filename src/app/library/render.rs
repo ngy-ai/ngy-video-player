@@ -27,13 +27,13 @@ impl PlayerApp {
 
         let project = self.project.as_ref()?;
         let library = self.library.as_ref()?;
-        let query = library.query.trim().to_lowercase();
+        // 搜索走 `timeline::query` 那套条件（名称 / 时长 / 分辨率 / 帧率 / 编码 / 日期 / 标签，
+        // 支持 `-` 否定与 `>` `<` 比较）；裸词仍然是「名称包含」。
+        let (filter, unknown) = crate::timeline::query::Query::parse(&library.query);
         let rows: Vec<&Asset> = project
             .assets
             .iter()
-            .filter(|asset| {
-                query.is_empty() || asset.display_name().to_lowercase().contains(&query)
-            })
+            .filter(|asset| filter.matches(asset))
             .collect();
         let total = project.assets.len();
 
@@ -237,10 +237,56 @@ impl PlayerApp {
             .child(
                 div()
                     .px(px(10.0))
-                    .pb(px(8.0))
+                    .pb(px(4.0))
                     .w_full()
                     .child(Input::new(&library.search).id("library-search").w_full()),
-            );
+            )
+            .child(
+                div()
+                    .px(px(10.0))
+                    .pb(px(6.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .child(Input::new(&library.tag_input).id("library-tag").w(px(86.0)))
+                    .child(settings_button(
+                        "library-tag-add",
+                        "加标签",
+                        !library.selected.is_empty() && !library.tag_draft.trim().is_empty(),
+                        cx.listener(|this, _: &ClickEvent, window, cx| {
+                            let tag = this
+                                .library
+                                .as_ref()
+                                .map(|library| library.tag_draft.trim().to_string())
+                                .unwrap_or_default();
+                            this.tag_selected(&tag, true, window, cx);
+                        }),
+                    ))
+                    .child(settings_button(
+                        "library-tag-clear",
+                        "清标签",
+                        !library.selected.is_empty(),
+                        cx.listener(|this, _: &ClickEvent, window, cx| {
+                            let tag = this
+                                .library
+                                .as_ref()
+                                .map(|library| library.tag_draft.trim().to_string())
+                                .unwrap_or_default();
+                            this.tag_selected(&tag, false, window, cx);
+                        }),
+                    )),
+            )
+            // 条件写坏了要说出来：不说的话用户会以为条件生效了。
+            .children((!unknown.is_empty()).then(|| {
+                div()
+                    .px(px(14.0))
+                    .pb(px(4.0))
+                    .text_size(px(10.0))
+                    .text_color(gpui_kit::rgb(0xe05561))
+                    .child(format!("认不出的条件：{}", unknown.join(" ")))
+                    .into_any_element()
+            }))
+            .child(self.render_library_collections(project, cx));
 
         if let Some(note) = importing {
             panel = panel.child(
@@ -365,11 +411,16 @@ impl PlayerApp {
         };
         let has_cover = cover.is_some();
         let name = asset.display_name();
-        let meta = asset
+        let mut meta = asset
             .media
             .as_ref()
             .map(|media| format!("{} · {}", format_time(media.duration.secs()), spec(media)))
             .unwrap_or_else(|| "尚未探测".to_string());
+        // 标签接在元数据后面：一列里就能看出「这条是不是航拍」，
+        // 不必为了看一眼标签去开面板。
+        if !asset.tags.is_empty() {
+            meta = format!("{meta} · {}", asset.tags.join(" / "));
+        }
         // 状态只在真的有问题时才占一行：正常素材上写「可用」只是噪音。
         let note = match state {
             AssetState::Ready => None,

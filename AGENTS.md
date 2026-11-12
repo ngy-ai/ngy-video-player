@@ -65,7 +65,8 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  render_cache_queue（渲染缓存队列：把「有效果 / 调色 / 关键帧」的片段按导出
                    滤镜链渲成 `<素材>-<指纹>.cache.mp4`，一次一条，进度在设置窗口那一页）、
                  library（工程模式左侧素材库：导入 / 后台探测 / 封面 / 试听原片，
-                   `library/drop.rs` 是拖到轨道的落点、兼容性与首尾相接排布）、
+                   `library/drop.rs` 是拖到轨道的落点、兼容性与首尾相接排布，
+                   `library/tags.rs` 是批量打标签与智能合集条）、
                  source_edit（三点 / 四点编辑：源入出点、`,` / `.` 落位，工作区两端都定了
                    走四点并把画面与声音分别排到目标轨，与试听分成两笔状态）、
                  types（界面自己的小状态类型：横幅、右键菜单、悬停预览、菜单栏条目、MiniState）、
@@ -139,6 +140,8 @@ src/timeline/time.rs  Tick（i64 微秒）与 Rational 帧率：全项目唯一�
 src/timeline/spec.rs  序列规格：分辨率预设、帧率表、奇数边校验、按素材推导
 src/timeline/timecode.rs  `HH:MM:SS:FF` 的显示与解析：整帧 / 丢帧（29.97、59.94）、省略短写
 src/timeline/media.rs  素材元信息、文件指纹与过期判断；不含 ffmpeg 调用
+src/timeline/query.rs  素材搜索与智能合集：条件语法（七种字段、否定、并且）、
+                 求值与 `Collection`（存条件不存结果），单测在 `query/tests.rs`
 src/timeline/proxy.rs  代理选用规则：素材比序列大且代理在 → 预览用代理；导出拒绝代理素材
 src/timeline/model.rs  序列 → 轨道 → 片段、转场与标记；纯数据，不持有文件路径
 src/timeline/ops.rs    编辑操作纯函数：旧序列进、新序列出，非法操作返回错误

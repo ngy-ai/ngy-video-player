@@ -32,11 +32,25 @@ impl PlayerApp {
             library.query = query;
             cx.notify();
         });
+        let tag_input = cx.new(|cx| InputState::new(window, cx).placeholder("标签"));
+        let tag_changes = cx.observe(&tag_input, |this, state, cx| {
+            let draft = state.read(cx).value().to_string();
+            let Some(library) = this.library.as_mut() else {
+                return;
+            };
+            if library.tag_draft == draft {
+                return;
+            }
+            library.tag_draft = draft;
+            cx.notify();
+        });
         let (tx, mut rx) = futures::channel::mpsc::unbounded();
         let worker = ThumbWorker::spawn(tx);
         self.library = Some(LibraryPanel {
             search,
             query: String::new(),
+            tag_input,
+            tag_draft: String::new(),
             selected: BTreeSet::new(),
             anchor: None,
             thumbs: HashMap::new(),
@@ -45,6 +59,7 @@ impl PlayerApp {
             missing_proxy: Vec::new(),
             worker,
             _search_changes: search_changes,
+            _tag_changes: tag_changes,
         });
         self.refresh_library_states();
         // 缩略图回来时写回面板。循环在面板关掉后靠 `update` 失败退出。

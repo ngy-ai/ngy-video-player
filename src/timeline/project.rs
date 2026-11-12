@@ -9,6 +9,7 @@
 //! 素材找不到时工程照常打开：文件不存在只在 [`Asset::missing`] 上打标记，界面据此
 //! 提示重链，而不是让整个工程打不开。
 
+use crate::timeline::query::Collection;
 use crate::timeline::{
     AssetId, AssetState, Id, MediaInfo, MediaStamp, Rational, Sequence, SequenceSpec, Tick,
     TrackKind,
@@ -45,6 +46,10 @@ pub struct Asset {
     pub media: Option<MediaInfo>,
     /// 探测时的文件指纹。文件改过时用它判断缓存过期。
     pub stamp: Option<MediaStamp>,
+    /// 用户打的标签（M10-T08）。搜素材、拼合集都靠它；不用文件上的元数据，
+    /// 因为「航拍 / 废片」这类标签是剪片时才有的判断。
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 impl Asset {
@@ -186,6 +191,9 @@ pub struct Project {
     pub active_sequence: Id,
     pub assets: Vec<Asset>,
     pub ui: UiState,
+    /// 智能合集：存的是条件串，不是结果（M10-T08）。
+    #[serde(default)]
+    pub collections: Vec<Collection>,
     /// 素材 id 的计数器。和序列内对象的 id 空间分开：素材表不属于任何一条序列。
     next_asset_id: u64,
     /// 序列 id 的计数器。与每条序列自己的 `next_id` 是两码事。
@@ -206,6 +214,7 @@ impl Default for Project {
             active_sequence: Id::new(1),
             assets: Vec::new(),
             ui: UiState::default(),
+            collections: Vec::new(),
             next_asset_id: 1,
             next_sequence_id: 2,
             base_dir: PathBuf::new(),
@@ -313,6 +322,7 @@ impl Project {
             missing: !path.is_file(),
             media: None,
             stamp: None,
+            tags: Vec::new(),
         });
         id
     }

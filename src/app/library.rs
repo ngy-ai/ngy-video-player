@@ -20,6 +20,7 @@ mod drop;
 mod import;
 mod panel;
 mod render;
+mod tags;
 #[cfg(test)]
 mod tests;
 
