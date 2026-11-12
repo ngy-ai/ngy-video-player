@@ -4,6 +4,21 @@
 
 ## 一句话状态
 
+**M10-T17（OTIO 双向）代码与单测齐了**：`timeline::otio` 导出标准 `Timeline.1`
+（轨道 / 空档 / 片段入出点 / 转场 / 标记，变速写成 `LinearTimeWarp`），导入读成与工程无关
+的中间结构，认不出的轨道 / 转场 / 效果降级并写进提示；`app/otio.rs` 挂上「文件 > 导出
+时间线为 OTIO…」与「从 OTIO 导入…」，导入**新建一条序列**再切过去，素材按 `target_url`
+登记后交给素材库那条探测线程。字幕 / 效果栈 / 关键帧 / 调色 / 片尾定格 / 轨道音量进
+`metadata.ngy`。9 条单测在 `timeline::otio`；**没在 Resolve 里真开过**（本机没装）。
+
+**顺手把最后三只超 700 行的文件拆了**（各自一个 `refactor:` 提交，纯搬家）：
+`player/compositor.rs` 753 → 入口 + `handle` / `layer` / `worker`；`playlist.rs` 748 →
+入口 + `item` / `list` / `set`；`app/overlays.rs` 705 → 入口 + `hud` / `cards` / `menus` /
+`file_info`（方法的可见性从 `pub(super)` 改成 `pub(in crate::app)`，`Item` / `Playlist`
+的字段对同包放开）。拆完 `cargo test` 仍 632 条全绿、clippy 无告警。
+
+**上一轮（M10-T09）**：
+
 **M10-T09 的四条验收齐了：代理按档生成、预览自动换代理、导出拒绝代理、代理丢了能重新生成。**
 规则做成纯函数 `timeline::proxy`（素材长边比序列大、旁边有 `<原名>.proxy.mp4` → 用代理；
 原片自己就是 `*.proxy.mp4` 时不再套一层），预览三处取文件（画面取帧、多轨合成、音频轨）

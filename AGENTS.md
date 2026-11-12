@@ -74,6 +74,7 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  controls、menus、bar、
                  menu_bar、associations、ab_loop（A-B 循环）、
                  project_file（工程保存/另存为/未保存确认）、
+                 otio（导出 / 导入 `.otio`：导入新建一条序列，素材按 URL 登记）、
                  metadata（章节/元数据编辑，模态）、playlist_ui、
                  playlist_menu（面板上的弹出菜单：添加/排序/全部列表）、
                  playlist_sort（排序 + 拖动重排）、
@@ -109,7 +110,7 @@ src/convert/scan.rs    文件夹递归扫描（自然序、跳过符号链接）
 src/convert/task.rs    批次任务：逐个文件重编码、输出命名、进度与取消
 src/remux.rs     轨道编辑：换/删内置音轨、内嵌字幕（画面流复制，单路转码）与进度
 src/embed.rs     内嵌资源（libmpv / ffmpeg）解压到缓存目录
-src/playlist.rs  播放列表：树形条目（扁平数组 + depth）、多页签、存档
+src/playlist.rs  播放列表入口：item（一行）/ list（一份列表）/ set（多页列表）/ scan / sort / 	ree
 src/playlist/scan.rs  目录扫描、自然序、m3u/pls 解析
 src/playlist/tree.rs  文件夹递归展开、折叠、拖放移动（DropSpot）
 src/playlist/sort.rs  逐层排序（名称/修改时间/添加时间）、最近 3 版顺序历史
@@ -122,6 +123,7 @@ src/platform/    ffmpeg.rs（裁切用的 ffmpeg：内嵌→exe 同目录→libs
                  associations.rs（文件关联：注册/撤销/状态，按平台实现）、
                  pictures.rs（Windows「图片」库的真实位置，走 known folder，别拼 USERPROFILE）
 src/player/      ffi.rs（运行时绑定）、embed.rs（内嵌库解压）、frame.rs、probe.rs、thumbnail.rs
+src/player/compositor.rs  多轨软件合成入口：handle（界面侧句柄）/ layer（一路 mpv）/ worker（合成线程）
 src/player/engine.rs  引擎入口：Engine 句柄、Shared 共享状态、命令/查询接口
 src/player/engine/    state（对外类型）、event_loop、dispatch、render_loop
 src/timeline.rs  剪辑时间线：入口只放文档、模块声明与 `pub use`
@@ -145,6 +147,7 @@ src/timeline/effect.rs  片段效果栈：去隔行 / 降噪 / 锐化 / 防抖 /
 src/timeline/keyframe.rs  片段关键帧：缩放 / 位置 / 不透明度的曲线、求值与 ffmpeg 表达式
 src/timeline/color.rs  片段调色：亮度 / 对比度 / 饱和度 / 色温与 3D LUT 的滤镜映射
 src/timeline/subtitle.rs  字幕条目与样式、预览取字；`subtitle/ass.rs` 生成交给 libass 的 ASS
+src/timeline/otio.rs  OpenTimelineIO 交换：export（序列 → JSON）、import（JSON → 中间结构）
 src/timeline/export.rs  序列导出：`ExportPlan`、`ExportSettings`、字幕附件与 `render-presets.json` 预设
 src/export/task.rs  导出进程：临时 ASS 落盘 / 清理、软字幕按容器选编码器、进度与取消
 src/timeline/undo.rs    撤销 / 重做：状态快照栈，一次操作一步，上限 200 步
@@ -214,9 +217,10 @@ src/timeline/view.rs    时间线视图状态：缩放（1 像素 = 1 帧 ~ 10 �
 
 现状（2026-11-12 用 `[System.IO.File]::ReadAllText($f).Split("`n").Count - 1` 数过；
 `(Get-Content $f).Count` 与 `Measure-Object -Line` 都少数几十到上百行，别再用它们）：
-**还超 700 行的有** `src/player/compositor.rs` 753、`src/playlist.rs` 748、
-`src/app/overlays.rs` 705，下次动它们之前先拆。
-本轮已经拆过的：`app.rs`（870 → 入口 + `app/types.rs`）、
+**现在都在 700 行以内**：最后三只也拆完了——`player/compositor.rs`（753 → 入口 +
+`handle` / `layer` / `worker`）、`playlist.rs`（748 → 入口 + `item` / `list` / `set`）、
+`app/overlays.rs`（705 → 入口 + `hud` / `cards` / `menus` / `file_info`）。
+再往前拆过的：`app.rs`（870 → 入口 + `app/types.rs`）、
 `app/timeline_preview.rs`（751 → 入口 + `composite` / `playback` / `audio`）、
 `app/timeline_menu.rs`（802 → 入口 + `clip` / `ruler` / `panels`）、`timeline/preview.rs`
 （777 → 入口 + `audio`）、`timeline/model.rs`（749 → 入口 + `track`）、

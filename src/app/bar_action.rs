@@ -47,6 +47,10 @@ pub(super) enum BarAction {
     JumpToTimecode,
     /// 把当前序列导出成视频文件。
     ExportSequence,
+    /// 把当前序列导出成 OpenTimelineIO 的 `.otio`。
+    ExportOtio,
+    /// 从一份 `.otio` 建一条新序列。
+    ImportOtio,
     /// 撤销 / 重做一步编辑。
     Undo,
     Redo,

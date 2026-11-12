@@ -130,6 +130,7 @@ mod menus;
 mod metadata;
 mod mini;
 mod multicam;
+mod otio;
 mod overlays;
 mod picture;
 mod playback;

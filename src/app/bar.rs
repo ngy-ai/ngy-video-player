@@ -434,6 +434,12 @@ impl PlayerApp {
             "导出为视频文件…",
             ExportSequence,
         )));
+        // 与别的剪辑软件换手：OTIO 带得走轨道、片段、转场与标记。
+        items.push(BarItem::Entry(BarEntry::new(
+            "导出时间线为 OTIO…",
+            ExportOtio,
+        )));
+        items.push(BarItem::Entry(BarEntry::new("从 OTIO 导入…", ImportOtio)));
         items.push(BarItem::Separator);
         items.push(BarItem::Entry(BarEntry::new("关闭工程", CloseProject)));
         items.push(BarItem::Separator);
@@ -593,6 +599,8 @@ impl PlayerApp {
             BarAction::TogglePreview => self.toggle_play(cx),
             BarAction::JumpToTimecode => self.open_timecode_dialog(window, cx),
             BarAction::ExportSequence => self.open_export_dialog(window, cx),
+            BarAction::ExportOtio => self.export_otio(window, cx),
+            BarAction::ImportOtio => self.import_otio(window, cx),
             BarAction::Undo => self.undo_edit(cx),
             BarAction::Redo => self.redo_edit(cx),
             BarAction::SplitClip => self.split_at_playhead(cx),

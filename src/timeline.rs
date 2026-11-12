@@ -15,6 +15,7 @@ mod keyframe;
 mod media;
 mod model;
 mod ops;
+pub mod otio;
 pub mod pack;
 pub mod preview;
 mod project;
@@ -51,6 +52,7 @@ pub use model::{
     TransitionKind,
 };
 pub use ops::{ClipSpec, EditError, EditOp, Placement, apply, remove_clips, split_at};
+pub use otio::{OtioError, export_sequence as export_otio, import_timeline as import_otio};
 pub use project::{
     Asset, AssetRemoveError, PROJECT_EXTENSION, PROJECT_VERSION, Project, ProjectError,
     SequenceError, UiState,
