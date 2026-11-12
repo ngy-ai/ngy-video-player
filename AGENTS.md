@@ -119,7 +119,8 @@ src/scenes.rs    镜头分割：ffmpeg 场景检测、切点解析、进度与�
 src/settings.rs  偏好持久化
 src/logging.rs   终端 + 滚动日志文件
 src/platform/    ffmpeg.rs（裁切用的 ffmpeg：内嵌→exe 同目录→libs→PATH）、
-                 associations.rs（文件关联：注册/撤销/状态，按平台实现）
+                 associations.rs（文件关联：注册/撤销/状态，按平台实现）、
+                 pictures.rs（Windows「图片」库的真实位置，走 known folder，别拼 USERPROFILE）
 src/player/      ffi.rs（运行时绑定）、embed.rs（内嵌库解压）、frame.rs、probe.rs、thumbnail.rs
 src/player/engine.rs  引擎入口：Engine 句柄、Shared 共享状态、命令/查询接口
 src/player/engine/    state（对外类型）、event_loop、dispatch、render_loop

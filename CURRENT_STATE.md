@@ -79,8 +79,12 @@ commit**（一步撤销）。为了让 `app.rs` 回到 700 行以内，先把界
 
 ## 已验证
 
-- `cargo test` 全绿（lib 631 通过、5 条 ignored；其余集成测试目标也全过；
+- `cargo test` 全绿（lib 637 通过、5 条 ignored；其余集成测试目标也全过；
   `cargo fmt`、`cargo clippy --all-targets` 无告警）。
+- 截图落点改问系统 known folder 之后重跑了上面那套 A/B：截图现在落在
+  `D:\360MoveData\Users\admin\Pictures\影匣截图`（脚本里用 `[Environment]::GetFolderPath('MyPictures')`
+  找得到），两次结果与改之前一致（854x480 绿 / 3840x2160 红）。`platform::pictures` 还有一条
+  单测钉住「拿到的是绝对路径」。
 - **代理预览在真窗口里跑通了（2026-11-12，脚本 `tmp/m10t09_proxy.ps1`）**：4K 纯红
   `red4k.mp4` + 480p 纯绿的 `red4k.proxy.mp4`，手写 `.ngyproj`（1920x1080 序列、播放头 1s、
   片段选中），起 debug exe、按 `S` 截图、读中心像素：
@@ -515,15 +519,16 @@ commit**（一步撤销）。为了让 `app.rs` 回到 700 行以内，先把界
 - 键位串按键帽字符匹配：`KeyBinding::new("comma", …)` / `"period"` **永远匹配不上**，
   要写 `","` / `"."`。这次就是先写错、`cargo test` 全绿也看不出来，最后在窗口里按
   `,` 没反应才发现的。
-- **截图目录别用 `[Environment]::GetFolderPath('MyPictures')`**：这台机器它指向
-  `D:\360MoveData\Users\admin\Pictures`，而程序按 `USERPROFILE\Pictures` 落盘
-  （`C:\Users\admin\Pictures\影匣截图`）。用前者会「明明截到了却一个文件都找不到」。
-  稳妥写法：`Join-Path $env:USERPROFILE 'Pictures'` + `-Recurse` 找 `*.png`（子目录名是中文）。
-- **UTF-8 无 BOM 的 `.ps1` 在 Windows PowerShell 5.1 里会被按 ANSI 读**：中文注释被吞成乱码
-  不要紧，但这次出现了更阴的症状——某行 `$pics = Join-Path $env:USERPROFILE 'Pictures'`
-  执行后变量是空字符串（脚本没报错，`Write-Output` 打印出来就是空），同一个表达式在交互
-  窗口里却正常。把脚本存成 **UTF-8 with BOM** 立刻就好。写带中文的自动化脚本时先转 BOM，
-  否则会花半小时怀疑人生。
+- **截图目录已经改成问系统要（2026-11-12 修的）**：`src/platform/pictures.rs` 直接调
+  `SHGetKnownFolderPath(FOLDERID_Pictures)`，这台机器上是 `D:\360MoveData\Users\admin\Pictures`。
+  以前拼 `%USERPROFILE%\Pictures` 会落到 `C:\Users\admin\Pictures`，于是自动化脚本用
+  `[Environment]::GetFolderPath('MyPictures')` 去找就「明明截到了却一个文件都找不到」。
+  现在两边都对得上（脚本也用 `GetFolderPath('MyPictures')`，实测通过）。
+  **以后别在别处再拼 `USERPROFILE\Pictures`**，要这个目录就问 `platform::pictures::pictures_dir()`。
+- **`tmp/` 下的 `.ps1` 一律存 UTF-8 with BOM**（2026-11-12 已批量转好 32 个）：UTF-8 无 BOM
+  的脚本会被 Windows PowerShell 5.1 按 ANSI 读，中文注释变乱码还是小事，这次出现过
+  `$pics = Join-Path $env:USERPROFILE 'Pictures'` 执行后变量**是空字符串**、脚本不报错的怪事
+  （同一个表达式在交互窗口里正常）。新建脚本先转 BOM 再调试。
 
 ## 已知差距与约束
 
