@@ -192,9 +192,11 @@ src/timeline/view.rs    时间线视图状态：缩放（1 像素 = 1 帧 ~ 10 �
     `#[cfg(test)] mod tests;`。
   - 跨模块的集成测试留在 `tests/` 顶层。
 
-现状：仍有几个文件超过 700 行，属于待还的债（按行数从大到小）：`src/app.rs` 约 842 行、
-`src/timeline/ops/tests.rs` 约 752 行、`src/playlist.rs` 约 748 行、
-`src/app/timeline_view.rs` 约 744 行、`src/app/overlays.rs` 约 705 行。
+现状（2026-11-12 用 `(Get-Content $f).Count` 数过，`Measure-Object -Line` 会少数）：**没有文件
+超过 700 行**。紧贴上限、下次改之前先拆的是：`src/app/overlays.rs` 677、
+`src/app/timeline_view.rs` 676、`src/app.rs` 667、`src/playlist.rs` 664、
+`src/player/compositor.rs` 663、`src/timeline/export/tests.rs` 661。
+`src/timeline/ops/tests.rs` 已经从 735 拆到 656（放置 / 参数 / 字幕 / 关键帧 / 删除各一个文件）。
 `src/timeline/ops.rs` 已经拆过（放置 / 参数 / 字幕各成子模块，入口约 600 行），可以直接照这个
 样子拆：入口只留类型、`apply` 分发与跨模块辅助函数，其余按职责分文件。
 新增代码时如果目标文件接近上限，先把要动的区域抽成子模块再加逻辑，不要继续往上堆。

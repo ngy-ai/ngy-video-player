@@ -516,8 +516,9 @@
 11. 跑一次真实导出（带转场 + 降噪 / 锐化 + 推近 + 字幕 + 多序列），用 `ffprobe` 核对时长、
     逐秒抽帧确认画面在放大（推近已有 `#[ignore]` 用例守着），并确认 `deshake` /
     `minterpolate` / `zoompan` 在老 ffmpeg 构建里可用。
-12. 源码文件规模（已按真实行数重算，`Measure-Object -Line` 会给出错的数）：超限待拆的是
-    `src/app.rs`（842）、`src/timeline/ops/tests.rs`（752）、`src/playlist.rs`（748）、
-    `src/app/timeline_view.rs`（744）、`src/app/overlays.rs`（705）；
+12. 源码文件规模（2026-11-12 用 `(Get-Content $f).Count` 重数过）：**已经没有超过 700 行的
+   文件**；`ops/tests.rs` 已从 735 拆到 656（新增 `tests/remove.rs`）。紧贴上限、下次动之前先拆
+   的是 `src/app/overlays.rs`（677）、`src/app/timeline_view.rs`（676）、`src/app.rs`（667）、
+   `src/playlist.rs`（664）、`src/player/compositor.rs`（663）、`src/timeline/export/tests.rs`（661）；
     `src/timeline/ops.rs` 已从 862 拆到 590，可以照它的样子拆（入口留类型 + `apply`
     分发，其余按职责分文件，子模块用 `pub(super)`）。下一批功能之前先把这几只拆掉。
