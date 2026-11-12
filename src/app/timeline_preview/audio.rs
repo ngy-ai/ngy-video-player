@@ -173,7 +173,7 @@ impl PlayerApp {
     ///
     /// 重复调用是安全的（播放中每个节拍都会走一遍空档），这里先看有没有事可做，
     /// 免得每 33 毫秒往通道里塞一串 `Pause`。
-    fn silence_timeline_audio(&mut self) {
+    pub(crate) fn silence_timeline_audio(&mut self) {
         let idle = self.timeline_audio.iter().all(|slot| slot.file.is_none())
             && !self.timeline_audio_active;
         if idle {

@@ -73,6 +73,37 @@ impl PlayerApp {
             .as_ref()
             .map(|import| format!("正在探测素材 {}/{}", import.done, import.total));
 
+        // 「生成代理」只对单个选中的视频素材可用：一次只派生一个文件，多选时落到哪个
+        // 文件名上不好猜。已经有代理就改叫「重新生成」——代理被删掉后也能从这里补。
+        let proxy_target = if library.selected.len() == 1 {
+            library.selected.iter().copied().next().and_then(|id| {
+                project.asset(id).and_then(|asset| {
+                    let media = asset.media.as_ref()?;
+                    if asset.missing || !media.has_video() {
+                        return None;
+                    }
+                    let found = crate::timeline::find_proxy(&asset.resolved, |path| path.exists());
+                    Some((id, found.is_some()))
+                })
+            })
+        } else {
+            None
+        };
+        let proxy_button = proxy_target.map(|(id, has_proxy)| {
+            settings_button(
+                "library-proxy",
+                if has_proxy {
+                    "重新生成代理…"
+                } else {
+                    "生成代理…"
+                },
+                true,
+                cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                    this.open_proxy_dialog_for_asset(id, cx);
+                }),
+            )
+        });
+
         let mut panel = div()
             .id("library-panel")
             .absolute()
@@ -237,6 +268,7 @@ impl PlayerApp {
                             this.remove_selected_asset(cx);
                         }),
                     ))
+                    .children(proxy_button)
                     .child(
                         div()
                             .text_size(px(10.0))

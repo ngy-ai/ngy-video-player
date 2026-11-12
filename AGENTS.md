@@ -55,8 +55,8 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  timeline_preview（工程模式预览：取帧与跟随，`timeline_preview/composite.rs`
                    是多轨合成接管，`playback.rs` 是 J/K/L 变速、播放时钟与 scrub，
                    `audio.rs` 是每条音频轨一路纯音频 mpv 实例的多路出声）、
-                 preview_proxy（预览取文件的唯一入口：读「预览用代理」开关、判断哪段在用代理；
-                   规则本身在 `timeline::proxy`）、
+                 preview_proxy（预览取文件的唯一入口：读「预览用代理」开关、判断哪段在用代理、
+                   覆盖写代理前把预览从该文件上撤下来；规则本身在 `timeline::proxy`）、
                  library（工程模式左侧素材库：导入 / 后台探测 / 封面 / 试听原片，
                    `library/drop.rs` 是拖到轨道的落点、兼容性与首尾相接排布）、
                  source_edit（三点 / 四点编辑：源入出点、`,` / `.` 落位，工作区两端都定了

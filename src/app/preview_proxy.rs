@@ -24,6 +24,18 @@ impl PlayerApp {
             && crate::timeline::preview_for(project, asset).is_some_and(|file| file.is_proxy())
     }
 
+    /// 把预览从这个文件上撤下来，交给重新生成代理的流程覆盖写。
+    ///
+    /// Windows 上文件被 mpv 读着的时候 ffmpeg 打不开它写入；所以主实例正在放它就先
+    /// `Stop`，音频轨的实例一并卸掉。下一拍取帧会重新把（新的）文件加载回来。
+    pub(crate) fn detach_preview(&mut self, path: &std::path::Path) {
+        if self.timeline_preview.as_deref() == Some(path) {
+            self.timeline_preview = None;
+            self.send(Command::Stop);
+        }
+        self.silence_timeline_audio();
+    }
+
     /// 设置窗口里的开关。下一次取帧 / 换片才生效，不做立刻重载：
     /// 播放中重载画面会黑一下，而用户改这一项时多半正要接着往下剪。
     pub(crate) fn toggle_preview_proxy(&mut self) {

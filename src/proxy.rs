@@ -1,7 +1,8 @@
-//! 代理文件：480p 的轻量副本，给剪辑软件做「代理剪辑」用。
+//! 代理文件：轻量副本，给剪辑软件做「代理剪辑」用。
 //!
-//! 4K 原片在时间线上拖动会卡，先转一份小文件剪，最后套回原片。代理只求解码快，
-//! 不求画质，所以固定 H.264 + veryfast + CRF 28，并按 480p 高度等比缩放。
+//! 4K 原片在时间线上拖动会卡，先转一份小文件剪，最后套回原片（预览的选用规则在
+//! `timeline::proxy`）。代理只求解码快、不求画质，所以固定 H.264 + veryfast，
+//! 按 [`ProxyQuality`] 的档位等比缩放并配对应的 CRF。
 //!
 //! 输出 `<原名>.proxy.mp4`，与原片同目录；不改动原文件，也不写字幕与章节。
 
@@ -14,10 +15,55 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// 代理的高度。1080p 原片缩到 480p，4K 缩到 480p，文件大约小一个数量级。
-const PROXY_HEIGHT: u32 = 480;
 /// 代理文件的后缀。
 const SUFFIX: &str = "proxy";
+
+/// 代理的规格档：只决定预览清晰度与代理文件的体积，导出始终用原片。
+///
+/// 默认 480p：代理的用处是「解码快、文件小」，往上一档就多几倍像素要解；
+/// 只有 4K 进 4K 序列、或者要看清细部（对位、抠像）时才值得加档。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ProxyQuality {
+    #[default]
+    P480,
+    P720,
+    P1080,
+}
+
+impl ProxyQuality {
+    pub const ALL: [Self; 3] = [Self::P480, Self::P720, Self::P1080];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::P480 => "480p",
+            Self::P720 => "720p",
+            Self::P1080 => "1080p",
+        }
+    }
+
+    /// 缩放后的高度。宽度按保持偶数算（libx264 的 yuv420p 要求偶数）。
+    pub fn height(self) -> u32 {
+        match self {
+            Self::P480 => 480,
+            Self::P720 => 720,
+            Self::P1080 => 1080,
+        }
+    }
+
+    /// 档越高 CRF 越小：480p 本来就糊，给 28 足够；1080p 要留点余量给细部。
+    fn crf(self) -> u32 {
+        match self {
+            Self::P480 => 28,
+            Self::P720 => 26,
+            Self::P1080 => 24,
+        }
+    }
+
+    /// 等比缩到这一档。`-2` 让宽度按保持偶数取整。
+    pub fn scale_filter(self) -> String {
+        format!("scale=-2:{}:flags=fast_bilinear", self.height())
+    }
+}
 
 /// 一次代理生成请求。
 #[derive(Clone, Debug)]
@@ -26,6 +72,7 @@ pub struct ProxyRequest {
     pub output: PathBuf,
     /// 原片时长（秒），进度条的分母。
     pub duration: f64,
+    pub quality: ProxyQuality,
 }
 
 #[derive(Clone, Debug)]
@@ -150,11 +197,6 @@ pub fn output_path(input: &Path) -> PathBuf {
     candidate
 }
 
-/// 等比缩到 480p。`-2` 让宽度按保持偶数取整，libx264 的 yuv420p 要求偶数。
-pub fn scale_filter() -> String {
-    format!("scale=-2:{PROXY_HEIGHT}:flags=fast_bilinear")
-}
-
 fn build_command(executable: &Path, request: &ProxyRequest) -> Command {
     let mut command = Command::new(executable);
     command
@@ -177,9 +219,9 @@ fn build_command(executable: &Path, request: &ProxyRequest) -> Command {
         .arg("-preset")
         .arg("veryfast")
         .arg("-crf")
-        .arg("28")
+        .arg(request.quality.crf().to_string())
         .arg("-vf")
-        .arg(scale_filter())
+        .arg(request.quality.scale_filter())
         .arg("-pix_fmt")
         .arg("yuv420p")
         .arg("-c:a")
@@ -222,7 +264,17 @@ mod tests {
             input: PathBuf::from("课程 01.mkv"),
             output: PathBuf::from("课程 01.proxy.mp4"),
             duration: 600.0,
+            quality: ProxyQuality::P480,
         }
+    }
+
+    fn args_for(quality: ProxyQuality) -> Vec<String> {
+        let mut request = request();
+        request.quality = quality;
+        build_command(Path::new("ffmpeg"), &request)
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
     }
 
     fn args() -> Vec<String> {
@@ -252,6 +304,26 @@ mod tests {
         // 音频轨可缺省，视频轨必须映射。
         assert!(has(&args, &["-map", "0:V:0?"]));
         assert!(has(&args, &["-map", "0:a?"]));
+    }
+
+    #[test]
+    fn 档位决定缩放高度与_crf() {
+        assert!(has(
+            &args_for(ProxyQuality::P720),
+            &["-vf", "scale=-2:720:flags=fast_bilinear"]
+        ));
+        assert!(has(&args_for(ProxyQuality::P720), &["-crf", "26"]));
+        assert!(has(
+            &args_for(ProxyQuality::P1080),
+            &["-vf", "scale=-2:1080:flags=fast_bilinear"]
+        ));
+        assert!(has(&args_for(ProxyQuality::P1080), &["-crf", "24"]));
+        // 档位越高越清晰：高度递增（CRF 随之递减，见上面两条断言）。
+        let heights: Vec<u32> = ProxyQuality::ALL
+            .iter()
+            .map(|quality| quality.height())
+            .collect();
+        assert_eq!(heights, vec![480, 720, 1080]);
     }
 
     #[test]
