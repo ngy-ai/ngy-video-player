@@ -196,10 +196,15 @@ src/timeline/view.rs    时间线视图状态：缩放（1 像素 = 1 帧 ~ 10 �
     `#[cfg(test)] mod tests;`。
   - 跨模块的集成测试留在 `tests/` 顶层。
 
-现状（2026-11-12 用 `(Get-Content $f).Count` 数过，`Measure-Object -Line` 会少数）：**没有文件
-超过 700 行**。紧贴上限、下次改之前先拆的是：`src/app/overlays.rs` 677、
-`src/app/timeline_view.rs` 676、`src/app.rs` 667、`src/playlist.rs` 664、
-`src/player/compositor.rs` 663、`src/timeline/export/tests.rs` 661。
+现状（2026-11-12 用 `[System.IO.File]::ReadAllText($f).Split("`n").Count - 1` 数过；
+`(Get-Content $f).Count` 与 `Measure-Object -Line` 都少数几十到上百行，别再用它们）：
+**还超 700 行的有** `src/app.rs` 870、`src/player/compositor.rs` 753、
+`src/app/timeline_view.rs` 751、`src/playlist.rs` 748、`src/app/overlays.rs` 705，
+下次动它们之前先拆。
+本轮已经拆过的：`app/timeline_preview.rs`（751 → 入口 + `composite` / `playback` / `audio`）、
+`app/timeline_menu.rs`（802 → 入口 + `clip` / `ruler` / `panels`）、`timeline/preview.rs`
+（777 → 入口 + `audio`）、`timeline/model.rs`（749 → 入口 + `track`）、
+`timeline/export/tests.rs`（775 → 入口 + `tests/audio.rs`）。
 `src/timeline/ops/tests.rs` 已经从 735 拆到 656（放置 / 参数 / 字幕 / 关键帧 / 删除各一个文件）。
 `src/timeline/ops.rs` 已经拆过（放置 / 参数 / 字幕各成子模块，入口约 600 行），可以直接照这个
 样子拆：入口只留类型、`apply` 分发与跨模块辅助函数，其余按职责分文件。

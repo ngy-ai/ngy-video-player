@@ -45,9 +45,13 @@
   导出计划的「轨道音量写成 volume 滤镜」（0 dB 不插、0.5 写成 `volume=0.5000`）与
   「独奏时只有独奏的音频轨进混音」（两条轨有 `amix`，独奏一路后不再插 `amix`，被挤掉的
   片段标签不在滤镜图里）。
-- 拆分 `src/app/timeline_preview.rs`（751 行）成 `timeline_preview.rs` + `{composite,
-  playback,audio}.rs` 后 `cargo test` 与拆分前一致（589 条全绿），只是搬家加一处私有字段
-  改名（`timeline_audio_solo` → `timeline_audio_active`）。
+- 拆分（全是纯搬家，拆完 `cargo test --lib` 596 条全绿、clippy 无告警）：
+  `app/timeline_preview.rs` 751 → 入口 + `{composite,playback,audio}.rs`（顺手把私有字段
+  `timeline_audio_solo` 改名 `timeline_audio_active`）；`app/timeline_menu.rs` 802 → 入口 +
+  `{clip,ruler,panels}.rs`；`timeline/preview.rs` 777 → 入口 + `audio.rs`（+ `audio/tests.rs`）；
+  `timeline/model.rs` 749 → 入口 + `track.rs`；`timeline/export/tests.rs` 775 → 入口 +
+  `tests/audio.rs`。拆完这五只都回到了 700 行以内（入口文件：`model.rs` 567、
+  `preview.rs` 613、`export/tests.rs` 656、`timeline_menu.rs` 263、`timeline_preview.rs` 194）。
 - 时间码单测 6 条（`timeline::timecode`）：整帧写法按名义帧率切分（第 29 帧还在第 0 秒）、
   23.976 不算丢帧（`;` 写法被拒）、丢帧每分钟跳两个号且第 10 分钟不跳、
   `format → parse` 在 0 / 1799 / 1800 / 17981 / 17982 / 107892 帧上闭合、省略写法
@@ -526,11 +530,12 @@
 松手后立刻安静（多路合成与音频轨片段下按设计是没声的，别当 bug）。
 
 0. **先把超过 700 行的文件拆掉**（2026-11-12 用 `[System.IO.File]::ReadAllText().Split`
-   重数，`(Get-Content).Count` 会少数）：`src/app.rs` 870、`src/app/timeline_menu.rs` 802、
-   `src/timeline/preview.rs` 777、`src/timeline/export/tests.rs` 775、
-   `src/player/compositor.rs` 753、`src/app/timeline_view.rs` 751、`src/timeline/model.rs` 749、
-   `src/playlist.rs` 748、`src/app/overlays.rs` 705。`timeline_preview.rs` 本轮已从 751 拆到
-   三个子模块。这些都不小，先拆再动功能，别再往上堆。
+   重数，`(Get-Content).Count` 会少数）：现在还超的有 `src/app.rs` 870、
+   `src/player/compositor.rs` 753、`src/app/timeline_view.rs` 751、`src/playlist.rs` 748、
+   `src/app/overlays.rs` 705。本轮已拆掉 `app/timeline_preview.rs`、
+   `app/timeline_menu.rs`、`timeline/preview.rs`、`timeline/model.rs`、
+   `timeline/export/tests.rs` 这五只（拆法照 `timeline/ops.rs`：入口只留类型与分发）。
+   剩下的先拆再动功能，别再往上堆。
 1. **M10-T02：GPU 合成后端**（P0，T01 已完成）。做法照 ADR 0008：把 `player::compositor`
    里的 `blend_into` 换成 D3D11 → wgpu 纹理交换，mpv 那两路继续用 `vo=libmpv` 的 SW 渲染
    （先把像素拿到手，再消除拷贝），接口保持不变——`Compositor::present` /

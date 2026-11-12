@@ -6,6 +6,12 @@
 //!
 //! 预览一次只解一路画面，所以取**最上面那条盖住该时刻的轨**；真正的多路叠加只有
 //! 导出（`overlay`）做得到。
+//!
+//! 选声（哪些音频轨在响、各多大声）在 `audio` 子模块里，导出侧也用它。
+
+mod audio;
+
+pub use audio::{PreviewAudio, audio_layers, enabled_audio_tracks, resolve_audio};
 
 use std::time::Duration;
 
@@ -111,63 +117,6 @@ pub fn layers(sequence: &Sequence, at: Tick) -> Vec<PreviewLayer> {
         layers.push(PreviewLayer { frame, opacity });
     }
     layers
-}
-
-/// 序列某一时刻该放的声音。
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PreviewAudio {
-    /// 该放哪段素材。
-    pub asset: AssetId,
-    /// 素材内部的时刻。
-    pub source: Tick,
-    /// 来自哪条轨（调试与界面提示用）。
-    pub track: Id,
-    /// 来自哪个片段。
-    pub clip: Id,
-    /// 这条轨的音量（线性增益，1.0 = 原样）。预览乘到 mpv 的音量上，与导出侧
-    /// `volume` 滤镜同一个量纲。
-    pub gain: f32,
-}
-
-/// 参与发声的音频轨，按轨道列表顺序（靠上的在前）。静音 / 被独奏挤掉 / 空轨都跳过。
-///
-/// 预览与导出共用这一条规则（导出侧 `audio_stream` 也用它），两边的「哪些轨在响、
-/// 各多大声」因此不会各写一遍。
-pub fn enabled_audio_tracks(sequence: &Sequence) -> impl Iterator<Item = &Track> {
-    let solo = sequence.audio_solo();
-    sequence.tracks.iter().filter(move |track| {
-        track.kind == TrackKind::Audio && track.audible(solo) && !track.clips.is_empty()
-    })
-}
-
-/// 播放头在 `at` 时每条音频轨上该放什么。
-///
-/// 与 [`layers`] 对应：多轨同时出声（M10-T05）时每条轨各要一路实例，所以这里把
-/// 命中的轨都取出来，而不是只留一条。列表顺序与轨道列表一致。
-pub fn audio_layers(sequence: &Sequence, at: Tick) -> Vec<PreviewAudio> {
-    enabled_audio_tracks(sequence)
-        .filter_map(|track| {
-            let clip = track
-                .clips
-                .iter()
-                .find(|clip| clip.source_at(at).is_some())?;
-            Some(PreviewAudio {
-                asset: clip.asset_id,
-                source: clip.source_at(at)?,
-                track: track.id,
-                clip: clip.id,
-                gain: track.normalized_gain(),
-            })
-        })
-        .collect()
-}
-
-/// 播放头在 `at` 时音频轨上该放哪个片段的哪一刻。`None` 表示没有音频片段。
-///
-/// 只要一路声音的地方（试听、单路诊断）用这个；多轨同时出声走 [`audio_layers`]。
-/// 多条轨同时有内容时取轨道列表里靠上的那条。
-pub fn resolve_audio(sequence: &Sequence, at: Tick) -> Option<PreviewAudio> {
-    audio_layers(sequence, at).into_iter().next()
 }
 
 /// 这一刻画面上该压多厚的黑（0 = 不用压，1 = 全黑）。
@@ -477,119 +426,6 @@ mod tests {
         );
         assert!(frame.frozen, "定格段要告诉播放器别再往下播");
         assert_eq!(resolve(&sequence, s(4.0)), None, "定格结束后才是空档");
-    }
-
-    // -- 音频轨 ------------------------------------------------------------
-
-    #[test]
-    fn 音频轨片段按时刻取素材() {
-        let mut sequence = sequence();
-        let audio = sequence.tracks[1].id;
-        put(&mut sequence, audio, 7, 1.0, 3.0, 2.0);
-
-        assert_eq!(resolve_audio(&sequence, s(1.0)), None, "片段之前没有声音");
-        let frame = resolve_audio(&sequence, s(2.5)).expect("片段之内有声");
-        assert_eq!(frame.asset, AssetId::new(7));
-        assert_eq!(frame.source, s(1.5), "素材 1 秒处的片段，2.5 秒对应 1.5 秒");
-        assert_eq!(resolve_audio(&sequence, s(4.0)), None, "片段之后没有声音");
-    }
-
-    #[test]
-    fn 音频轨片段也认倍率() {
-        let mut sequence = sequence();
-        let audio = sequence.tracks[1].id;
-        put(&mut sequence, audio, 7, 0.0, 4.0, 0.0);
-        sequence.tracks[1].clips[0].speed = 2.0;
-
-        assert_eq!(resolve_audio(&sequence, s(0.5)).unwrap().source, s(1.0));
-        assert_eq!(resolve_audio(&sequence, s(2.0)), None, "2 倍速只占 2 秒");
-    }
-
-    #[test]
-    fn 静音的音频轨不出声() {
-        let mut sequence = sequence();
-        let audio = sequence.tracks[1].id;
-        put(&mut sequence, audio, 7, 0.0, 2.0, 0.0);
-        sequence.track_mut(audio).unwrap().muted = true;
-
-        assert_eq!(resolve_audio(&sequence, s(0.5)), None);
-    }
-
-    #[test]
-    fn 多条音频轨取靠上的那条() {
-        let mut sequence = sequence();
-        let first = sequence.tracks[1].id;
-        let second = sequence.add_track(TrackKind::Audio);
-        put(&mut sequence, first, 1, 0.0, 2.0, 0.0);
-        put(&mut sequence, second, 2, 0.0, 2.0, 0.0);
-
-        assert_eq!(
-            resolve_audio(&sequence, s(0.5)).unwrap().asset,
-            AssetId::new(1),
-            "只要一条时取列表靠上的那条"
-        );
-    }
-
-    #[test]
-    fn 多条音频轨同时出声各带自己的音量() {
-        let mut sequence = sequence();
-        let first = sequence.tracks[1].id;
-        let second = sequence.add_track(TrackKind::Audio);
-        put(&mut sequence, first, 1, 0.0, 2.0, 0.0);
-        put(&mut sequence, second, 2, 0.0, 2.0, 0.0);
-        sequence.track_mut(first).unwrap().gain = 0.5;
-        sequence.track_mut(second).unwrap().gain = 2.0;
-
-        let layers = audio_layers(&sequence, s(0.5));
-        assert_eq!(layers.len(), 2, "两条轨都在响");
-        assert_eq!(layers[0].asset, AssetId::new(1));
-        assert_eq!(layers[0].gain, 0.5);
-        assert_eq!(layers[1].asset, AssetId::new(2));
-        assert_eq!(layers[1].gain, 2.0);
-    }
-
-    #[test]
-    fn 独奏只留独奏的轨() {
-        let mut sequence = sequence();
-        let first = sequence.tracks[1].id;
-        let second = sequence.add_track(TrackKind::Audio);
-        put(&mut sequence, first, 1, 0.0, 2.0, 0.0);
-        put(&mut sequence, second, 2, 0.0, 2.0, 0.0);
-        sequence.track_mut(second).unwrap().solo = true;
-
-        let layers = audio_layers(&sequence, s(0.5));
-        assert_eq!(layers.len(), 1, "别的轨被独奏挤掉");
-        assert_eq!(layers[0].asset, AssetId::new(2));
-
-        // 独奏优先于静音：既静音又独奏的轨仍然是响的。
-        sequence.track_mut(second).unwrap().muted = true;
-        assert_eq!(audio_layers(&sequence, s(0.5)).len(), 1);
-
-        // 关掉独奏之后回到「只看 muted」：那条静音了，另一条恢复。
-        sequence.track_mut(second).unwrap().solo = false;
-        let layers = audio_layers(&sequence, s(0.5));
-        assert_eq!(layers.len(), 1);
-        assert_eq!(layers[0].asset, AssetId::new(1));
-    }
-
-    #[test]
-    fn 音量坏值按原样且夹到上限() {
-        let mut sequence = sequence();
-        let audio = sequence.tracks[1].id;
-        put(&mut sequence, audio, 1, 0.0, 2.0, 0.0);
-
-        let track = sequence.track_mut(audio).unwrap();
-        track.gain = f32::NAN;
-        assert_eq!(track.normalized_gain(), 1.0, "NaN 退回原样");
-        track.gain = -1.0;
-        assert_eq!(track.normalized_gain(), 1.0, "负数退回原样");
-        track.gain = 8.0;
-        assert_eq!(
-            track.normalized_gain(),
-            crate::timeline::MAX_GAIN,
-            "超过上限夹到 +6 dB"
-        );
-        assert_eq!(audio_layers(&sequence, s(0.5))[0].gain, 2.0);
     }
 
     // -- 黑场与转场 --------------------------------------------------------
