@@ -115,6 +115,8 @@ impl PlayerApp {
             composite_depth_warned: false,
             timeline_shuttle: 0.0,
             shuttle_key_held: false,
+            scrub_audio: false,
+            scrub_tail: 0,
             timecode_dialog: None,
             export_dialog: None,
             subtitle_dialog: None,

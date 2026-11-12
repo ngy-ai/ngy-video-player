@@ -490,6 +490,10 @@ pub struct PlayerApp {
     timeline_shuttle: f64,
     /// `K` 是不是还按着：按着时 `J` / `L` 是逐帧，不按就是变速播放。
     shuttle_key_held: bool,
+    /// 拖播放头时是不是已经放开了主实例的声音（scrub），松手或停手要按住。
+    scrub_audio: bool,
+    /// scrub 的代次：每移动一次 +1，尾巴计时器据此判断自己过没过期。
+    scrub_tail: u64,
     /// 「跳到时间码」面板；`None` 表示没打开。与其余模态互斥。
     timecode_dialog: Option<TimecodeDialog>,
     /// 导出面板；`None` 表示没打开。

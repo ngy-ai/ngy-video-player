@@ -255,6 +255,10 @@ impl PlayerApp {
         }
         // 播放头动了，画面跟着走（M4-T01）。
         self.preview_at_playhead(cx);
+        // 拖着走的时候顺带出声（scrub）：指针停住 150 ms 后自己按住。
+        if self.timeline_dragging {
+            self.scrub_audio(cx);
+        }
     }
 
     pub(super) fn scroll_timeline(&mut self, pixels: f32) {

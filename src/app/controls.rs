@@ -129,6 +129,8 @@ impl PlayerApp {
         }
         self.timeline_dragging = false;
         self.timeline_snap = false;
+        // 松手立刻收声，不等尾巴计时器。
+        self.stop_scrub_audio();
     }
 
     pub(super) fn render_controls(&self, panel: f32, cx: &mut Context<Self>) -> impl IntoElement {

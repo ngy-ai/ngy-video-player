@@ -26,6 +26,11 @@ const TICK: Duration = Duration::from_millis(33);
 /// 开始放，宽限期一过就要靠偏差纠正补一次精确 seek，那之前看到的画面偏早。
 const LOAD_GRACE: Duration = Duration::from_millis(300);
 
+/// 拖着播放头停手之后，声音还留多长。
+///
+/// 拖一次只该听见「指针下面那几声」：指针停住就安静，声音不能顺着序列一路放下去。
+const SCRUB_TAIL: Duration = Duration::from_millis(150);
+
 impl PlayerApp {
     /// 按当前播放头刷新预览画面（拖动、跳转之后）。
     pub(super) fn preview_at_playhead(&mut self, cx: &mut Context<Self>) {
@@ -197,7 +202,15 @@ impl PlayerApp {
         }
         // 拖播放头要看的是「这一帧」，不是从这儿接着放；播放时则要从这里接着走。
         // 定格段没有「接着走」这回事：停在最后一帧，等播放头走出定格再放。
-        self.send(Command::SetPaused(!playing || frame.frozen));
+        //
+        // 拖动时不按住：scrub 要的就是接着出声，收声交给拖动的尾巴计时器——
+        // 每挪一下先 pause 再 unpause，光重启音频输出就够把 100 ms 的预算吃光。
+        let pause = if playing {
+            frame.frozen
+        } else {
+            !self.timeline_dragging
+        };
+        self.send(Command::SetPaused(pause));
         true
     }
 
@@ -281,6 +294,8 @@ impl PlayerApp {
     }
 
     fn start_timeline_playback(&mut self, cx: &mut Context<Self>) {
+        // 播放接管声音：拖动留下的 scrub 尾巴先收掉。
+        self.stop_scrub_audio();
         let Some(project) = self.project.as_ref() else {
             // 起不来就别把档位留在那里：下一次按空格会带着上次的方向起跑。
             self.timeline_shuttle = 0.0;
@@ -505,6 +520,58 @@ impl PlayerApp {
         if preview::out_of_sync(frame.source, self.snapshot.position) {
             self.send(Command::SeekAbsolute(source));
             self.timeline_loaded_at = Some(Instant::now());
+        }
+    }
+
+    /// 拖播放头时让它出声（scrub）。
+    ///
+    /// 只出声、不动画面：拖的这段时间界面不再向 mpv 要新帧，它内部却照常解码，
+    /// 于是听到的就是「指针下面那几声」。指针一停就按住，靠 [`SCRUB_TAIL`] 的
+    /// 尾巴计时器——否则声音会顺着序列一路放下去，听着像误触了播放。
+    ///
+    /// 三处不出声：合成模式（主实例里什么都没装）、音频轨接管时（主实例被压成静音，
+    /// 放开就是错的那一路）、全局静音。
+    pub(super) fn scrub_audio(&mut self, cx: &mut Context<Self>) {
+        if self.timeline_playing
+            || self.timeline_preview.is_none()
+            || self.timeline_audio_solo
+            || self.settings.muted
+        {
+            return;
+        }
+        // 定格段本来就不该有声音：放开 mpv 会把它一路放出去。
+        let frozen = match self.project.as_ref() {
+            Some(project) => preview::resolve(project.sequence(), project.ui.playhead)
+                .is_some_and(|frame| frame.frozen),
+            None => return,
+        };
+        if frozen {
+            return;
+        }
+        self.scrub_audio = true;
+        self.send(Command::SetPaused(false));
+        self.scrub_tail = self.scrub_tail.wrapping_add(1);
+        let tail = self.scrub_tail;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SCRUB_TAIL).await;
+            this.update(cx, |this, _| {
+                if this.scrub_tail == tail {
+                    this.stop_scrub_audio();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// 把 scrub 放开的声音按住。重复调用无副作用，播放中不碰暂停（那是时钟的事）。
+    pub(super) fn stop_scrub_audio(&mut self) {
+        if !self.scrub_audio {
+            return;
+        }
+        self.scrub_audio = false;
+        if self.timeline_preview.is_some() && !self.timeline_playing {
+            self.send(Command::SetPaused(true));
         }
     }
 
