@@ -108,7 +108,7 @@ impl PlayerApp {
             timeline_clock: 0,
             timeline_audio: None,
             timeline_audio_file: None,
-            timeline_audio_solo: false,
+            timeline_audio_active: false,
             compositor: None,
             composite_layers: Vec::new(),
             composite_failed: false,

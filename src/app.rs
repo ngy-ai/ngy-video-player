@@ -477,7 +477,7 @@ pub struct PlayerApp {
     /// 音频实例里已经装着哪个文件；`None` 表示没装。
     timeline_audio_file: Option<PathBuf>,
     /// 是否正压着主画面自带的声音（音频轨片段优先）。
-    timeline_audio_solo: bool,
+    timeline_audio_active: bool,
     /// 多轨合成预览（M10-T01）。两条以上视频轨同时有画面时才创建。
     compositor: Option<crate::player::compositor::Compositor>,
     /// 合成器最近一次拿到的图层（自下而上）。空表示这一帧不由合成器负责。
