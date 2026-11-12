@@ -19,6 +19,7 @@ impl PlayerApp {
         self.settings.loop_mode = defaults.loop_mode;
         self.settings.on_top = defaults.on_top;
         self.settings.preview_proxy = defaults.preview_proxy;
+        self.settings.auto_proxy = defaults.auto_proxy;
         self.settings.maintain_associations = defaults.maintain_associations;
         self.settings.save();
 

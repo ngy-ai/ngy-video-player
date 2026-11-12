@@ -30,6 +30,9 @@ pub(crate) struct LibraryPanel {
     pub(crate) requested: HashSet<AssetId>,
     /// 素材状态的缓存：`fs::metadata` 不能每帧都调。
     pub(crate) states: HashMap<AssetId, AssetState>,
+    /// 「比序列大、还没有代理」的素材。补代理按钮数它，判断要 stat 目录，
+    /// 只在刷新状态时算一次，别放到每帧的绘制里。
+    pub(crate) missing_proxy: Vec<AssetId>,
     /// 串行生成缩略图的后台线程。
     pub(crate) worker: ThumbWorker,
     pub(crate) _search_changes: Subscription,

@@ -143,6 +143,7 @@ mod project_export;
 mod project_file;
 mod project_pack;
 mod proxy;
+mod proxy_queue;
 mod remux;
 mod render;
 mod scenes;
@@ -189,6 +190,7 @@ use self::multicam::MulticamDialog;
 use self::playlist_menu::PanelMenu;
 use self::project_file::ProjectConfirm;
 use self::proxy::ProxyDialog;
+use self::proxy_queue::ProxyQueue;
 use self::remux::RemuxDialog;
 use self::scenes::ScenesDialog;
 use self::scope::ScopeDialog;
@@ -277,6 +279,10 @@ pub struct PlayerApp {
     proxy: Option<ProxyDialog>,
     /// 代理任务代次，作用同 `clip_generation`。
     proxy_generation: u64,
+    /// 批量补代理的队列；`None` 表示没在批量跑。
+    proxy_queue: Option<ProxyQueue>,
+    /// 队列代次。重新排一次之后，上一轮还在路上的事件不再算数。
+    proxy_queue_generation: u64,
     /// 示波器对话框；`None` 表示没打开。
     scope: Option<ScopeDialog>,
     /// 示波器采样代次，作用同 `clip_generation`。

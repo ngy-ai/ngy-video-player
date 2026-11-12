@@ -345,6 +345,12 @@ pub struct Settings {
     /// 导出永远用原片，与这个开关无关。
     #[serde(default = "default_preview_proxy")]
     pub preview_proxy: bool,
+    /// 导入素材后自动给「比序列大、还没有代理」的素材补代理。
+    ///
+    /// 默认关：一导入就占满 CPU 跑 ffmpeg，用户可能只是想先看看片子；开着的话
+    /// 大批素材进来会连着转很久。补代理也可以随时从素材库底栏手动发起。
+    #[serde(default = "default_auto_proxy")]
+    pub auto_proxy: bool,
     /// 启动时是否自动维护文件关联（把注册项按当前 exe 路径重写一遍）。
     ///
     /// 记的是**用户意图**，不是「当前有没有注册」——后者每次现场问操作系统，
@@ -378,6 +384,7 @@ impl Default for Settings {
             mirror_h: false,
             mirror_v: false,
             preview_proxy: true,
+            auto_proxy: false,
             maintain_associations: true,
         }
     }
@@ -409,6 +416,10 @@ fn default_mini_width() -> f32 {
 
 fn default_preview_proxy() -> bool {
     true
+}
+
+fn default_auto_proxy() -> bool {
+    false
 }
 
 fn default_mini_on_top() -> bool {

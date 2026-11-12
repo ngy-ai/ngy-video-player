@@ -104,6 +104,28 @@ pub fn preview_for(project: &Project, asset: AssetId) -> Option<PreviewFile> {
     ))
 }
 
+/// 这个素材要不要生成代理：有画面、比序列大、而且现在还没有代理。
+///
+/// 与 [`preview_for`] 的分工：那个回答「这一刻播哪个文件」，这个回答「该不该去做一份」。
+/// 已经有代理的不再重排，避免批量补代理时反复盖同一个文件。
+pub fn needs_proxy(project: &Project, asset: AssetId) -> bool {
+    let Some(asset) = project.asset(asset) else {
+        return false;
+    };
+    let Some(media) = asset.media.as_ref() else {
+        return false;
+    };
+    let Some(original) = project.asset_path(asset.id) else {
+        return false;
+    };
+    if is_proxy_file(original) || !media.has_video() {
+        return false;
+    }
+    let sequence = project.sequence();
+    proxy_worthwhile(media, sequence.width, sequence.height)
+        && find_proxy(original, |path| path.is_file()).is_none()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,5 +242,47 @@ mod tests {
         assert_eq!(file.path(), path);
         // 不存在的素材 id 返回 None。
         assert_eq!(preview_for(&project, AssetId::new(999)), None);
+    }
+
+    #[test]
+    fn 该不该补代理() {
+        let dir = std::env::temp_dir().join(format!("ngy-needs-proxy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let original = dir.join("clip.mov");
+        std::fs::write(&original, b"x").unwrap();
+
+        let mut project = Project::new();
+        let id = project.add_asset(&original);
+        // 还没探测：不知道多大，不排。
+        assert!(!needs_proxy(&project, id));
+
+        // 4K 素材进 1080p 序列：该补。
+        project.assets[0].media = Some(media(3840, 2160));
+        assert!(needs_proxy(&project, id));
+
+        // 已经有代理：不再重排（批量补代理不该反复盖同一个文件）。
+        std::fs::write(dir.join("clip.proxy.mp4"), b"x").unwrap();
+        assert!(!needs_proxy(&project, id));
+
+        // 小素材不排。
+        let small = dir.join("small.mov");
+        std::fs::write(&small, b"x").unwrap();
+        let small_id = project.add_asset(&small);
+        let last = project.assets.len() - 1;
+        project.assets[last].media = Some(media(1280, 720));
+        assert!(!needs_proxy(&project, small_id));
+
+        // 自己就是代理的不排：那是用户自己的素材，不能再派一份。
+        let proxy_only = dir.join("other.proxy.mp4");
+        std::fs::write(&proxy_only, b"x").unwrap();
+        let proxy_id = project.add_asset(&proxy_only);
+        let last = project.assets.len() - 1;
+        project.assets[last].media = Some(media(3840, 2160));
+        assert!(!needs_proxy(&project, proxy_id));
+
+        // 没登记的 id 不排。
+        assert!(!needs_proxy(&project, AssetId::new(999)));
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

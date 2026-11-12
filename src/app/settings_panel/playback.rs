@@ -60,6 +60,16 @@ impl PlayerApp {
                 cx.notify();
             }),
         );
+        let auto_proxy_row = picture_option(
+            "settings-auto-proxy",
+            "导入后自动为大素材补齐代理",
+            self.settings.auto_proxy,
+            true,
+            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                this.toggle_auto_proxy();
+                cx.notify();
+            }),
+        );
 
         div()
             .flex()
@@ -67,10 +77,11 @@ impl PlayerApp {
             .gap(px(18.0))
             .child(option_group("循环模式", loop_rows))
             .child(option_group("窗口置顶", on_top_rows))
-            .child(option_group("剪辑预览", vec![proxy_row]))
-            .child(settings_note("两项都跟着偏好保存，下次启动照这个状态来。"))
+            .child(option_group("剪辑预览", vec![proxy_row, auto_proxy_row]))
+            .child(settings_note("都跟着偏好保存，下次启动照这个状态来。"))
             .child(settings_note(
-                "素材比序列大、旁边又有 `<原名>.proxy.mp4` 时，预览改放代理；导出不受影响。",
+                "素材比序列大、旁边又有 `<原名>.proxy.mp4` 时，预览改放代理；导出不受影响。\
+                 自动补齐是后台串行跑一条队列，进度在素材库底栏，随时可以取消。",
             ))
             .into_any_element()
     }

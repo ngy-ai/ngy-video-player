@@ -42,6 +42,7 @@ impl PlayerApp {
             thumbs: HashMap::new(),
             requested: HashSet::new(),
             states: HashMap::new(),
+            missing_proxy: Vec::new(),
             worker,
             _search_changes: search_changes,
         });
@@ -78,6 +79,13 @@ impl PlayerApp {
     pub(crate) fn reset_library(&mut self) {
         self.library = None;
         self.library_import = None;
+        // 换工程时把补代理的队列也收掉：跑的是上个工程的素材，写出来的代理没人用。
+        if let Some(queue) = self.proxy_queue.take()
+            && let Some(running) = queue.running
+        {
+            running.job.cancel();
+        }
+        self.proxy_queue_generation = self.proxy_queue_generation.wrapping_add(1);
         self.library_generation = self.library_generation.wrapping_add(1);
         self.audition = None;
         self.clear_source();
@@ -116,6 +124,13 @@ impl PlayerApp {
             .iter()
             .map(|asset| (asset.id, asset.state()))
             .collect();
+        // 「缺代理」的判断要 stat 目录里最多十个候选名字，和状态一起在这里算一次。
+        let missing_proxy: Vec<AssetId> = project
+            .assets
+            .iter()
+            .map(|asset| asset.id)
+            .filter(|id| crate::timeline::needs_proxy(project, *id))
+            .collect();
         let Some(library) = self.library.as_mut() else {
             return;
         };
@@ -126,6 +141,7 @@ impl PlayerApp {
             }
         }
         library.states = states;
+        library.missing_proxy = missing_proxy;
     }
 
     /// 点素材行。与播放列表同一套多选：普通点击单选，Ctrl/⌘ 切换，Shift 连选一段。

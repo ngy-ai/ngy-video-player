@@ -89,8 +89,14 @@ impl PlayerApp {
         } else {
             None
         };
-        let proxy_button = proxy_target.map(|(id, has_proxy)| {
-            settings_button(
+        // 底栏那个代理按钮同时管两件事：选中一个素材就只对它生成（可以换档），
+        // 否则退化成「把素材库里缺代理的都补上」。队列跑着时换成进度与取消。
+        let queue_busy = self.proxy_queue_busy();
+        let missing = library.missing_proxy.len();
+        let proxy_button: Option<AnyElement> = if queue_busy {
+            None
+        } else if let Some((id, has_proxy)) = proxy_target {
+            Some(settings_button(
                 "library-proxy",
                 if has_proxy {
                     "重新生成代理…"
@@ -101,7 +107,57 @@ impl PlayerApp {
                 cx.listener(move |this, _: &ClickEvent, _window, cx| {
                     this.open_proxy_dialog_for_asset(id, cx);
                 }),
-            )
+            ))
+        } else if missing > 0 {
+            Some(settings_button(
+                "library-proxy-all",
+                "补代理…",
+                true,
+                cx.listener(|this, _: &ClickEvent, _window, cx| {
+                    let count =
+                        this.queue_missing_proxies(crate::proxy::ProxyQuality::default(), cx);
+                    if count == 0 {
+                        this.flash("没有需要补代理的素材");
+                    } else {
+                        this.flash(format!("开始补代理：{count} 个素材排进队列"));
+                    }
+                    cx.notify();
+                }),
+            ))
+        } else {
+            None
+        };
+
+        let queue_status: Option<AnyElement> = self.proxy_queue.as_ref().map(|queue| {
+            let running = queue
+                .running
+                .as_ref()
+                .map(|running| format!("{} {:.0}%", running.name, running.progress * 100.0))
+                .unwrap_or_else(|| "准备中…".to_string());
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .px(px(10.0))
+                .pb(px(6.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .text_size(px(10.0))
+                        .text_color(text_muted())
+                        .whitespace_normal()
+                        .child(format!("补代理 {}/{} · {running}", queue.done, queue.total)),
+                )
+                .child(settings_button(
+                    "library-proxy-cancel",
+                    "取消",
+                    true,
+                    cx.listener(|this, _: &ClickEvent, _window, cx| {
+                        this.cancel_proxy_queue(cx);
+                    }),
+                ))
+                .into_any_element()
         });
 
         let mut panel = div()
@@ -251,6 +307,7 @@ impl PlayerApp {
         }
 
         panel
+            .children(queue_status)
             .child(list)
             .child(
                 div()

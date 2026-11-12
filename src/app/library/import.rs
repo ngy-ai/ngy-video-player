@@ -219,6 +219,13 @@ impl PlayerApp {
             } else {
                 self.flash(format!("已导入 {total} 个素材"));
             }
+            // 开着「导入后自动补代理」就把缺代理的排上队；探测刚结束，尺寸信息才齐。
+            if self.settings.auto_proxy {
+                let count = self.queue_missing_proxies(crate::proxy::ProxyQuality::default(), cx);
+                if count > 0 {
+                    self.flash(format!("已导入 {total} 个素材，接着补 {count} 个代理"));
+                }
+            }
         }
         cx.notify();
     }

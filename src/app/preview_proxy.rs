@@ -36,6 +36,17 @@ impl PlayerApp {
         self.silence_timeline_audio();
     }
 
+    /// 「导入后自动为大素材补代理」。只记意图，真正的队列在导入完成时起。
+    pub(crate) fn toggle_auto_proxy(&mut self) {
+        self.settings.auto_proxy = !self.settings.auto_proxy;
+        self.settings.save();
+        if self.settings.auto_proxy {
+            self.flash("已开启：导入后自动给比序列大的素材补代理");
+        } else {
+            self.flash("已关闭：导入后不再自动补代理，可以从素材库底栏手动发起");
+        }
+    }
+
     /// 设置窗口里的开关。下一次取帧 / 换片才生效，不做立刻重载：
     /// 播放中重载画面会黑一下，而用户改这一项时多半正要接着往下剪。
     pub(crate) fn toggle_preview_proxy(&mut self) {

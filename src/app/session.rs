@@ -59,6 +59,8 @@ impl PlayerApp {
             metadata_generation: 0,
             proxy: None,
             proxy_generation: 0,
+            proxy_queue: None,
+            proxy_queue_generation: 0,
             scope: None,
             scope_generation: 0,
             scenes: None,

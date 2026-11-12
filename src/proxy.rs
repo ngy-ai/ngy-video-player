@@ -59,6 +59,16 @@ impl ProxyQuality {
         }
     }
 
+    /// 码率封顶（kbps）。CRF 管质量、这一项管「别大到拖动时解不动」：花样多、
+    /// 噪声重的画面在纯 CRF 下能飙到几十兆，代理就白做了。
+    pub fn max_bitrate(self) -> u32 {
+        match self {
+            Self::P480 => 1_500,
+            Self::P720 => 3_000,
+            Self::P1080 => 6_000,
+        }
+    }
+
     /// 等比缩到这一档。`-2` 让宽度按保持偶数取整。
     pub fn scale_filter(self) -> String {
         format!("scale=-2:{}:flags=fast_bilinear", self.height())
@@ -220,6 +230,10 @@ fn build_command(executable: &Path, request: &ProxyRequest) -> Command {
         .arg("veryfast")
         .arg("-crf")
         .arg(request.quality.crf().to_string())
+        .arg("-maxrate")
+        .arg(format!("{}k", request.quality.max_bitrate()))
+        .arg("-bufsize")
+        .arg(format!("{}k", request.quality.max_bitrate() * 2))
         .arg("-vf")
         .arg(request.quality.scale_filter())
         .arg("-pix_fmt")
@@ -324,6 +338,20 @@ mod tests {
             .map(|quality| quality.height())
             .collect();
         assert_eq!(heights, vec![480, 720, 1080]);
+    }
+
+    #[test]
+    fn 码率按档封顶() {
+        // CRF 之外再封顶：噪声重的画面在纯 CRF 下能飙到几十兆，代理就白做了。
+        for quality in ProxyQuality::ALL {
+            let bitrate = quality.max_bitrate();
+            let args = args_for(quality);
+            assert!(has(&args, &["-maxrate", &format!("{bitrate}k")]));
+            assert!(has(&args, &["-bufsize", &format!("{}k", bitrate * 2)]));
+        }
+        // 档越高容许的码率越高。
+        assert!(ProxyQuality::P480.max_bitrate() < ProxyQuality::P720.max_bitrate());
+        assert!(ProxyQuality::P720.max_bitrate() < ProxyQuality::P1080.max_bitrate());
     }
 
     #[test]
