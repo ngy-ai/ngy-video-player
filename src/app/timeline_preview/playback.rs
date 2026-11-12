@@ -74,14 +74,8 @@ impl PlayerApp {
                 self.send(Command::SetPaused(true));
             }
         }
-        // 音频轨那一路是独立实例：倒放按住，正放跟上同一个倍速。
-        if let Some(player) = self.timeline_audio.as_ref() {
-            if rate < 0.0 {
-                player.pause();
-            } else {
-                player.set_speed(rate.abs());
-            }
-        }
+        // 音频轨那几路是独立实例：倒放按住，正放跟上同一个倍速。
+        self.shuttle_timeline_audio(rate);
         // 变速之后重新起算：不然上一段真实时间会按新倍速再乘一遍。
         self.timeline_last_tick = Instant::now();
         self.poke();
@@ -163,10 +157,8 @@ impl PlayerApp {
             self.send(Command::SetPaused(true));
             self.send(Command::SetSpeed(self.settings.speed));
         }
-        // 音频轨那一路是独立实例，主画面暂停管不到它。
-        if let Some(player) = self.timeline_audio.as_ref() {
-            player.pause();
-        }
+        // 音频轨那几路是独立实例，主画面暂停管不到它们。
+        self.pause_timeline_audio();
         // 合成器里那两路也一样：各自按自己的节奏放，主实例的暂停碰不到它们。
         if !self.composite_layers.is_empty() {
             let at = self

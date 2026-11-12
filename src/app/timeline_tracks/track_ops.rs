@@ -114,6 +114,68 @@ impl PlayerApp {
         self.delete_track_now(track, cx);
     }
 
+    /// 设置轨道音量（线性增益）。值没变就不落撤销、不刷提示。
+    ///
+    /// 改完立刻刷新一次预览：音频实例是按「主音量 × 轨道增益」算的，要当场听见。
+    pub(crate) fn set_track_gain(&mut self, track: Id, gain: f32, cx: &mut Context<Self>) {
+        let Some((message, changed)) = self
+            .project
+            .as_mut()
+            .and_then(|project| project.sequence_mut().track_mut(track))
+            .map(|target| {
+                let gain = if gain.is_finite() && gain >= 0.0 {
+                    gain.min(crate::timeline::MAX_GAIN)
+                } else {
+                    1.0
+                };
+                let changed = (target.gain - gain).abs() > 1e-4;
+                target.gain = gain;
+                (
+                    format!("轨道「{}」音量 {}", target.name, target.gain_label()),
+                    changed,
+                )
+            })
+        else {
+            return;
+        };
+        if !changed {
+            return;
+        }
+        self.remember_history(message.clone());
+        self.flash(message);
+        self.preview_at_playhead(cx);
+    }
+
+    /// 切换轨道独奏。只对音频轨有意义（画面是叠出来的，单独看一条得关掉别的轨）。
+    pub(crate) fn toggle_track_solo(&mut self, track: Id, cx: &mut Context<Self>) {
+        let Some((message, kind)) = self
+            .project
+            .as_mut()
+            .and_then(|project| project.sequence_mut().track_mut(track))
+            .map(|target| {
+                target.solo = !target.solo;
+                (
+                    format!(
+                        "轨道「{}」{}独奏",
+                        target.name,
+                        if target.solo { "开启" } else { "取消" }
+                    ),
+                    target.kind,
+                )
+            })
+        else {
+            return;
+        };
+        if kind != crate::timeline::TrackKind::Audio {
+            self.flash("独奏只对音频轨有意义（画面请用轨道开关）");
+            cx.notify();
+            return;
+        }
+        self.remember_history(message.clone());
+        self.flash(message);
+        self.preview_at_playhead(cx);
+    }
+
     /// 真正执行删除。片段与转场跟着一起走；删完清空选中集合，
     /// 否则被删轨道上的片段 id 留着会让下一次操作报「片段不存在」。
     pub(crate) fn delete_track_now(&mut self, track: Id, cx: &mut Context<Self>) {

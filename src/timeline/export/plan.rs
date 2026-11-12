@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 
-use crate::timeline::{AssetId, Id, Project, Sequence, Tick, Track, TrackKind};
+use crate::timeline::{AssetId, Id, Project, Sequence, Tick, Track};
 
 use super::{ExportError, ExportPlan, ExportSettings, SubtitleAttachment};
 
@@ -89,11 +89,10 @@ fn build_plan(
     if video_tracks.is_empty() {
         return Err(ExportError::NoVideoTrack);
     }
-    let audio_tracks: Vec<&Track> = sequence
-        .tracks
-        .iter()
-        .filter(|track| track.kind == TrackKind::Audio && !track.muted && !track.clips.is_empty())
-        .collect();
+    // 音频选轨同样与预览共用一份（`enabled_audio_tracks`）：静音 / 被独奏挤掉的轨
+    // 都不进混音，两边的「哪些声音在响」因此不会各写一遍。
+    let audio_tracks: Vec<&Track> =
+        crate::timeline::preview::enabled_audio_tracks(sequence).collect();
 
     let duration = sequence.duration();
     // 工作区先夹到序列范围内；夹完是空的就没得导。
@@ -490,6 +489,14 @@ fn audio_stream(
     let mut stream = Stream::new();
     let mut cursor = Tick::ZERO;
     let mut gap_index = 0;
+    // 轨道音量落成 `volume=`：它是振幅倍数，与预览侧乘到 mpv 音量上的那个数同量纲。
+    // 静音段不用乘——`anullsrc` 多少倍都是静音，少插一道滤镜更清楚。
+    let gain = track.normalized_gain();
+    let volume = if (gain - 1.0).abs() < 1e-4 {
+        String::new()
+    } else {
+        format!(",volume={gain:.4}")
+    };
 
     for clip in &track.clips {
         if clip.start > cursor {
@@ -518,7 +525,7 @@ fn audio_stream(
             format!(
                 "[{index}:a]atrim=start={:.6}:end={:.6},asetpts=PTS-STARTPTS{tempo},\
                  aresample={AUDIO_RATE},\
-                 aformat=sample_fmts=fltp:channel_layouts=stereo{pad}",
+                 aformat=sample_fmts=fltp:channel_layouts=stereo{pad}{volume}",
                 clip.source_in.secs(),
                 clip.source_out.secs()
             ),

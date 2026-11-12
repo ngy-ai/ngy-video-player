@@ -158,6 +158,45 @@ fn 轨道状态随序列往返且老工程默认正常() {
 }
 
 #[test]
+fn 轨道音量与独奏随序列往返且老工程默认原样() {
+    let mut sequence = sample();
+    sequence.tracks[0].gain = 0.25;
+    sequence.tracks[1].solo = true;
+
+    let text = serde_json::to_string(&sequence).expect("序列化");
+    let back: Sequence = serde_json::from_str(&text).expect("反序列化");
+    assert_eq!(back.tracks[0].gain, 0.25);
+    assert!(back.tracks[1].solo);
+
+    // 老工程没有这两个键：音量必须是 1.0（`f32` 的默认 0.0 会把整条轨变哑）。
+    let legacy =
+        r#"{"name":"旧工程","fps":"25/1","tracks":[{"id":1,"kind":"audio","name":"音频"}]}"#;
+    let back: Sequence = serde_json::from_str(legacy).expect("老工程");
+    assert_eq!(back.tracks[0].gain, 1.0, "缺字段按原样，不是静音");
+    assert!(!back.tracks[0].solo);
+    assert_eq!(back.tracks[0].gain_label(), "0 dB");
+}
+
+#[test]
+fn 音量文案按分贝显示() {
+    let mut sequence = sample();
+    let track = &mut sequence.tracks[1];
+    assert_eq!(track.gain_label(), "0 dB", "没改过就是原样");
+
+    track.gain = 0.5;
+    assert_eq!(track.gain_label(), "-6.0 dB");
+    track.gain = 2.0;
+    assert_eq!(track.gain_label(), "+6.0 dB");
+    track.gain = 0.0;
+    assert_eq!(track.gain_label(), "静音");
+    // 独奏只看音频轨：视频轨上勾了也不会把别的音频轨挤掉。
+    sequence.tracks[0].solo = true;
+    assert!(!sequence.audio_solo());
+    sequence.tracks[1].solo = true;
+    assert!(sequence.audio_solo());
+}
+
+#[test]
 fn 一千个片段往返不丢数据() {
     let mut sequence = Sequence::new("长片", Rational::FPS_25, 1920, 1080);
     let video = sequence.tracks[0].id;

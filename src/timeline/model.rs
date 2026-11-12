@@ -290,7 +290,28 @@ pub struct Track {
     pub muted: bool,
     /// 锁定：不影响输出，只拒绝一切编辑操作。
     pub locked: bool,
+    /// 这一轨的音量：**线性增益**，1.0 = 原样。
+    ///
+    /// 与导出侧的 `volume` 滤镜同一个量纲（都是振幅倍数，不是 dB），预览把它乘到
+    /// mpv 的 `volume` 上，两边电平才对得上。只对音频轨有意义；视频 / 字幕轨恒为 1。
+    #[serde(default = "unity_gain")]
+    pub gain: f32,
+    /// 独奏：只要有任意一条音频轨开着独奏，其它音频轨就都不出声。
+    ///
+    /// 独奏**优先于静音**（与常见 DAW 一致）：一条轨既静音又独奏时它是响的——
+    /// 用户点独奏的心意是「只听这条」。
+    #[serde(default)]
+    pub solo: bool,
 }
+
+/// 音量的默认值（原样）。`serde` 的 `default` 需要一个函数，`f32` 的默认 0.0 是
+/// 「全静音」，直接 [`Default`] 会让老工程一读进来就哑掉。
+fn unity_gain() -> f32 {
+    1.0
+}
+
+/// 轨道音量的上限：2.0 = +6 dB。再往上放就只剩削顶的风险，混音台上也没人这么推。
+pub const MAX_GAIN: f32 = 2.0;
 
 impl Track {
     pub fn new(id: Id, kind: TrackKind, name: impl Into<String>) -> Self {
@@ -303,6 +324,41 @@ impl Track {
             subtitles: Vec::new(),
             muted: false,
             locked: false,
+            gain: 1.0,
+            solo: false,
+        }
+    }
+
+    /// 可用于混音的音量：坏值（NaN / 负数 / 无穷）按 1.0，超过上限夹到 [`MAX_GAIN`]。
+    ///
+    /// 工程文件是明文 JSON，手改出来的 `gain` 可能是任何数；这里兜底而不是在每个
+    /// 使用点上各写一遍。
+    pub fn normalized_gain(&self) -> f32 {
+        if self.gain.is_finite() && self.gain >= 0.0 {
+            self.gain.min(MAX_GAIN)
+        } else {
+            1.0
+        }
+    }
+
+    /// 这一刻该不该出声。`solo_on` 是「本序列里有音频轨在独奏」。
+    ///
+    /// 规则只有一条：有独奏时只有独奏的那几条响；没有独奏时看 `muted`。
+    pub fn audible(&self, solo_on: bool) -> bool {
+        if solo_on { self.solo } else { !self.muted }
+    }
+
+    /// 音量的展示文案：0 dB / -6.0 dB / +6.0 dB，0 增益写「静音」。
+    ///
+    /// 面板上的档位与轨道头上的小字共用它，两边不会一个写 dB 一个写百分比。
+    pub fn gain_label(&self) -> String {
+        let gain = self.normalized_gain();
+        if (gain - 1.0).abs() < 1e-3 {
+            "0 dB".to_string()
+        } else if gain <= 0.0 {
+            "静音".to_string()
+        } else {
+            format!("{:+.1} dB", 20.0 * gain.log10())
         }
     }
 
@@ -463,6 +519,16 @@ impl Sequence {
 
     pub fn track_index(&self, id: Id) -> Option<usize> {
         self.tracks.iter().position(|track| track.id == id)
+    }
+
+    /// 有没有音频轨开着独奏。有的话其它音频轨一律不出声（独奏优先于静音）。
+    ///
+    /// 只看音频轨：视频轨的「独奏」没有意义——画面本来就是叠出来的，真要单独看
+    /// 一条轨得把别的轨关掉（那是 `muted` / 眼睛按钮）。
+    pub fn audio_solo(&self) -> bool {
+        self.tracks
+            .iter()
+            .any(|track| track.kind == TrackKind::Audio && track.solo)
     }
 
     /// 全部片段，附带所在轨道。界面画时间线时按轨道分组，先拿到轨道再遍历。

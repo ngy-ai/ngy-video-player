@@ -45,7 +45,7 @@ pub use keyframe::{
 };
 pub use media::{AssetState, ColorTags, MediaInfo, MediaStamp};
 pub use model::{
-    AssetId, ClipItem, Id, Marker, ModelError, Sequence, Track, TrackKind, Transition,
+    AssetId, ClipItem, Id, MAX_GAIN, Marker, ModelError, Sequence, Track, TrackKind, Transition,
     TransitionKind,
 };
 pub use ops::{ClipSpec, EditError, EditOp, Placement, apply, remove_clips, split_at};

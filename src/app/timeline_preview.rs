@@ -27,6 +27,8 @@ use std::time::{Duration, Instant};
 use super::*;
 use crate::timeline::preview;
 
+pub(crate) use self::audio::TrackAudio;
+
 /// 加载 / seek 之后的宽限期：这段时间里 mpv 的位置还没追上，不能拿来判断偏差。
 ///
 /// 不宜太长：`Load` 带的 seek 只落到关键帧上，长 GOP 的素材可能从入点前一两秒

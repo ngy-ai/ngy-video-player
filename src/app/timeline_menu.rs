@@ -29,6 +29,16 @@ pub(super) enum TimelineMenu {
     Color(super::timeline_color::ColorMenu),
     /// 字幕轨上的条目右键菜单：编辑或删除这一条文字。
     Subtitle { item: Id, position: Point<Pixels> },
+    /// 轨道头右键：音量、独奏、静音 / 隐藏与锁定。轨道头只有 108 像素宽，
+    /// 放不下第四个开关，这些状态收进一张小面板。
+    Track(TrackMenu),
+}
+
+/// 轨道菜单的上下文：哪条轨道、鼠标位置。
+#[derive(Clone, Copy, Debug)]
+pub(super) struct TrackMenu {
+    track: Id,
+    position: Point<Pixels>,
 }
 
 /// 转场面板的上下文：接缝右侧的那段片段（转场挂在它身上）与鼠标位置。
@@ -94,7 +104,138 @@ impl PlayerApp {
             TimelineMenu::Subtitle { item, position } => {
                 self.render_subtitle_item_menu(item, position, window, cx)
             }
+            TimelineMenu::Track(menu) => self.render_track_menu(menu, window, cx),
         }
+    }
+
+    /// 轨道头右键菜单。轨道被删掉时跟着收掉，不留一张指向不存在轨道的壳。
+    pub(super) fn open_track_menu(
+        &mut self,
+        track: Id,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.project.is_none() {
+            return;
+        }
+        self.timeline_menu = Some(TimelineMenu::Track(TrackMenu { track, position }));
+        cx.notify();
+    }
+
+    /// 轨道面板：一行音量档位（只对音频轨），一行开关。
+    ///
+    /// 每次点击各落一步撤销，面板保持打开——调音量常要来回试几档，点一下关一次
+    /// 等于逼用户反复右键。
+    fn render_track_menu(
+        &self,
+        menu: TrackMenu,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let project = self.project.as_ref()?;
+        let track = project.sequence().track(menu.track)?;
+        let audio = track.kind == crate::timeline::TrackKind::Audio;
+        let gain = track.normalized_gain();
+        let muted = track.muted;
+        let solo = track.solo;
+        let locked = track.locked;
+        let title = if audio {
+            format!("轨道「{}」 · {}", track.name, track.gain_label())
+        } else {
+            format!("轨道「{}」", track.name)
+        };
+        let id = menu.track;
+        let origin = menu_origin(menu.position, TRACK_PANEL_HEIGHT, window);
+
+        let mut gains = div().flex().flex_wrap().gap(px(4.0));
+        if audio {
+            for (index, choice) in TRACK_GAIN_CHOICES.into_iter().enumerate() {
+                gains = gains.child(chip(
+                    TRACK_GAIN_CHIP_IDS[index],
+                    TRACK_GAIN_LABELS[index],
+                    (gain - choice).abs() < 0.02,
+                    cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                        this.set_track_gain(id, choice, cx);
+                    }),
+                ));
+            }
+        } else {
+            // 视频 / 字幕轨没有音量：把「量」这一行的位置给一句说明，面板高度不变。
+            gains = gains.child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(text_faint())
+                    .child("音量与独奏只对音频轨有意义"),
+            );
+        }
+
+        let mute_label = if audio { "静音" } else { "隐藏" };
+        let toggles = div()
+            .flex()
+            .flex_wrap()
+            .gap(px(4.0))
+            .child(chip(
+                "track-menu-solo",
+                "独奏",
+                solo,
+                cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                    this.toggle_track_solo(id, cx);
+                }),
+            ))
+            .child(chip(
+                "track-menu-mute",
+                mute_label,
+                muted,
+                cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                    this.toggle_track_muted(id, cx);
+                }),
+            ))
+            .child(chip(
+                "track-menu-lock",
+                "锁定",
+                locked,
+                cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                    this.toggle_track_locked(id, cx);
+                }),
+            ));
+
+        Some(
+            div()
+                .id("timeline-track-menu")
+                .absolute()
+                .left(origin.x)
+                .top(origin.y)
+                .w(px(TRACK_PANEL_WIDTH))
+                .py(px(8.0))
+                .px(px(10.0))
+                .rounded(px(10.0))
+                .bg(surface())
+                .border_1()
+                .border_color(gpui_kit::rgb(0x2c2c34))
+                .shadow_lg()
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                // 与其它菜单一样：点面板本身不能漏到下面的轨道去。
+                .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
+                    cx.stop_propagation();
+                }))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                        cx.stop_propagation();
+                    }),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(text_muted())
+                        .child(title),
+                )
+                .child(gains)
+                .child(toggles)
+                .into_any_element(),
+        )
     }
 
     /// 打开接缝上的转场面板。左边不是紧邻的片段时直接给提示，不弹一张空面板。
@@ -507,6 +648,23 @@ const MENU_MARGIN: f32 = 8.0;
 /// 转场面板的宽度与估算高度（标题 + 两行 chip + 一行底部）。
 const TRANSITION_PANEL_WIDTH: f32 = 252.0;
 const TRANSITION_PANEL_HEIGHT: f32 = 120.0;
+
+/// 轨道面板的宽度与估算高度（标题 + 音量行 + 开关行）。
+const TRACK_PANEL_WIDTH: f32 = 244.0;
+const TRACK_PANEL_HEIGHT: f32 = 84.0;
+
+/// 轨道音量的档位：线性增益与标签一一对应（-12 / -6 / 0 / +6 dB）。
+///
+/// 与导出侧的 `volume` 滤镜同一个数：预览乘到 mpv 音量上，导出写进滤镜链，
+/// 两边电平因此能对上（验收标准是差 < 1 dB）。
+const TRACK_GAIN_CHOICES: [f32; 4] = [0.2512, 0.5012, 1.0, 1.9953];
+const TRACK_GAIN_LABELS: [&str; 4] = ["-12 dB", "-6 dB", "0 dB", "+6 dB"];
+const TRACK_GAIN_CHIP_IDS: [&str; 4] = [
+    "track-gain-m12",
+    "track-gain-m6",
+    "track-gain-0",
+    "track-gain-p6",
+];
 
 /// 时长选项：几档常见的值，真正生效的上限还是两侧余量。
 const DURATION_CHOICES: [Tick; 5] = [

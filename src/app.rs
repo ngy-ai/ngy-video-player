@@ -188,6 +188,7 @@ use self::sequence_manager::SequenceManagerDialog;
 use self::settings_panel::SettingsTab;
 use self::timecode_jump::TimecodeDialog;
 use self::timeline_menu::TimelineMenu;
+use self::timeline_preview::TrackAudio;
 use self::timeline_subtitle::SubtitleDialog;
 use self::timeline_tracks::{KeyframeDrop, TimelineDrop};
 use self::widgets::*;
@@ -472,12 +473,14 @@ pub struct PlayerApp {
     timeline_loaded_at: Option<Instant>,
     /// 播放时钟的代数。每次开始播放加一，旧的那条循环看到代数变了就自己退出。
     timeline_clock: u64,
-    /// 音频轨预览的第二个 mpv 实例。第一次真的有音频片段时才创建。
-    timeline_audio: Option<crate::player::audio_preview::AudioPreview>,
-    /// 音频实例里已经装着哪个文件；`None` 表示没装。
-    timeline_audio_file: Option<PathBuf>,
-    /// 是否正压着主画面自带的声音（音频轨片段优先）。
+    /// 每条音频轨一路纯音频 mpv 实例（M10-T05）。第一次真的有内容时才创建。
+    timeline_audio: Vec<TrackAudio>,
+    /// 音频实例起不来过：不再重试，也别每拍刷日志。
+    timeline_audio_failed: bool,
+    /// 是否正压着主画面自带的声音（有音频轨在响）。
     timeline_audio_active: bool,
+    /// 已经提示过「超过同时出声的轨数上限」：只提示一次，别每拍刷屏。
+    audio_depth_warned: bool,
     /// 多轨合成预览（M10-T01）。两条以上视频轨同时有画面时才创建。
     compositor: Option<crate::player::compositor::Compositor>,
     /// 合成器最近一次拿到的图层（自下而上）。空表示这一帧不由合成器负责。

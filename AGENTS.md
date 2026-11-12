@@ -43,7 +43,11 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  session（初始化/事件循环）、playback、window（迷你窗/置顶）、
                  picture、playlist_ops、video_area、
                  timeline_view / timeline_tracks（工程模式时间线：布局、轨道行、片段与
-                   关键帧标记的拖动，`timeline_tracks/lane.rs` 是片段区各自画什么）、
+                   关键帧标记的拖动，`timeline_tracks/lane.rs` 是片段区各自画什么，
+                   `timeline_tracks/label.rs` 是轨道头与轨道右键面板的入口）、
+                 timeline_preview（工程模式预览：取帧与跟随，`timeline_preview/composite.rs`
+                   是多轨合成接管，`playback.rs` 是 J/K/L 变速、播放时钟与 scrub，
+                   `audio.rs` 是每条音频轨一路纯音频 mpv 实例的多路出声）、
                  library（工程模式左侧素材库：导入 / 后台探测 / 封面 / 试听原片，
                    `library/drop.rs` 是拖到轨道的落点、兼容性与首尾相接排布）、
                  source_edit（三点编辑：源入出点、`,` / `.` 落位，与试听分成两笔状态）、

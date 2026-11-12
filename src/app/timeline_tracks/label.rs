@@ -45,6 +45,49 @@ impl PlayerApp {
             (IconName::LockOpen, "锁定这一轨（禁止编辑）")
         };
         let delete_tip = format!("删除这条{}轨「{}」", track.kind.label(), track.name);
+        // 独奏与音量只对音频轨有意义：轨道头上用两个小标记说清楚当前状态，
+        // 改它们的地方在右键菜单里（`TimelineMenu::Track`）。
+        let audio = track.kind == crate::timeline::TrackKind::Audio;
+        let gain_note =
+            (audio && (track.normalized_gain() - 1.0).abs() > 1e-3).then(|| track.gain_label());
+
+        let mut name_row = div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .size(px(7.0))
+                    .rounded_full()
+                    .bg(clip_color(track.kind)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .text_size(px(11.0))
+                    // 关掉的轨道用更淡的颜色，一眼能从名字列看出它不参与输出。
+                    .text_color(if track.muted {
+                        text_faint()
+                    } else {
+                        text_muted()
+                    })
+                    .child(track.name.clone()),
+            );
+        if track.solo {
+            name_row = name_row.child(div().text_size(px(9.0)).text_color(ui::accent()).child("S"));
+        }
+        if let Some(note) = gain_note {
+            name_row = name_row.child(
+                div()
+                    .whitespace_nowrap()
+                    .text_size(px(9.0))
+                    .text_color(text_faint())
+                    .child(note),
+            );
+        }
 
         div()
             .absolute()
@@ -59,33 +102,16 @@ impl PlayerApp {
             .px(px(8.0))
             .border_b_1()
             .border_color(gpui_kit::rgb(0x22222a))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(
-                        div()
-                            .size(px(7.0))
-                            .rounded_full()
-                            .bg(clip_color(track.kind)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .text_size(px(11.0))
-                            // 关掉的轨道用更淡的颜色，一眼能从名字列看出它不参与输出。
-                            .text_color(if track.muted {
-                                text_faint()
-                            } else {
-                                text_muted()
-                            })
-                            .child(track.name.clone()),
-                    ),
+            // 右键任意位置开轨道菜单：音量 / 独奏 / 静音 / 锁定。轨道头就这么窄，
+            // 再塞第四个图标会挤成一排看不出含义的小点。
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                    cx.stop_propagation();
+                    this.open_track_menu(track_id, event.position, cx);
+                }),
             )
+            .child(name_row)
             .child(
                 div()
                     .flex()
@@ -149,7 +175,9 @@ impl PlayerApp {
         let message = format!("轨道「{name}」已{action}");
         self.remember_history(message.clone());
         self.flash(message);
-        cx.notify();
+        // 静音 / 隐藏立刻生效：预览的选轨规则就挂在 `muted` 上，不刷新的话
+        // 用户得再拖一下播放头才听得出来。
+        self.preview_at_playhead(cx);
     }
 
     /// 切换轨道锁定。锁定的轨道拒绝一切编辑（校验在 `timeline::ops`）。

@@ -49,6 +49,7 @@ impl PlayerApp {
             self.send(Command::SetMuted(false));
         }
         self.send(Command::SetVolume(next));
+        self.apply_timeline_audio_volume();
         self.flash(format!("音量 {next:.0}%"));
         cx.notify();
     }
@@ -93,6 +94,9 @@ impl PlayerApp {
         let next = volume.clamp(0.0, 130.0);
         self.snapshot.volume = next;
         self.send(Command::SetVolume(next));
+        // 音频轨那几路是独立实例：主音量变了，它们也要按各自的轨道增益跟着换，
+        // 否则拖音量条只影响画面那一路。
+        self.apply_timeline_audio_volume();
     }
 
     /// 调字幕延迟。`delta` 秒，正数延后、负数提前、0 归零。
