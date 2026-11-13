@@ -8,6 +8,7 @@
 //! 界面上的起止点、区间导出的裁切都用整数运算，不会出现「字幕比画面早一帧」。
 
 mod ass;
+mod ass_import;
 mod text;
 
 use serde::{Deserialize, Serialize};
@@ -15,10 +16,15 @@ use serde::{Deserialize, Serialize};
 use super::{Id, Sequence, Tick, TrackKind};
 
 pub use ass::ass_script;
+pub use ass_import::{StyledCue, parse as parse_ass, read as read_ass};
 pub use text::{Cue as TextCue, Format, format_srt, format_vtt, parse as parse_text, read, write};
 
 #[cfg(test)]
 mod tests;
+
+/// 样式里的字号档位按这个高度定义（1080p 下的像素）。脚本的 `PlayResY` 取序列高度，
+/// 所以导出按高度放大、导入按高度折回——两边都落在同一套数字上，4K 工程不会换算一次就变一半。
+pub const STYLE_HEIGHT: u32 = 1080;
 
 /// 字号档位：按序列高度当 ASS 的 `PlayResY`，所以这里的数字就是 1080p 下的像素。
 pub const MIN_SIZE: u32 = 12;

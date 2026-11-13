@@ -3,12 +3,12 @@
 //! ffmpeg 的 `subtitles` 滤镜（烧录）与 `-c:s ass / mov_text`（软字幕）都吃这份文本，
 //! 排版交给 libass；预览侧另走界面叠层，不复用这里（界面没法跑 libass）。
 //!
-//! `[Script Info]` 的 `PlayResX/Y` 取序列分辨率：字号因此按序列尺寸定义，导 4K 还是
-//! 1080p 观感一致，不会因为输出容器变了就换一套排版。
+//! `[Script Info]` 的 `PlayResX/Y` 取序列分辨率：字号档位按 1080p 定义（`STYLE_HEIGHT`），
+//! 写进脚本时按序列高度折算，导 4K 还是 1080p 观感一致，不会因为输出容器变了就换一套排版。
 
 use crate::timeline::{Sequence, Tick};
 
-use super::{SubtitleItem, SubtitleStyle, items};
+use super::{STYLE_HEIGHT, SubtitleItem, SubtitleStyle, items};
 
 /// 把序列里能落到 `[from, to)` 的字幕写成 ASS 文本。没有条目时返回 `None`：
 /// 调用方据此不发字幕参数，也不写临时文件。
@@ -61,7 +61,7 @@ BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding"
             .to_string(),
     ];
     for (index, style) in styles.iter().enumerate() {
-        lines.push(style_line(index, style));
+        lines.push(style_line(index, style, sequence.height));
     }
     lines.push(String::new());
     lines.push("[Events]".to_string());
@@ -84,13 +84,17 @@ BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding"
     Some(lines.join("\n"))
 }
 
-fn style_line(index: usize, style: &SubtitleStyle) -> String {
+fn style_line(index: usize, style: &SubtitleStyle, height: u32) -> String {
+    // 字号档位按 1080p 定义，`PlayResY` 是序列高度：不折算的话 4K 序列上的字幕只有
+    // 一半大（48 单位在 2160 高的画面上只占 2.2%）。导入侧按同一个比例折回去。
+    let size = (style.size as f64 * height as f64 / STYLE_HEIGHT as f64)
+        .round()
+        .max(1.0);
     // ASS 的颜色是 AABBGGRR：不透明 00 + 反序的 RGB。描边固定压黑，阴影给一点透明黑。
     format!(
-        "Style: S{index},{},{},{},&H000000FF,&H00000000,&H80000000,\
+        "Style: S{index},{},{size},{},&H000000FF,&H00000000,&H80000000,\
 0,0,0,0,100,100,0,0,1,{},{},{},20,20,20,1",
         style.font,
-        style.size,
         ass_color(style.color),
         style.outline,
         if style.outline > 0 { 1 } else { 0 },

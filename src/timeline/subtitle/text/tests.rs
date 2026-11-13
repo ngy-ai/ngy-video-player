@@ -41,10 +41,7 @@ fn 省略小时与逗号点号混写都能读() {
     assert_eq!(cues.len(), 2);
     assert_eq!(cues[0].start, Tick::from_millis(1500));
     assert_eq!(cues[0].end, Tick::from_millis(2000));
-    assert_eq!(
-        cues[1].start,
-        Tick::from_millis((62 * 60 + 3) * 1000 + 250)
-    );
+    assert_eq!(cues[1].start, Tick::from_millis((62 * 60 + 3) * 1000 + 250));
     assert_eq!(cues[1].text, "乙");
 }
 
