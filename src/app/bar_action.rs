@@ -99,6 +99,8 @@ pub(super) enum BarAction {
     MakeProxy,
     /// 查看当前帧的示波器（亮度直方图 / 波形 / 矢量）。
     ShowScope,
+    /// 混音台：每条音频轨的推子、声像与音量自动化。
+    ShowMixer,
     /// 检测整片的镜头切换点。
     ShowScenes,
     /// 双机位并排导出。

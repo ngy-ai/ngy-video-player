@@ -118,6 +118,8 @@ impl PlayerApp {
             self.volume_dragging = false;
             self.settings.volume = self.snapshot.volume;
         }
+        // 混音台的推子 / 声像条同理：指针在窗口外松开时收不到抬起。
+        self.mixer_dragging = None;
         if self.speed_dragging {
             self.speed_dragging = false;
             self.settings.save();

@@ -114,6 +114,8 @@ impl PlayerApp {
             curve_drop: None,
             curve_select: None,
             speed_drop: None,
+            mixer_panel: None,
+            mixer_dragging: None,
             key_clipboard: None,
             timeline_preview: None,
             timeline_playing: false,

@@ -129,6 +129,7 @@ mod menu_bar;
 mod menus;
 mod metadata;
 mod mini;
+mod mixer_panel;
 mod multicam;
 mod otio;
 mod overlays;
@@ -408,6 +409,10 @@ pub struct PlayerApp {
     curve_select: Option<timeline_curve::CurveSelect>,
     /// 变速面板里正拖着的一个速度点（松手才写回曲线）。
     speed_drop: Option<timeline_speed::SpeedDrop>,
+    /// 混音台面板。
+    mixer_panel: Option<mixer_panel::MixerPanel>,
+    /// 混音台上正拖着的推子 / 声像条。
+    mixer_dragging: Option<mixer_panel::MixerDrag>,
     /// 复制出来的关键帧（粘到别的属性 / 片段上）。
     key_clipboard: Option<Vec<crate::timeline::Keyframe>>,
     /// 工程模式预览正在放的那个素材文件。同一个文件只 seek，换文件才重新加载。

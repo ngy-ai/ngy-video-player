@@ -207,6 +207,19 @@ pub(super) fn modal_card(
     body: AnyElement,
     close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
+    // 460 是绝大多数对话框的宽度：一列控件、一两行说明刚好。
+    modal_card_width(id, title, 460.0, body, close)
+}
+
+/// 同 [`modal_card`]，但卡片宽度可调：混音台一行要排下名字、推子、声像与自动化，
+/// 460 放不下，挤成两行反而更难对位。
+pub(super) fn modal_card_width(
+    id: &'static str,
+    title: &'static str,
+    width: f32,
+    body: AnyElement,
+    close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
     div()
         .id(id)
         .absolute()
@@ -227,7 +240,7 @@ pub(super) fn modal_card(
         .child(
             div()
                 .id(SharedString::from(format!("{id}-card")))
-                .w(px(460.0))
+                .w(px(width))
                 .max_w(gpui_kit::relative(0.92))
                 .p(px(18.0))
                 .rounded(px(14.0))

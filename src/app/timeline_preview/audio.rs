@@ -27,6 +27,9 @@ pub(crate) struct TrackAudio {
     pub(crate) file: Option<PathBuf>,
     /// 这条轨的音量（线性增益）。主音量一改就按它重算实例音量。
     pub(crate) gain: f32,
+    /// 已经下发给实例的声像。只在真的变了才重设 `af`——每次重设都要重建
+    /// 音频滤镜图，跟着节拍走会听见「咔」。
+    pub(crate) pan: f32,
     pub(crate) player: AudioPreview,
 }
 
@@ -42,13 +45,19 @@ impl PlayerApp {
             self.silence_timeline_audio();
             return;
         };
-        // 先把这一拍要响的层取出来：素材路径、素材内时刻、轨道增益。
-        let mut layers: Vec<(Id, PathBuf, f64, f32)> =
+        // 先把这一拍要响的层取出来：素材路径、素材内时刻、总增益、声像。
+        let mut layers: Vec<(Id, PathBuf, f64, f32, f32)> =
             preview::audio_layers(project.sequence(), at)
                 .into_iter()
                 .filter_map(|layer| {
                     let path = self.preview_path(project, layer.asset)?;
-                    Some((layer.track, path, layer.source.secs(), layer.gain))
+                    Some((
+                        layer.track,
+                        path,
+                        layer.source.secs(),
+                        layer.gain,
+                        layer.pan,
+                    ))
                 })
                 .collect();
         if layers.is_empty() {
@@ -70,7 +79,7 @@ impl PlayerApp {
 
         let volume = self.snapshot.volume;
         let speed = self.snapshot.speed;
-        for (track, path, source, gain) in &layers {
+        for (track, path, source, gain, pan) in &layers {
             if !self.ensure_audio_slot(*track) {
                 continue;
             }
@@ -85,6 +94,12 @@ impl PlayerApp {
             // mpv 的音量是百分比，上限 130；轨道增益乘在这个百分比上。
             slot.player
                 .set_volume((volume * f64::from(*gain)).clamp(0.0, 130.0));
+            // 声像变了才重设：`af` 一改就要重建滤镜图，跟着节拍每拍重设会卡。
+            if (slot.pan - *pan).abs() > 1e-3 || slot.pan.is_nan() {
+                slot.pan = *pan;
+                let (left, right) = crate::timeline::mixer::pan_gains(*pan);
+                slot.player.set_pan(left, right);
+            }
             slot.player.set_speed(speed);
             let switched = slot.file.as_deref() != Some(path.as_path());
             if follow && !switched {
@@ -124,6 +139,9 @@ impl PlayerApp {
                     track,
                     file: None,
                     gain: 1.0,
+                    // 0 表示「还没下发过」；第一次同步时这个值不会命中比较，
+                    // 会先设一次 `af`，从静音开始的轨也能拿到正确的声像。
+                    pan: f32::NAN,
                     player,
                 });
                 true

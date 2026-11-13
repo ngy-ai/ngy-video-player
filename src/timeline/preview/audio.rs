@@ -4,6 +4,7 @@
 //! 音量多少」因此不会各写一遍、慢慢长歪（与 [`super::enabled_video_tracks`] 同一个思路）。
 
 use super::*;
+use crate::timeline::mixer;
 
 /// 序列某一时刻该放的声音。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -16,9 +17,11 @@ pub struct PreviewAudio {
     pub track: Id,
     /// 来自哪个片段。
     pub clip: Id,
-    /// 这条轨的音量（线性增益，1.0 = 原样）。预览乘到 mpv 的音量上，与导出侧
-    /// `volume` 滤镜同一个量纲。
+    /// 这一刻这条轨的总音量（线性增益，1.0 = 原样）：片段音量 × 自动化 × 推子，
+    /// 与导出侧 `volume` 滤镜同一个量纲。自动化随时间走，所以这一项**每拍都可能变**。
     pub gain: f32,
+    /// 这条轨的声像（-1 全左、0 居中、1 全右），预览与导出共用同一个值。
+    pub pan: f32,
 }
 
 /// 参与发声的音频轨，按轨道列表顺序（靠上的在前）。静音 / 被独奏挤掉 / 空轨都跳过。
@@ -48,7 +51,10 @@ pub fn audio_layers(sequence: &Sequence, at: Tick) -> Vec<PreviewAudio> {
                 source: clip.source_at(at)?,
                 track: track.id,
                 clip: clip.id,
-                gain: track.normalized_gain(),
+                // 三层音量连乘（片段 → 自动化 → 推子），与导出侧同一个函数：
+                // 预览里听到的起伏就是成片里那条线。
+                gain: mixer::linear_gain(track, clip.gain, at),
+                pan: track.pan,
             })
         })
         .collect()

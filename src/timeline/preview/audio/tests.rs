@@ -1,6 +1,7 @@
 //! 选声规则的单测：取素材时刻、静音、独奏与音量。
 
 use super::*;
+use crate::timeline::mixer::GainPoint;
 use crate::timeline::{ClipItem, Rational};
 
 fn s(seconds: f64) -> Tick {
@@ -99,6 +100,34 @@ fn 多条音频轨同时出声各带自己的音量() {
     assert_eq!(layers[0].gain, 0.5);
     assert_eq!(layers[1].asset, AssetId::new(2));
     assert_eq!(layers[1].gain, 2.0);
+}
+
+#[test]
+fn 预览增益走三层连乘并带出声像() {
+    let mut sequence = sequence();
+    let audio = sequence.tracks[1].id;
+    put(&mut sequence, audio, 1, 0.0, 2.0, 0.0);
+    let track = sequence.track_mut(audio).unwrap();
+    track.gain = 0.5;
+    track.pan = -0.5;
+    track.automation = vec![GainPoint::new(s(0.0), 1.0), GainPoint::new(s(2.0), 0.5)];
+    track.clips[0].gain = 0.8;
+
+    // 第 1 秒：片段 0.8 × 自动化 0.75 × 推子 0.5 = 0.3。
+    let layers = audio_layers(&sequence, s(1.0));
+    assert_eq!(layers.len(), 1);
+    assert!(
+        (layers[0].gain - 0.3).abs() < 1e-4,
+        "预览增益 {}",
+        layers[0].gain
+    );
+    assert!(
+        (layers[0].pan + 0.5).abs() < 1e-6,
+        "预览也要拿到声像（导出侧同一个值）"
+    );
+
+    // 自动化起点处是 0.8 × 1.0 × 0.5 = 0.4：说明这条线真的在走，不是取了个常量。
+    assert!((audio_layers(&sequence, s(0.0))[0].gain - 0.4).abs() < 1e-4);
 }
 
 #[test]

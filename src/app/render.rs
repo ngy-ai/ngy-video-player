@@ -333,6 +333,10 @@ impl Render for PlayerApp {
                 if this.volume_dragging {
                     this.set_volume_from_x(event.position.x);
                 }
+                // 混音台的推子 / 声像条：指针滑出那条也能继续拖。
+                if this.mixer_dragging.is_some() {
+                    this.drag_mixer(event.position.x, cx);
+                }
                 if this.speed_dragging {
                     this.set_speed_from_x(event.position.x, cx);
                 }
@@ -475,6 +479,7 @@ impl Render for PlayerApp {
             .children(self.render_subtitle_dialog(cx))
             .children(self.render_sequence_manager_dialog(cx))
             .children(self.render_timecode_dialog(cx))
+            .children(self.render_mixer_panel(cx))
             .children(self.render_playlist_import_dialog(cx))
             .children(self.render_file_info(cx))
             .children(self.render_delete_track_confirm(cx))

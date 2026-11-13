@@ -41,6 +41,8 @@ enum Request {
     /// 停下来并卸载文件。
     Stop,
     SetVolume(f64),
+    /// 左右两路的增益（声像）。等功率系数由调用方算好，这里只负责挂滤镜。
+    SetPan(f32, f32),
     /// 预览播放倍速：与主画面共用同一个播放速度，否则两边会越走越远。
     SetSpeed(f64),
     Shutdown,
@@ -91,6 +93,10 @@ impl AudioPreview {
 
     pub(crate) fn set_speed(&self, speed: f64) {
         let _ = self.requests.send(Request::SetSpeed(speed));
+    }
+
+    pub(crate) fn set_pan(&self, left: f32, right: f32) {
+        let _ = self.requests.send(Request::SetPan(left, right));
     }
 }
 
@@ -192,6 +198,7 @@ impl Worker {
             Request::Pause => self.set_pause(true),
             Request::Stop => self.unload(),
             Request::SetVolume(volume) => self.set_volume(volume),
+            Request::SetPan(left, right) => self.set_pan(left, right),
             Request::SetSpeed(speed) => self.set_speed(speed),
             Request::Shutdown => {}
         }
@@ -278,6 +285,27 @@ impl Worker {
             .run_command(self.handle.get(), &["set", "volume", &value])
         {
             log_debug!("音频预览设置音量失败: {error}");
+        }
+    }
+
+    /// 挂（或撤掉）声像滤镜。
+    ///
+    /// 先用 `af clr` 清空再 `af add`：`af` 是可叠加的滤镜链，直接 add 会越叠越多。
+    /// 两路相等（居中）时清空就返回——居中不该白白多一道 `pan`，那是又一次重采样。
+    fn set_pan(&mut self, left: f32, right: f32) {
+        if let Err(error) = self.api.run_command(self.handle.get(), &["af", "clr"]) {
+            log_debug!("音频预览清空滤镜失败: {error}");
+            return;
+        }
+        if (left - right).abs() < 1e-4 {
+            return;
+        }
+        let filter = format!("pan=stereo|c0={left:.4}*c0|c1={right:.4}*c1");
+        if let Err(error) = self
+            .api
+            .run_command(self.handle.get(), &["af", "add", &filter])
+        {
+            log_debug!("音频预览设置声像失败: {error}");
         }
     }
 

@@ -518,6 +518,17 @@ impl PlayerApp {
         items.push(BarItem::Entry(BarEntry::new("加视频轨", AddVideoTrack)));
         items.push(BarItem::Entry(BarEntry::new("加音频轨", AddAudioTrack)));
         items.push(BarItem::Entry(BarEntry::new("加字幕轨", AddSubtitleTrack)));
+        // 混音台管的是「已经有的音频轨」：一条都没有时打开只是一句说明，先禁用更清楚。
+        let has_audio_track = self.project.as_ref().is_some_and(|project| {
+            project
+                .sequence()
+                .tracks
+                .iter()
+                .any(|track| track.kind == crate::timeline::TrackKind::Audio)
+        });
+        items.push(BarItem::Entry(
+            BarEntry::new("混音台…", ShowMixer).enabled(has_audio_track),
+        ));
         items.push(BarItem::Entry(BarEntry::new(
             "在播放头加字幕…",
             AddSubtitle,
@@ -652,6 +663,7 @@ impl PlayerApp {
             BarAction::EditMetadata => self.open_metadata_dialog(window, cx),
             BarAction::MakeProxy => self.open_proxy_dialog(window, cx),
             BarAction::ShowScope => self.open_scope_dialog(cx),
+            BarAction::ShowMixer => self.open_mixer_panel(cx),
             BarAction::ShowScenes => self.open_scenes_dialog(cx),
             BarAction::MulticamExport => self.open_multicam_dialog(cx),
             BarAction::ConcatExport => self.open_concat_dialog(cx),
