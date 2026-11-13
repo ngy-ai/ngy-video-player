@@ -1,0 +1,162 @@
+//! 速度曲线与时间重映射（M10-T11 的模型层）。
+//!
+//! 现在的变速是一个档位（`ClipItem.speed` 是常量倍率，改档在 `timeline::speed`）。
+//! 速度曲线把它换成**随素材位置变化**的倍率：`rate(s)` 表示「素材走到 s 这一秒时，
+//! 播放速度是几倍」。
+//!
+//! 关键的一点是**用素材位置做自变量**，不是时间线位置：
+//!
+//! ```text
+//! dt_时间线 = ds_素材 / rate(s)
+//! ```
+//!
+//! 反过来讲，时间线时长是 `∫ ds / rate(s)`。这样定义的好处是裁剪片段（改
+//! `source_in` / `source_out`）不需要重算曲线：曲线挂在素材位置上，剪掉一段只是
+//! 积分区间变了。
+//!
+//! 积分用中点法分 [`STEPS`] 段：速度曲线是分段线性，段数够多时误差在 1 毫秒以内，
+//! 而闭式解要处理「零点附近 rate 趋近 0」的分支，得不偿失。
+//!
+//! 这里只给数字（时长、反解位置），不给 ffmpeg 表达式：`setpts` 要的是整条积分，
+//! 表达式写出来没法在这层验证，等导出侧接进来时再单独写并测。
+
+use crate::timeline::Tick;
+use serde::{Deserialize, Serialize};
+
+/// 倍率量程，与 `ClipItem` 的档位一致。
+pub const MIN_RATE: f32 = 0.25;
+pub const MAX_RATE: f32 = 4.0;
+
+/// 积分分段数。64 段在 10 分钟的曲线上也只要几十微秒。
+pub const STEPS: usize = 64;
+
+/// 曲线上一个点：素材内相对入点的秒数 + 该处的倍率。
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SpeedPoint {
+    /// 相对**片段的源入点**（0 = 入点那一帧），单位秒。
+    pub at: f64,
+    pub rate: f32,
+}
+
+impl SpeedPoint {
+    pub fn new(at: f64, rate: f32) -> Self {
+        Self {
+            at: at.max(0.0),
+            rate: clamp_rate(rate),
+        }
+    }
+}
+
+/// 一条速度曲线。空表示「没有曲线，用片段自己的倍率」。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SpeedCurve {
+    /// 按 `at` 升序，同一位置只留一个。
+    pub points: Vec<SpeedPoint>,
+}
+
+impl SpeedCurve {
+    pub fn is_empty(&self) -> bool {
+        self.points.is_empty()
+    }
+
+    /// 记一个点（同一位置覆盖）。与关键帧的语义一致，界面按「在播放头记一个点」用。
+    pub fn insert(&mut self, at: f64, rate: f32) -> bool {
+        let point = SpeedPoint::new(at, rate);
+        if let Some(existing) = self
+            .points
+            .iter_mut()
+            .find(|it| (it.at - point.at).abs() < 1e-4)
+        {
+            existing.rate = point.rate;
+            return false;
+        }
+        self.points.push(point);
+        self.points.sort_by(|a, b| a.at.total_cmp(&b.at));
+        true
+    }
+
+    /// 素材偏移 `offset`（秒，相对源入点）处的倍率。两端之外保持端点值。
+    pub fn rate_at(&self, offset: f64, fallback: f32) -> f32 {
+        if self.points.is_empty() {
+            return clamp_rate(fallback);
+        }
+        let first = self.points[0];
+        if offset <= first.at {
+            return first.rate;
+        }
+        let last = self.points[self.points.len() - 1];
+        if offset >= last.at {
+            return last.rate;
+        }
+        let index = self
+            .points
+            .partition_point(|point| point.at <= offset)
+            .saturating_sub(1);
+        let (from, to) = (self.points[index], self.points[index + 1]);
+        let span = to.at - from.at;
+        if span <= 0.0 {
+            return to.rate;
+        }
+        let progress = ((offset - from.at) / span) as f32;
+        clamp_rate(from.rate + (to.rate - from.rate) * progress)
+    }
+
+    /// 素材跨 `span` 秒（从源入点起）在这条曲线上放多久。
+    pub fn timeline_duration(&self, span: f64, fallback: f32) -> Tick {
+        if span <= 0.0 {
+            return Tick::ZERO;
+        }
+        if self.points.is_empty() {
+            return Tick::from_secs(span / f64::from(clamp_rate(fallback)));
+        }
+        let step = span / STEPS as f64;
+        let mut total = 0.0;
+        for index in 0..STEPS {
+            // 中点法：分段线性的速度取中点最准。
+            let middle = (index as f64 + 0.5) * step;
+            total += step / f64::from(self.rate_at(middle, fallback));
+        }
+        Tick::from_secs(total)
+    }
+
+    /// 反解：时间线走过 `elapsed` 秒时，素材走到第几秒（相对源入点）。
+    ///
+    /// 逐段累加而不是二分：分段线性时每一段的积分有闭式解
+    /// （`∫ ds/(a+ks) = ln(...)/k`），但 a 可能贴着 0，逐段数值累加更稳。
+    pub fn source_at_timeline(&self, elapsed: f64, span: f64, fallback: f32) -> f64 {
+        if elapsed <= 0.0 || span <= 0.0 {
+            return 0.0;
+        }
+        if self.points.is_empty() {
+            return (elapsed * f64::from(clamp_rate(fallback))).min(span);
+        }
+        let step = span / STEPS as f64;
+        let mut remaining = elapsed;
+        let mut consumed = 0.0;
+        for index in 0..STEPS {
+            let middle = (index as f64 + 0.5) * step;
+            let rate = f64::from(self.rate_at(middle, fallback));
+            let cost = step / rate;
+            if remaining <= cost {
+                // 段内还按段速走：误差是段内变化量的一半，视觉上察觉不到。
+                return (consumed + remaining * rate).min(span);
+            }
+            remaining -= cost;
+            consumed += step;
+        }
+        span
+    }
+}
+
+/// 倍率夹进量程；坏值退回 1.0（原速），不是 0（会除爆）。
+pub fn clamp_rate(rate: f32) -> f32 {
+    if rate.is_finite() && rate > 0.0 {
+        rate.clamp(MIN_RATE, MAX_RATE)
+    } else {
+        1.0
+    }
+}
+
+#[cfg(test)]
+mod tests;

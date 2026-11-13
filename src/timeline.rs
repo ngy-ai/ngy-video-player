@@ -24,8 +24,9 @@ pub mod preview;
 mod project;
 mod proxy;
 pub mod query;
+pub mod remap;
 mod spec;
-mod speed;
+pub mod speed;
 mod subtitle;
 mod targets;
 mod three_point;
@@ -68,6 +69,7 @@ pub use project::{
     SequenceError, UiState,
 };
 pub use proxy::{PreviewFile, find_proxy, is_proxy_file, needs_proxy, preview_for};
+pub use remap::{SpeedCurve, SpeedPoint};
 pub use spec::{SequenceSpec, SpecError, rate_label};
 pub use speed::{set_hold, set_speed};
 pub use subtitle::{
