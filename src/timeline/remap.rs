@@ -147,6 +147,54 @@ impl SpeedCurve {
         }
         span
     }
+    /// 曲线上的累计时间表：`(素材位置秒, 时间线秒)`，从 0 到 `span`。
+    ///
+    /// 导出侧要把它折成分段线性的 `setpts` 表达式；预览侧要拿它做「素材位置 → 时间线位置」
+    /// 的换算。两边共用这张表，才不会一个按 64 段算、一个按闭式解算。
+    pub fn cumulative(&self, span: f64, fallback: f32) -> Vec<(f64, f64)> {
+        let mut table = Vec::with_capacity(STEPS + 1);
+        if span <= 0.0 {
+            table.push((0.0, 0.0));
+            return table;
+        }
+        let step = span / STEPS as f64;
+        let mut elapsed = 0.0;
+        table.push((0.0, 0.0));
+        for index in 0..STEPS {
+            let middle = (index as f64 + 0.5) * step;
+            elapsed += step / f64::from(self.rate_at(middle, fallback));
+            table.push(((index + 1) as f64 * step, elapsed));
+        }
+        table
+    }
+
+    /// 把累计时间表写成 `setpts` 能用的表达式（`S` 是素材位置的占位符）。
+    ///
+    /// 分段线性 + 嵌套 `if`：段数与 [`STEPS`] 一致，误差就是中点法的误差（< 1 帧）。
+    /// 导出侧替换占位符为 `(PTS-STARTPTS)` 即可，这里不写死 ffmpeg 的变量名，
+    /// 单测才能脱离滤镜图验证。
+    pub fn setpts_expression(&self, span: f64, fallback: f32) -> Option<String> {
+        if self.points.is_empty() || span <= 0.0 {
+            return None;
+        }
+        let table = self.cumulative(span, fallback);
+        let mut expr = format!("{:.6}", table[table.len() - 1].1);
+        for pair in table.windows(2).rev() {
+            let (from, to) = (pair[0], pair[1]);
+            let width = to.0 - from.0;
+            if width <= 0.0 {
+                continue;
+            }
+            let weight = format!("((S-{:.6})/{width:.6})", from.0);
+            expr = format!(
+                "if(lt(S,{:.6}),{:.6}+({:.6})*{weight},{expr})",
+                to.0,
+                from.1,
+                to.1 - from.1
+            );
+        }
+        Some(expr)
+    }
 }
 
 /// 倍率夹进量程；坏值退回 1.0（原速），不是 0（会除爆）。
