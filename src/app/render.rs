@@ -462,6 +462,7 @@ impl Render for PlayerApp {
                 this.child(self.render_menu_bar(window, cx))
             })
             .children(self.render_error(panel_width, cx))
+            .children(self.render_stem_banner(panel_width, timeline_height, cx))
             // 右键菜单在普通浮层之上、模态面板之下。
             .children(self.render_item_menu(cx))
             .children(self.render_tab_menu(cx))

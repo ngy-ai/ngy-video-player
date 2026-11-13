@@ -171,4 +171,68 @@ impl PlayerApp {
                 ),
         )
     }
+
+    /// 分轨导出的持续横幅：整批进度 + 当前这条的进度条 + 取消。
+    ///
+    /// 压在预览区底部、时间线之上（工程模式下 `bottom` 是时间线高度），不占布局。
+    pub(in crate::app) fn render_stem_banner(
+        &self,
+        panel: f32,
+        bottom: f32,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let state = self.stem_export.as_ref()?;
+        let progress = state.progress.clamp(0.0, 1.0);
+        Some(
+            div()
+                .id("stem-export-banner")
+                .absolute()
+                .left(px(24.0))
+                .right(px(24.0 + panel))
+                .bottom(px(bottom + 16.0))
+                .p(px(10.0))
+                .rounded(px(8.0))
+                .bg(gpui_kit::rgba(0x1414_1cf2))
+                .border_1()
+                .border_color(gpui_kit::rgb(0x2c2c34))
+                // 浮层上的点击不该顺手暂停画面 / 选中时间线片段。
+                .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
+                    cx.stop_propagation();
+                }))
+                .flex()
+                .items_center()
+                .gap(px(10.0))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(gpui_kit::rgb(0xe8e8ee))
+                        .child(state.label()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .h(px(4.0))
+                        .rounded(px(2.0))
+                        .bg(ui::track())
+                        .child(
+                            div()
+                                .h_full()
+                                .w(gpui_kit::relative(progress))
+                                .rounded(px(2.0))
+                                .bg(ui::accent()),
+                        ),
+                )
+                .child(icon_button(
+                    "stem-export-cancel",
+                    IconName::X,
+                    false,
+                    false,
+                    cx.listener(|this, _: &ClickEvent, _window, cx| {
+                        cx.stop_propagation();
+                        this.cancel_stem_export(cx);
+                    }),
+                ))
+                .into_any_element(),
+        )
+    }
 }

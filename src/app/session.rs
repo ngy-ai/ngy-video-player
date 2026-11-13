@@ -63,6 +63,8 @@ impl PlayerApp {
             proxy_queue_generation: 0,
             cache_queue: None,
             cache_queue_generation: 0,
+            stem_export: None,
+            stem_export_generation: 0,
             cache_entries: Vec::new(),
             cache_bytes: 0,
             scope: None,

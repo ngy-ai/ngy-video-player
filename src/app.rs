@@ -205,6 +205,7 @@ use self::scope::ScopeDialog;
 use self::sequence_dialog::{SequenceDialog, SequencePurpose};
 use self::sequence_manager::SequenceManagerDialog;
 use self::settings_panel::SettingsTab;
+use self::stems::StemExport;
 use self::timecode_jump::TimecodeDialog;
 use self::timeline_menu::TimelineMenu;
 use self::timeline_preview::TrackAudio;
@@ -472,6 +473,10 @@ pub struct PlayerApp {
     export_sequence: Option<String>,
     /// 排队等着导出的任务。一次只跑一条，失败不阻塞后面的。
     export_queue: VecDeque<QueuedExport>,
+    /// 分轨导出队列；`None` 表示空闲。进度与取消都挂在这里（横幅读它）。
+    stem_export: Option<StemExport>,
+    /// 分轨导出代次。取消 / 重新排队之后，上一轮在路上事件不再算数。
+    stem_export_generation: u64,
 
     /// 原生文件选择框是否已经打开。
     ///
