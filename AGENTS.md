@@ -190,7 +190,8 @@ src/timeline/export/plan/video.rs  单条视频流的滤镜链：效果 / 调色
 src/timeline/export/plan/audio.rs  单条音频流的滤镜链：速度曲线按折点分段 atempo、段间 concat
 src/timeline/export/stems.rs  分轨导出（ADR 0011 的替代路径）：每条听得见的音频轨一个 24bit wav，
                  长度等于序列，复用 `audio_stream` 的链（推子 / 自动化 / 声像都在里面）
-src/app/stems.rs  「文件 > 导出音频分轨…」：选目录、顺序跑 ExportTask、横幅报进度（无取消）
+src/app/stems.rs  「文件 > 导出音频分轨…」：选目录、`StemExport` 队列 + 代次、顺序跑
+                 ExportTask、预览区底部横幅显示进度条与取消
 src/export/task.rs  导出进程：临时 ASS 与遮罩 PGM 落盘 / 清理、软字幕按容器选编码器、进度与取消
 src/timeline/undo.rs    撤销 / 重做：状态快照栈，一次操作一步，上限 200 步
 src/timeline/autosave.rs  自动保存（30 秒无操作）与 `.autosave` 崩溃恢复
