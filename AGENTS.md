@@ -74,6 +74,8 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  keys（动作 → 键位串，一处集中）、
                  timeline_effects（片段效果栈面板：加 / 开关 / 换档 / 调序 / 删）、
                  timeline_keys（片段关键帧面板：在播放头处记录与删除）、
+                 timeline_speed（变速 / 定格面板：倍率档位与速度曲线，
+                   `timeline_speed/curve.rs` 是曲线画布、可拖的倍率点与坐标换算）、
                  timeline_curve（曲线编辑器：网格与刻度、折线、贝塞尔手柄拖动、
                    框选删点、复制 / 粘贴曲线）、
                  timeline_subtitle（字幕编辑模态面板、字幕块右键菜单与预览入口）、
@@ -140,8 +142,9 @@ src/timeline/time.rs  Tick（i64 微秒）与 Rational 帧率：全项目唯一�
 src/timeline/spec.rs  序列规格：分辨率预设、帧率表、奇数边校验、按素材推导
 src/timeline/timecode.rs  `HH:MM:SS:FF` 的显示与解析：整帧 / 丢帧（29.97、59.94）、省略短写
 src/timeline/media.rs  素材元信息、文件指纹与过期判断；不含 ffmpeg 调用
-src/timeline/remap.rs  速度曲线（时间重映射）：素材位置做自变量、∫ds/rate 求时长与反解
-                 （导出 / 预览 / 界面尚未接入，模型先行；与 `timeline/speed.rs` 的改档位不是一回事）
+src/timeline/remap.rs  速度曲线（时间重映射）：素材位置做自变量、∫ds/rate 求时长与反解，
+                 切片（`slice`，切开与修剪用）；`remap/ffmpeg.rs` 是翻成 ffmpeg 参数的那一侧
+                 （`setpts` 表达式 + 音频分段 atempo；与 `timeline/speed.rs` 的改档位不是一回事）
 src/timeline/mask.rs  片段遮罩：相对坐标的形状、羽化与位移换算、退化判定（导出尚未接入）
 src/timeline/mixer.rs  混音：三层音量（片段 → 自动化 → 推子）定序、等功率声像、
                  自动化到 ffmpeg `volume` 表达式；单测在 `mixer/tests.rs`
@@ -151,7 +154,11 @@ src/timeline/proxy.rs  代理选用规则：素材比序列大且代理在 → �
 src/timeline/model.rs  序列 → 轨道 → 片段、转场与标记；纯数据，不持有文件路径
 src/timeline/ops.rs    编辑操作纯函数：旧序列进、新序列出，非法操作返回错误
 src/timeline/ops/placement.rs  放置语义：严格插入 / 插入让位 / 覆盖清区（`shift_open`、`clear_range`）
-src/timeline/ops/params.rs     片段参数：倍率、片尾定格、调色
+src/timeline/ops/edges.rs      边界编辑：普通 / 波纹修剪、切开、滑移 / 滑动 / 卷动；
+                 `cut_at` 是「时间线位置 → 素材位置 + 两侧曲线切片」的唯一入口
+                 （挂了速度曲线的片段靠它算时长，滑移 / 卷动这类 1:1 的操作直接拒绝）
+src/timeline/ops/remove.rs     删除：留空隙的普通删除与波纹删除
+src/timeline/ops/params.rs     片段参数：倍率、速度曲线、片尾定格、调色
 src/timeline/ops/subtitle.rs   字幕条目增删改：未锁定的字幕轨 + 同轨不重叠
 src/timeline/project.rs  .ngyproj 工程文件：版本迁移、相对素材路径、原子写 + .bak
 src/timeline/project/sequences.rs  多序列：列表 + 当前指针、增删改切换、读盘自愈（ADR 0009）

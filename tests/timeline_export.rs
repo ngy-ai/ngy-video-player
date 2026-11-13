@@ -134,6 +134,11 @@ fn assert_duration(output: &Path, expected: &str) {
     );
 }
 
+// crate root 的 `mod` 默认在 `tests/` 同层找文件，子目录要写全路径。
+// 速度曲线那条用例连着它的时长读数工具一起放在 `tests/timeline_export/remap.rs`。
+#[path = "timeline_export/remap.rs"]
+mod remap;
+
 /// `ffmpeg -i` 的 stderr 里有 `..., 30 fps, ...`，用它读回成片帧率。
 fn assert_frame_rate(output: &Path, expected: &str) {
     let probe = Command::new("ffmpeg")

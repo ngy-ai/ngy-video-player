@@ -5,8 +5,8 @@
 //!
 //! 只有 `ops::apply` 与同层的移动类操作会调到这里，所以对外一律 `pub(super)`。
 
-use super::{ClipSpec, EditError, Id, Sequence, Tick, split};
-use crate::timeline::ClipItem;
+use super::{ClipSpec, EditError, Id, Sequence, Tick, cut_at, split};
+use crate::timeline::{ClipItem, SpeedCurve};
 use std::collections::HashSet;
 
 pub(super) fn insert(
@@ -114,8 +114,8 @@ pub(super) fn shift_open(sequence: &mut Sequence, track_index: usize, at: Tick, 
 pub(super) fn clear_range(sequence: &mut Sequence, track_index: usize, at: Tick, end: Tick) {
     let originals: Vec<ClipItem> = sequence.tracks[track_index].clips.clone();
     let mut remove: Vec<Id> = Vec::new();
-    let mut trim: Vec<(Id, Tick)> = Vec::new();
-    let mut shift: Vec<(Id, Tick, Tick)> = Vec::new();
+    let mut trim: Vec<(Id, Tick, SpeedCurve)> = Vec::new();
+    let mut shift: Vec<(Id, Tick, Tick, SpeedCurve)> = Vec::new();
     let mut created: Vec<ClipItem> = Vec::new();
 
     for clip in &originals {
@@ -123,40 +123,52 @@ pub(super) fn clear_range(sequence: &mut Sequence, track_index: usize, at: Tick,
         if stop <= at || start >= end {
             continue;
         }
+        // 收边 / 切开都要按**曲线**反解素材时间，曲线也跟着切：1:1 的换算只对
+        // 常量倍率成立，曲线片段要是照 1:1 算，切出来的两段时长都会跑偏。
         match (start < at, stop > end) {
             // 整段都在区间里：删掉。
             (false, false) => remove.push(clip.id),
             // 只被压住右半：出点收到 `at`，素材出点跟着走。
-            (true, false) => trim.push((clip.id, clip.source_in + (at - start))),
+            (true, false) => {
+                let (source, left, _) = cut_at(clip, at);
+                trim.push((clip.id, source, left));
+            }
             // 只被压住左半：起点拉到 `end`，素材入点跟着走。
-            (false, true) => shift.push((clip.id, end, clip.source_in + (end - start))),
+            (false, true) => {
+                let (source, _, right) = cut_at(clip, end);
+                shift.push((clip.id, end, source, right));
+            }
             // 区间正压在中间：左边留下，右边切一段新的出来。
             (true, true) => {
-                trim.push((clip.id, clip.source_in + (at - start)));
-                created.push(
-                    ClipItem::new(
-                        sequence.alloc_id(),
-                        clip.asset_id,
-                        clip.source_in + (end - start),
-                        clip.source_out,
-                        end,
-                    )
-                    .with_name(clip.name.clone()),
-                );
+                let (cut, left, _) = cut_at(clip, at);
+                trim.push((clip.id, cut, left));
+                let (resume, _, right) = cut_at(clip, end);
+                let mut piece = ClipItem::new(
+                    sequence.alloc_id(),
+                    clip.asset_id,
+                    resume,
+                    clip.source_out,
+                    end,
+                )
+                .with_name(clip.name.clone());
+                piece.remap = right;
+                created.push(piece);
             }
         }
     }
 
     let track = &mut sequence.tracks[track_index];
-    for (id, source_out) in trim {
+    for (id, source_out, curve) in trim {
         if let Some(clip) = track.clips.iter_mut().find(|clip| clip.id == id) {
             clip.source_out = source_out;
+            clip.remap = curve;
         }
     }
-    for (id, start, source_in) in shift {
+    for (id, start, source_in, curve) in shift {
         if let Some(clip) = track.clips.iter_mut().find(|clip| clip.id == id) {
             clip.start = start;
             clip.source_in = source_in;
+            clip.remap = curve;
         }
     }
     let gone: HashSet<Id> = remove.iter().copied().collect();

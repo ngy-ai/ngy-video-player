@@ -14,6 +14,9 @@ mod audio;
 mod color;
 #[path = "tests/range.rs"]
 mod range;
+// 速度曲线（时间重映射）在计划里的形状见 `tests/remap.rs`。
+#[path = "tests/remap.rs"]
+mod remap;
 #[path = "tests/sequences.rs"]
 mod sequences;
 #[path = "tests/subtitle.rs"]
@@ -38,6 +41,12 @@ fn assert_connected(filter: &str) {
         // 把 `]xfade` 当滤镜名。合法的多输入链是 `[a][b]concat`，只有 `][`。
         assert!(!chain.contains("[["), "链里有重复的左括号：{chain}");
         assert!(!chain.contains("]]"), "链里有重复的右括号：{chain}");
+        // 标签后面直接跟逗号 = 中间夹了一个空滤镜，ffmpeg 报的是
+        // "No such filter: ''"，从名字上完全看不出是这里错了。
+        assert!(
+            !chain.contains("],"),
+            "标签后面紧跟逗号，等于一个空滤镜：{chain}"
+        );
         // `[0:v]` / `[0:a]` 是输入流说明符，不算内部标签。
         let labels: Vec<String> = chain
             .split('[')
@@ -46,6 +55,17 @@ fn assert_connected(filter: &str) {
             .filter(|name| !name.contains(':'))
             .map(str::to_string)
             .collect();
+        // `split` / `asplit` 一条链会吐出好几个标签（速度曲线的音频分段就靠它），
+        // 这些标签全是输出，不能套「最后一个才是输出」的规则。
+        if chain.contains("asplit=") {
+            for output in labels {
+                assert!(
+                    produced.insert(output.clone()),
+                    "标签 {output} 被重复定义：{chain}"
+                );
+            }
+            continue;
+        }
         let (output, inputs) = labels.split_last().expect("至少有一个输出标签");
         assert!(
             produced.insert(output.clone()),

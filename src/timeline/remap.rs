@@ -17,8 +17,12 @@
 //! 积分用中点法分 [`STEPS`] 段：速度曲线是分段线性，段数够多时误差在 1 毫秒以内，
 //! 而闭式解要处理「零点附近 rate 趋近 0」的分支，得不偿失。
 //!
-//! 这里只给数字（时长、反解位置），不给 ffmpeg 表达式：`setpts` 要的是整条积分，
-//! 表达式写出来没法在这层验证，等导出侧接进来时再单独写并测。
+//! 这里给数字（时长、正反解位置）；翻成 ffmpeg 参数的部分在 `remap/ffmpeg.rs`
+//! （`setpts` 表达式与音频分段），由导出侧调用。
+
+mod ffmpeg;
+
+pub use ffmpeg::{AudioChunk, audio_chunks, setpts_filter};
 
 use crate::timeline::Tick;
 use serde::{Deserialize, Serialize};
@@ -147,6 +151,54 @@ impl SpeedCurve {
         }
         span
     }
+    /// 正解：素材走到 `offset` 秒（相对源入点）时，时间线那边走到第几秒。
+    ///
+    /// 与 [`Self::setpts_expression`] 用同一张 64 段累计表并做段内插值：预览的播放头
+    /// 位置与成片的时间戳因此出自同一套数，不会一个按表算、一个按闭式解算。
+    pub fn timeline_at_source(&self, offset: f64, span: f64, fallback: f32) -> f64 {
+        if span <= 0.0 {
+            return 0.0;
+        }
+        let rate = f64::from(clamp_rate(fallback));
+        if self.points.is_empty() {
+            return offset / rate;
+        }
+        let offset = offset.clamp(0.0, span);
+        let table = self.cumulative(span, fallback);
+        // 表是按素材位置等分的，直接算出落在哪一段，再在段内线性插值。
+        let step = span / STEPS as f64;
+        let index = ((offset / step).floor() as usize).min(STEPS - 1);
+        let (from, to) = (table[index], table[index + 1]);
+        let width = to.0 - from.0;
+        if width <= 0.0 {
+            return to.1;
+        }
+        from.1 + (offset - from.0) / width * (to.1 - from.1)
+    }
+
+    /// 截出素材内 `[from, to]` 这一段，新曲线的自变量从 0 起。
+    ///
+    /// 切开与修剪要用：两段各自按切点之后的曲线走，时长才和原来那一段对得上。
+    /// 折点之间是线性的，所以补两个端点就保形；端点速率按原曲线插值取。
+    pub fn slice(&self, from: f64, to: f64) -> Self {
+        if self.points.is_empty() || to - from <= 1e-6 {
+            return Self::default();
+        }
+        let from = from.max(0.0);
+        if to <= from {
+            return Self::default();
+        }
+        let mut curve = Self::default();
+        curve.insert(0.0, self.rate_at(from, 1.0));
+        for point in &self.points {
+            if point.at > from + 1e-6 && point.at < to - 1e-6 {
+                curve.insert(point.at - from, point.rate);
+            }
+        }
+        curve.insert(to - from, self.rate_at(to, 1.0));
+        curve
+    }
+
     /// 曲线上的累计时间表：`(素材位置秒, 时间线秒)`，从 0 到 `span`。
     ///
     /// 导出侧要把它折成分段线性的 `setpts` 表达式；预览侧要拿它做「素材位置 → 时间线位置」

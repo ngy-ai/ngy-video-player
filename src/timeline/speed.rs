@@ -6,7 +6,7 @@
 //!
 //! 不变量「同轨不重叠」在这里由 ripple 保证：不从后面推的话，变慢的那一刻就重叠了。
 
-use crate::timeline::{ClipItem, Id, Sequence, Tick};
+use crate::timeline::{ClipItem, Id, Sequence, SpeedCurve, Tick};
 
 /// 设置倍率。返回是否真的改了（片段不存在或倍率没变时为 `false`）。
 pub fn set_speed(sequence: &mut Sequence, clip: Id, speed: f32) -> bool {
@@ -49,6 +49,34 @@ pub fn set_hold(sequence: &mut Sequence, clip: Id, hold: Tick) -> bool {
         return false;
     }
     item.hold = hold;
+    let after = item.duration();
+    ripple(sequence, track, clip, after - before);
+    true
+}
+
+/// 换上一条速度曲线（时间重映射）。空曲线表示回到常量倍率 `speed`。
+///
+/// 时长会跟着曲线积分变，所以和 [`set_speed`] 一样要做波纹让位。曲线先规整一遍：
+/// 位置不为负、倍率夹进量程、同位置只留一个——界面拖出来的值带浮点毛刺，
+/// 存进工程前统一。
+pub fn set_remap(sequence: &mut Sequence, clip: Id, curve: &SpeedCurve) -> bool {
+    let mut clean = SpeedCurve::default();
+    for point in &curve.points {
+        clean.insert(point.at, point.rate);
+    }
+    let Some(track) = sequence.clip_track(clip) else {
+        return false;
+    };
+    let Some(before) = sequence.clip(clip).map(ClipItem::duration) else {
+        return false;
+    };
+    let Some(item) = sequence.clip_mut(clip) else {
+        return false;
+    };
+    if item.remap == clean {
+        return false;
+    }
+    item.remap = clean;
     let after = item.duration();
     ripple(sequence, track, clip, after - before);
     true

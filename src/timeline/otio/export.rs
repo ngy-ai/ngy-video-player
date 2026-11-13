@@ -61,7 +61,14 @@ pub fn export_sequence(project: &Project, sequence: &Sequence) -> String {
                 .asset_path(clip.asset_id)
                 .map(file_url)
                 .unwrap_or_default();
-            let speed = clip.rate();
+            // 速度曲线在 OTIO 里只有一个平均倍率能表达（`LinearTimeWarp` 是常量）：
+            // 取 `素材跨度 ÷ 实际时长`，对方的时长与后面片段的位置才对得上。
+            // 曲线本身另存一份在 `metadata.ngy` 里，本程序重新导入时能原样接回来。
+            let speed = if clip.has_remap() {
+                (clip.span().secs() / clip.motion().secs().max(1e-6)) as f32
+            } else {
+                clip.rate()
+            };
             let mut item = json!({
                 "OTIO_SCHEMA": "Clip.2",
                 "name": clip_label(project, clip),
@@ -89,6 +96,7 @@ pub fn export_sequence(project: &Project, sequence: &Sequence) -> String {
                 "effects": clip.effects,
                 "keys": clip.keys,
                 "color": clip.color,
+                "remap": clip.remap,
             }));
             cursor = clip.end();
         }

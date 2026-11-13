@@ -69,9 +69,9 @@ pub use project::{
     SequenceError, UiState,
 };
 pub use proxy::{PreviewFile, find_proxy, is_proxy_file, needs_proxy, preview_for};
-pub use remap::{SpeedCurve, SpeedPoint};
+pub use remap::{AudioChunk, SpeedCurve, SpeedPoint, audio_chunks, setpts_filter};
 pub use spec::{SequenceSpec, SpecError, rate_label};
-pub use speed::{set_hold, set_speed};
+pub use speed::{set_hold, set_remap, set_speed};
 pub use subtitle::{
     COLORS, FONTS, MAX_OUTLINE, MAX_SIZE, MIN_SIZE, POSITIONS, SIZE_STEP, SubtitleItem,
     SubtitlePosition, SubtitleStyle, ass_script as subtitle_ass_script, at as subtitle_at,

@@ -241,6 +241,7 @@ fn build_sequence(
             let mut item = ClipItem::new(id, asset_id, clip.source_in, clip.source_out, clip.start);
             item.name = clip.name.clone();
             item.speed = clip.speed.clamp(ClipItem::MIN_SPEED, ClipItem::MAX_SPEED);
+            item.remap = clip.remap.clone();
             item.hold = clip.hold.max(Tick::ZERO);
             item.effects = clip.effects.clone();
             item.keys = clip.keys.clone();

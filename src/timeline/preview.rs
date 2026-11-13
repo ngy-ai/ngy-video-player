@@ -42,6 +42,9 @@ pub struct PreviewFrame {
     pub clip: Id,
     /// 落在片尾定格里：画面被冻在最后一帧，不要再让 mpv 往下播。
     pub frozen: bool,
+    /// 片段挂了速度曲线：播放速度不是常量，mpv 自己按原速放必然越走越偏，
+    /// 只能每拍补一次 seek（见 `app::timeline_preview`）。
+    pub remap: bool,
 }
 
 /// 参与输出的视频轨，按叠放顺序（先上后下）。静音 / 隐藏的、空轨都跳过。
@@ -73,6 +76,7 @@ fn frame_at(track: &Track, at: Tick) -> Option<PreviewFrame> {
             clip: clip.id,
             // 定格段里 `source_at` 一直给最后一帧；播放器要知道「别再往下走了」。
             frozen: at - clip.start >= clip.motion(),
+            remap: clip.has_remap(),
         })
     })
 }
@@ -166,7 +170,7 @@ fn seam_dim(track: &Track, index: usize, at: Tick) -> f32 {
         return 0.0;
     }
     let plain = |clip: &crate::timeline::ClipItem| {
-        (clip.rate() - 1.0).abs() < 1e-6 && clip.hold <= Tick::ZERO
+        (clip.rate() - 1.0).abs() < 1e-6 && clip.hold <= Tick::ZERO && !clip.has_remap()
     };
     if !plain(before) || !plain(after) {
         return 0.0;
@@ -405,6 +409,32 @@ mod tests {
         sequence.tracks[0].clips[0].speed = 0.5;
         assert_eq!(resolve(&sequence, s(1.0)).unwrap().source, s(0.5));
         assert_eq!(resolve(&sequence, s(3.9)).unwrap().source, s(1.95));
+    }
+
+    #[test]
+    fn 曲线片段按曲线取帧并标记要逐拍追() {
+        let mut sequence = sequence();
+        let video = sequence.tracks[0].id;
+        put(&mut sequence, video, 1, 0.0, 4.0, 0.0);
+        // 全程 2x：片段在时间线上只占 2 秒，0.5 秒处要取素材的 1.0 秒。
+        sequence.tracks[0].clips[0].remap.insert(0.0, 2.0);
+
+        let frame = resolve(&sequence, s(0.5)).expect("有画面");
+        assert!(frame.remap, "曲线片段要让播放器逐拍补 seek");
+        assert_eq!(frame.source, s(1.0), "按曲线反解素材时刻");
+        assert_eq!(resolve(&sequence, s(1.5)).unwrap().source, s(3.0));
+        assert_eq!(resolve(&sequence, s(2.5)), None, "曲线把片段缩到 2 秒");
+    }
+
+    #[test]
+    fn 曲线片段之间的转场不演过渡() {
+        let mut sequence = sequence();
+        let (_, second, seam) = seam(&mut sequence);
+        let track = &mut sequence.tracks[0];
+        let index = track.clip_index(second).unwrap();
+        track.clips[index].remap.insert(0.0, 2.0);
+
+        assert_eq!(overlay_dim(&sequence, seam), 0.0, "导出侧同样退化成硬切");
     }
 
     #[test]

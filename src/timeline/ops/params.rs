@@ -1,10 +1,10 @@
-//! 片段参数类编辑：倍率、片尾定格与调色。
+//! 片段参数类编辑：倍率、速度曲线、片尾定格与调色。
 //!
 //! 这里只做「能不能改」这一层校验，夹取与波纹让位分别落在
-//! `timeline::set_speed` / `timeline::set_hold` 里。值没变时序列与原样逐字段相等，
-//! 界面据此不落撤销。
+//! `timeline::set_speed` / `timeline::set_remap` / `timeline::set_hold` 里。值没变时
+//! 序列与原样逐字段相等，界面据此不落撤销。
 
-use super::{ColorGrade, EditError, Id, Sequence, Tick, locate};
+use super::{ColorGrade, EditError, Id, Sequence, SpeedCurve, Tick, locate};
 
 /// 改倍率。夹取与波纹让位都在 [`crate::timeline::set_speed`] 里，这里只做前置校验。
 ///
@@ -15,6 +15,27 @@ pub(super) fn set_speed(sequence: &mut Sequence, clip_id: Id, speed: f32) -> Res
     }
     locate(sequence, clip_id)?;
     crate::timeline::set_speed(sequence, clip_id, speed);
+    Ok(())
+}
+
+/// 换整条速度曲线。空曲线 = 回到常量倍率 `speed`。
+///
+/// 曲线里的点由界面算好（点一个就提交一整条）：单个点的增删在界面层做，
+/// 这里只负责校验锁轨与落一步撤销，和调色同一个模式。
+pub(super) fn set_remap(
+    sequence: &mut Sequence,
+    clip_id: Id,
+    curve: &SpeedCurve,
+) -> Result<(), EditError> {
+    if curve
+        .points
+        .iter()
+        .any(|point| !point.rate.is_finite() || !point.at.is_finite())
+    {
+        return Err(EditError::BadRate);
+    }
+    locate(sequence, clip_id)?;
+    crate::timeline::set_remap(sequence, clip_id, curve);
     Ok(())
 }
 

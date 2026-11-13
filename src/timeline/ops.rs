@@ -13,13 +13,21 @@
 //! 素材长度不在这里校验：片段只知道 `AssetId`，素材时长要等 M1-T07 登记进工程。
 //! 这里只保证「素材入点不为负、时长为正、同轨不重叠」这三件模型能自己判断的事。
 
+mod edges;
 mod params;
 mod placement;
+mod remove;
 mod subtitle;
 
-use crate::timeline::{AssetId, ClipItem, ColorGrade, Id, Sequence, SubtitleItem, Tick};
-use params::{set_color, set_hold, set_speed};
+use crate::timeline::{
+    AssetId, ClipItem, ColorGrade, Id, Sequence, SpeedCurve, SubtitleItem, Tick,
+};
+use edges::{
+    cut_at, ripple_trim_end, ripple_trim_start, roll, slide, slip, split, trim_end, trim_start,
+};
+use params::{set_color, set_hold, set_remap, set_speed};
 use placement::{clear_range, insert, insert_at, overwrite, shift_open};
+use remove::{remove, ripple_delete};
 use std::collections::HashSet;
 use std::fmt;
 use subtitle::{add_subtitle, remove_subtitle, set_subtitle};
@@ -102,6 +110,9 @@ pub enum EditOp {
     Roll { clip: Id, by: Tick },
     /// 改片段倍率。长度按倍率反比变化，同轨后面的片段整体让位（波纹）。
     SetSpeed { clip: Id, speed: f32 },
+    /// 换整条速度曲线（时间重映射）。空曲线表示回到常量倍率 `speed`；
+    /// 长度按曲线的积分重算，同轨后面的片段同样让位。
+    SetRemap { clip: Id, curve: SpeedCurve },
     /// 片尾定格：最后一帧多停 `hold`，`Tick::ZERO` 表示取消。
     SetHold { clip: Id, hold: Tick },
     /// 改调色。整套参数一起换：面板每次改动都是一份完整的 `ColorGrade`，
@@ -141,6 +152,9 @@ pub enum EditError {
     TrackLocked(Id),
     /// 倍率不是有限数，或者定格时长为负。
     BadRate,
+    /// 挂了速度曲线的片段不能做「把时间线位移直接加到素材时间上」的编辑：
+    /// 滑移 / 滑动 / 卷动，以及把边界往外拉。这些都要反解曲线，先清空曲线再做。
+    CurveShift,
     /// 字幕条目的 id 已经被片段 / 轨道 / 另一条字幕占用。
     DuplicateId(Id),
     /// 字幕条目本身不在序列里。
@@ -160,6 +174,10 @@ impl fmt::Display for EditError {
             EditError::SplitOutside(id) => write!(f, "切点必须落在片段 {id} 内部"),
             EditError::TrackLocked(id) => write!(f, "轨道 {id} 已锁定，先解锁再编辑"),
             EditError::BadRate => write!(f, "倍率必须是有限数，定格时长不能为负"),
+            EditError::CurveShift => write!(
+                f,
+                "挂了速度曲线的片段不能滑移 / 滑动 / 卷动，也不能把边界往外拉：先清空曲线"
+            ),
             EditError::DuplicateId(id) => write!(f, "id {id} 已经被别的内容占用了"),
             EditError::UnknownSubtitle(id) => write!(f, "字幕 {id} 不在序列里"),
         }
@@ -201,6 +219,7 @@ pub fn apply(sequence: &Sequence, op: &EditOp) -> Result<Sequence, EditError> {
         EditOp::Slide { clip, by } => slide(&mut next, *clip, *by)?,
         EditOp::Roll { clip, by } => roll(&mut next, *clip, *by)?,
         EditOp::SetSpeed { clip, speed } => set_speed(&mut next, *clip, *speed)?,
+        EditOp::SetRemap { clip, curve } => set_remap(&mut next, *clip, curve)?,
         EditOp::SetHold { clip, hold } => set_hold(&mut next, *clip, *hold)?,
         EditOp::SetColor { clip, color } => set_color(&mut next, *clip, color)?,
         EditOp::MoveKeyframe { clip, from, to } => move_keyframe(&mut next, *clip, *from, *to)?,
@@ -364,268 +383,6 @@ fn take_for_move(
     }
     let clip = sequence.tracks[from_track].clips.remove(from_index);
     Ok((clip, target))
-}
-
-fn trim_start(sequence: &mut Sequence, clip_id: Id, to: Tick) -> Result<(), EditError> {
-    if to.is_negative() {
-        return Err(EditError::NegativeTime);
-    }
-    let (track_index, clip_index) = locate(sequence, clip_id)?;
-    let track_id = sequence.tracks[track_index].id;
-    let clip = &sequence.tracks[track_index].clips[clip_index];
-
-    let delta = to - clip.start;
-    let source_in = clip.source_in + delta;
-    let end = clip.end();
-    if source_in.is_negative() {
-        return Err(EditError::EmptyClip);
-    }
-    if to >= end {
-        return Err(EditError::EmptyClip);
-    }
-    if sequence.tracks[track_index]
-        .overlap(to, end, Some(clip_id))
-        .is_some()
-    {
-        return Err(EditError::Overlap(track_id));
-    }
-
-    let clip = &mut sequence.tracks[track_index].clips[clip_index];
-    clip.start = to;
-    clip.source_in = source_in;
-    Ok(())
-}
-
-fn trim_end(sequence: &mut Sequence, clip_id: Id, to: Tick) -> Result<(), EditError> {
-    let (track_index, clip_index) = locate(sequence, clip_id)?;
-    let track_id = sequence.tracks[track_index].id;
-    let clip = &sequence.tracks[track_index].clips[clip_index];
-
-    let source_out = clip.source_in + (to - clip.start);
-    if to <= clip.start || source_out <= clip.source_in {
-        return Err(EditError::EmptyClip);
-    }
-    if sequence.tracks[track_index]
-        .overlap(clip.start, to, Some(clip_id))
-        .is_some()
-    {
-        return Err(EditError::Overlap(track_id));
-    }
-
-    sequence.tracks[track_index].clips[clip_index].source_out = source_out;
-    Ok(())
-}
-
-/// 波纹修剪头：内容从头部收掉 `to - start`，`start` 不动，同轨后面的片段整体左移。
-///
-/// 与 [`trim_start`] 的区别只有一处：那边收头会在轨道上留下空隙，这边把空隙闭合。
-/// `to` 是「内容收到了哪儿」；负数方向（往左）= 把被剪掉的帧要回来，受素材入点约束。
-fn ripple_trim_start(sequence: &mut Sequence, clip_id: Id, to: Tick) -> Result<(), EditError> {
-    let (track_index, clip_index) = locate(sequence, clip_id)?;
-    let clip = &sequence.tracks[track_index].clips[clip_index];
-    let delta = to - clip.start;
-    if delta == Tick::ZERO {
-        return Ok(());
-    }
-    let source_in = clip.source_in + delta;
-    let old_end = clip.end();
-    if source_in.is_negative() || delta >= old_end - clip.start {
-        return Err(EditError::EmptyClip);
-    }
-
-    sequence.tracks[track_index].clips[clip_index].source_in = source_in;
-    // 头部收放 `delta` 之后终点跟着挪同样的量（与 `trim_start` 同一个 1:1 约定），
-    // 后面的片段补上这段差值，轨道上就不会留空隙。
-    let shift = Tick::ZERO - delta;
-    for other in &mut sequence.tracks[track_index].clips {
-        if other.id != clip_id && other.start >= old_end {
-            other.start = other.start + shift;
-        }
-    }
-    Ok(())
-}
-
-/// 波纹修剪尾：出点收到 `to`，同轨后面的片段整体跟着挪。
-///
-/// 不检查与下一段重叠——后面的片段本来就要一起让位；`trim_end` 的那条检查在这里
-/// 反而会把正常的波纹修剪拒掉。
-fn ripple_trim_end(sequence: &mut Sequence, clip_id: Id, to: Tick) -> Result<(), EditError> {
-    let (track_index, clip_index) = locate(sequence, clip_id)?;
-    let clip = &sequence.tracks[track_index].clips[clip_index];
-    let old_end = clip.end();
-    let delta = to - old_end;
-    if delta == Tick::ZERO {
-        return Ok(());
-    }
-    let source_out = clip.source_in + (to - clip.start);
-    if to <= clip.start || source_out <= clip.source_in {
-        return Err(EditError::EmptyClip);
-    }
-
-    sequence.tracks[track_index].clips[clip_index].source_out = source_out;
-    for other in &mut sequence.tracks[track_index].clips {
-        if other.id != clip_id && other.start >= old_end {
-            other.start = other.start + delta;
-        }
-    }
-    Ok(())
-}
-
-pub(super) fn split(sequence: &mut Sequence, clip_id: Id, at: Tick) -> Result<(), EditError> {
-    let (track_index, clip_index) = locate(sequence, clip_id)?;
-    let id = sequence.alloc_id();
-    let track = &mut sequence.tracks[track_index];
-    let clip = track.clips[clip_index].clone();
-
-    if at <= clip.start || at >= clip.end() {
-        return Err(EditError::SplitOutside(clip_id));
-    }
-
-    // 两段的素材时间严丝合缝：左段出点就是右段入点，不丢帧也不重复。
-    let source_cut = clip.source_in + (at - clip.start);
-    track.clips[clip_index].source_out = source_cut;
-    track.clips.push(
-        ClipItem::new(id, clip.asset_id, source_cut, clip.source_out, at).with_name(clip.name),
-    );
-    track.sort_clips();
-    Ok(())
-}
-
-fn remove(sequence: &mut Sequence, clips: &[Id]) -> Result<(), EditError> {
-    let ids = checked_ids(sequence, clips)?;
-    for track in &mut sequence.tracks {
-        // 转场引用了被删的片段，就没有存在的意义了；留着会让工程校验失败。
-        track.transitions.retain(|transition| {
-            !ids.contains(&transition.before) && !ids.contains(&transition.after)
-        });
-        track.clips.retain(|clip| !ids.contains(&clip.id));
-    }
-    Ok(())
-}
-
-fn ripple_delete(sequence: &mut Sequence, clips: &[Id]) -> Result<(), EditError> {
-    let ids = checked_ids(sequence, clips)?;
-    for track in &mut sequence.tracks {
-        let removed: Vec<(Tick, Tick)> = track
-            .clips
-            .iter()
-            .filter(|clip| ids.contains(&clip.id))
-            .map(|clip| (clip.start, clip.end()))
-            .collect();
-        if removed.is_empty() {
-            continue;
-        }
-
-        track.transitions.retain(|transition| {
-            !ids.contains(&transition.before) && !ids.contains(&transition.after)
-        });
-        track.clips.retain(|clip| !ids.contains(&clip.id));
-
-        for clip in &mut track.clips {
-            // 每个片段只被「完全排在它前面的」被删片段推着走；两者不重叠，
-            // 所以这个和一定小于等于它自己的起点，不会把时间推成负数。
-            let shift = removed
-                .iter()
-                .filter(|(start, _)| *start < clip.start)
-                .fold(Tick::ZERO, |total, (start, end)| total + (*end - *start));
-            clip.start = clip.start - shift;
-        }
-        track.sort_clips();
-    }
-    Ok(())
-}
-
-fn slip(sequence: &mut Sequence, clip_id: Id, by: Tick) -> Result<(), EditError> {
-    let (track_index, clip_index) = locate(sequence, clip_id)?;
-    let clip = &sequence.tracks[track_index].clips[clip_index];
-    let source_in = clip.source_in + by;
-    let source_out = clip.source_out + by;
-    if source_in.is_negative() {
-        return Err(EditError::NegativeTime);
-    }
-    if source_out <= source_in {
-        return Err(EditError::EmptyClip);
-    }
-
-    let clip = &mut sequence.tracks[track_index].clips[clip_index];
-    clip.source_in = source_in;
-    clip.source_out = source_out;
-    Ok(())
-}
-
-fn slide(sequence: &mut Sequence, clip_id: Id, by: Tick) -> Result<(), EditError> {
-    if by == Tick::ZERO {
-        return Ok(());
-    }
-    let (track_index, clip_index) = locate(sequence, clip_id)?;
-    let track = &sequence.tracks[track_index];
-    let clip = track.clips[clip_index].clone();
-
-    // 滑移要同时吃两侧邻居：左边那段补不补得出来、右边那段让不让得出来，
-    // 都得先确认它们真的贴着。
-    if clip_index == 0 || clip_index + 1 >= track.clips.len() {
-        return Err(EditError::NotAdjacent);
-    }
-    let before = track.clips[clip_index - 1].clone();
-    let after = track.clips[clip_index + 1].clone();
-    if before.end() != clip.start || clip.end() != after.start {
-        return Err(EditError::NotAdjacent);
-    }
-
-    let source_out = before.source_out + by;
-    if source_out <= before.source_in {
-        return Err(EditError::EmptyClip);
-    }
-    let after_in = after.source_in + by;
-    if after_in.is_negative() {
-        return Err(EditError::NegativeTime);
-    }
-    if after.source_out <= after_in {
-        return Err(EditError::EmptyClip);
-    }
-    if clip.start + by < Tick::ZERO {
-        return Err(EditError::NegativeTime);
-    }
-
-    let track = &mut sequence.tracks[track_index];
-    track.clips[clip_index - 1].source_out = source_out;
-    track.clips[clip_index].start = clip.start + by;
-    track.clips[clip_index + 1].source_in = after_in;
-    track.clips[clip_index + 1].start = after.start + by;
-    Ok(())
-}
-
-fn roll(sequence: &mut Sequence, clip_id: Id, by: Tick) -> Result<(), EditError> {
-    if by == Tick::ZERO {
-        return Ok(());
-    }
-    let (track_index, clip_index) = locate(sequence, clip_id)?;
-    let track = &sequence.tracks[track_index];
-    let clip = track.clips[clip_index].clone();
-    let Some(after) = track.clips.get(clip_index + 1).cloned() else {
-        return Err(EditError::NotAdjacent);
-    };
-    if clip.end() != after.start {
-        return Err(EditError::NotAdjacent);
-    }
-
-    let source_out = clip.source_out + by;
-    if source_out <= clip.source_in {
-        return Err(EditError::EmptyClip);
-    }
-    let after_in = after.source_in + by;
-    if after_in.is_negative() {
-        return Err(EditError::NegativeTime);
-    }
-    if after.source_out <= after_in {
-        return Err(EditError::EmptyClip);
-    }
-
-    let track = &mut sequence.tracks[track_index];
-    track.clips[clip_index].source_out = source_out;
-    track.clips[clip_index + 1].source_in = after_in;
-    track.clips[clip_index + 1].start = after.start + by;
-    Ok(())
 }
 
 /// 挪一组关键帧。同一时刻的标记是所有属性共用的，所以挪的是整组，不是单条曲线。

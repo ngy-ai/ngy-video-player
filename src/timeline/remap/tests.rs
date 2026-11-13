@@ -149,13 +149,76 @@ fn 速度曲线挂在片段上能存盘读回() {
     assert_eq!(back.remap.points.len(), 2);
     assert_eq!(back.remap.rate_at(0.0, 1.0), 2.0);
     assert_eq!(back.remap.rate_at(4.0, 1.0), 0.5);
-    // 曲线非空时 `duration()` 仍按常量倍率算：这是已知待改的地方，单测把它钉住，
-    // 免得有人以为挂上曲线时长就自动变了。
-    assert_eq!(
+    // 曲线非空时 `duration()` 走曲线的积分，不再是常量倍率。
+    assert!(back.has_remap());
+    let expected = back
+        .remap
+        .timeline_duration((back.source_out - back.source_in).secs(), back.rate());
+    assert_eq!(back.duration(), expected + back.hold);
+    assert_ne!(
         back.duration(),
         crate::timeline::Tick::from_secs(
             (back.source_out - back.source_in).secs() / f64::from(back.rate())
-        )
+        ),
+        "挂上曲线之后时长必须跟着积分走"
     );
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn 片段时长与素材时刻都跟着曲线走() {
+    let mut clip = crate::timeline::ClipItem::new(
+        crate::timeline::Id::new(1),
+        crate::timeline::AssetId::new(1),
+        crate::timeline::Tick::ZERO,
+        crate::timeline::Tick::from_secs(4.0),
+        crate::timeline::Tick::from_secs(10.0),
+    );
+    // 从 2x 线性降到 0.5x：积分是 4·ln(4)/1.5 ≈ 3.695 秒，比「平均 1.25x」的
+    // 3.2 秒长——用算术平均会算短，所以这里对的是积分本身。
+    clip.remap.insert(0.0, 2.0);
+    clip.remap.insert(4.0, 0.5);
+
+    let motion = clip.motion().secs();
+    let integral = clip.remap.timeline_duration(4.0, 1.0).secs();
+    assert!(
+        (motion - integral).abs() < 1e-3,
+        "运动时长 {motion} ≠ {integral}"
+    );
+    assert!((motion - 3.695).abs() < 0.02, "运动时长 {motion}");
+    assert_eq!(clip.end(), clip.start + clip.motion() + clip.hold);
+    assert_eq!(clip.duration(), clip.motion(), "没有定格时时长就是运动时长");
+
+    // 时间线推进，素材位置单调跟着走；起点在素材入点、末尾贴到出点。
+    let mut previous = -1.0;
+    for step in 0..10 {
+        let at = clip.start + Tick::from_secs(motion * f64::from(step) / 10.0);
+        let source = clip.source_at(at).expect("落在片段内").secs();
+        assert!(source >= previous, "{source} < {previous}");
+        previous = source;
+    }
+    assert!(clip.source_at(clip.start).unwrap().secs() < 0.001);
+    let last = clip.source_at(clip.end() - Tick::from_micros(1)).unwrap();
+    assert!(last.secs() > 3.9, "末帧应当贴着出点：{}", last.secs());
+
+    // 正反解互逆：素材 3 秒 → 时间线 → 素材，误差在十分之一秒内。
+    let back = clip
+        .timeline_at(clip.source_in + Tick::from_secs(3.0))
+        .expect("素材在片段内");
+    let round = clip.source_at(back).expect("时间线落在片段内");
+    assert!(
+        (round.secs() - 3.0).abs() < 0.1,
+        "往返之后是 {} 秒",
+        round.secs()
+    );
+
+    // 没有曲线的片段完全不受影响。
+    let mut plain = clip.clone();
+    plain.remap = SpeedCurve::default();
+    assert!(!plain.has_remap());
+    assert_eq!(plain.motion(), Tick::from_secs(4.0));
+    assert_eq!(
+        plain.source_at(plain.start + Tick::from_secs(1.0)),
+        Some(Tick::from_secs(1.0))
+    );
 }

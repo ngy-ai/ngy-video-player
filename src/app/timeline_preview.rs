@@ -93,11 +93,12 @@ impl PlayerApp {
         }
         // 拖播放头要看的是「这一帧」，不是从这儿接着放；播放时则要从这里接着走。
         // 定格段没有「接着走」这回事：停在最后一帧，等播放头走出定格再放。
+        // 速度曲线的片段同理：mpv 只会按恒定速度放，放出去就跟播放头散了。
         //
         // 拖动时不按住：scrub 要的就是接着出声，收声交给拖动的尾巴计时器——
         // 每挪一下先 pause 再 unpause，光重启音频输出就够把 100 ms 的预算吃光。
         let pause = if playing {
-            frame.frozen
+            frame.frozen || frame.remap
         } else {
             !self.timeline_dragging
         };
@@ -151,6 +152,14 @@ impl PlayerApp {
                 self.send(Command::SetPaused(true));
                 self.timeline_loaded_at = Some(Instant::now());
             }
+            return;
+        }
+        // 速度曲线：素材位置不再随时间线性走，交给 mpv 自己放必然越走越偏。
+        // 每拍补一次 seek（与倒放同一条路径），代价是这一段在预览里没有声音——
+        // 真正的变速出声只有导出有（分段 `atempo`）。
+        if frame.remap {
+            self.send(Command::SeekAbsolute(source));
+            self.send(Command::SetPaused(true));
             return;
         }
         // 上一段空档里把它停住了（或者刚按下播放）：放行。

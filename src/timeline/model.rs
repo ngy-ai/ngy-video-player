@@ -97,9 +97,9 @@ pub struct ClipItem {
     pub mask: crate::timeline::Mask,
     /// 速度曲线（时间重映射，见 `timeline::remap`）。空 = 用常量倍率 `speed`。
     ///
-    /// **注意**：`duration()` 现在还只认 `speed`。曲线一旦非空，时间线时长要改成
-    /// `remap::timeline_duration`，预览与导出必须同时切过去，否则两边时长对不上——
-    /// 这一步没做完之前，界面上不该给出「记速度点」的入口。
+    /// 非空时 [`ClipItem::motion`] 改成曲线的积分，[`ClipItem::source_at`] 走曲线的
+    /// 反解：预览与导出因此共用同一套数，不会一边按常量倍率、一边按曲线算。
+    /// `speed` 此时仍然有用——它是曲线为空时的倍率，也是曲线的兜底值。
     #[serde(default)]
     pub remap: crate::timeline::SpeedCurve,
 }
@@ -149,8 +149,24 @@ impl ClipItem {
         }
     }
 
+    /// 有没有真正生效的速度曲线：有点且素材跨度为正。
+    ///
+    /// 空曲线与「跨度为零的片段」都退回常量倍率 `speed`——前者是没做时间重映射，
+    /// 后者连素材长度都没有，积分没有意义。
+    pub fn has_remap(&self) -> bool {
+        !self.remap.points.is_empty() && self.span() > Tick::ZERO
+    }
+
     /// 变速后的运动时长（不含片尾定格）。
+    ///
+    /// 有速度曲线时是 `∫ ds / rate(s)`（见 [`crate::timeline::remap`]），否则是
+    /// 素材跨度 ÷ 常量倍率。
     pub fn motion(&self) -> Tick {
+        if self.has_remap() {
+            return self
+                .remap
+                .timeline_duration(self.span().secs(), self.rate());
+        }
         let scaled = f64::from(self.rate());
         Tick::from_micros((self.span().micros() as f64 / scaled).round() as i64)
     }
@@ -173,8 +189,15 @@ impl ClipItem {
     /// 素材时间 → 序列时间。片段不覆盖该时刻时返回 `None`。
     pub fn timeline_at(&self, source: Tick) -> Option<Tick> {
         (source >= self.source_in && source < self.source_out).then(|| {
-            let offset = (source - self.source_in).micros() as f64 / f64::from(self.rate());
-            self.start + Tick::from_micros(offset.round() as i64)
+            let offset = (source - self.source_in).secs();
+            if self.has_remap() {
+                let elapsed =
+                    self.remap
+                        .timeline_at_source(offset, self.span().secs(), self.rate());
+                return self.start + Tick::from_secs(elapsed);
+            }
+            let scaled = offset / f64::from(self.rate());
+            self.start + Tick::from_secs(scaled)
         })
     }
 
@@ -186,8 +209,16 @@ impl ClipItem {
             return None;
         }
         let elapsed = at - self.start;
+        let last = (self.source_out - Tick::from_micros(1)).max(self.source_in);
         if elapsed >= self.motion() {
-            return Some((self.source_out - Tick::from_micros(1)).max(self.source_in));
+            return Some(last);
+        }
+        if self.has_remap() {
+            let offset =
+                self.remap
+                    .source_at_timeline(elapsed.secs(), self.span().secs(), self.rate());
+            // 反解在段内按段速线性插值，走到末尾时可能刚好等于出点：夹回最后一帧。
+            return Some((self.source_in + Tick::from_secs(offset)).min(last));
         }
         let offset = elapsed.micros() as f64 * f64::from(self.rate());
         Some(self.source_in + Tick::from_micros(offset.round() as i64))

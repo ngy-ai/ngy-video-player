@@ -448,6 +448,45 @@ impl PlayerApp {
                         ),
                 );
             }
+
+            // 速度曲线：片段挂了曲线就在片段上画一条折线，纵轴是倍率（log2，1× 在中间）。
+            // 画在片段之后，所以压在片段上面；太窄的片段不画，免得把片名盖住。
+            // 横轴按**时间线**取样再反解素材位置，所以曲线上看到的就是成片里的快慢。
+            if clip.has_remap() && width > 24.0 && end > start {
+                let from = start.max(view.scroll());
+                let to = end.min(visible_end);
+                let samples = (((right - left) / 6.0).clamp(4.0, 48.0)) as usize;
+                let span = (TIMELINE_TRACK_HEIGHT - 8.0).max(1.0);
+                let mut previous: Option<(f32, f32)> = None;
+                for index in 0..samples {
+                    let ratio = index as f64 / (samples.max(2) - 1) as f64;
+                    let at = from + (to - from) * ratio;
+                    let Some(source) = clip.source_at(Tick::from_secs(at)) else {
+                        previous = None;
+                        continue;
+                    };
+                    let offset = (source - clip.source_in).secs();
+                    let rate = clip.remap.rate_at(offset, clip.rate());
+                    let x = view.x_of(at);
+                    // 画布内的位置：0 = 0.25×（贴底），1 = 4×（贴顶）。
+                    let y = 4.0 + (1.0 - super::super::timeline_speed::rate_ratio(rate)) * span;
+                    if let Some((x0, y0)) = previous {
+                        let (left, width) = (x0.min(x), (x - x0).abs().max(1.0));
+                        let (top, height) = (y0.min(y), (y - y0).abs().max(1.0));
+                        lane = lane.child(
+                            div()
+                                .absolute()
+                                .left(px(left))
+                                .top(px(top))
+                                .w(px(width))
+                                .h(px(height))
+                                .bg(gpui_kit::rgba(0xffd166cc))
+                                .opacity(if track.muted { 0.4 } else { 1.0 }),
+                        );
+                    }
+                    previous = Some((x, y));
+                }
+            }
         }
 
         // 接缝上的转场标记：宽按转场时长算、跨在接缝两侧，点一下打开转场面板。

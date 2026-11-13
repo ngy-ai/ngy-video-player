@@ -405,6 +405,8 @@ pub struct PlayerApp {
     curve_drop: Option<timeline_curve::CurveDrop>,
     /// 曲线编辑器里正拖着的框选范围。
     curve_select: Option<timeline_curve::CurveSelect>,
+    /// 变速面板里正拖着的一个速度点（松手才写回曲线）。
+    speed_drop: Option<timeline_speed::SpeedDrop>,
     /// 复制出来的关键帧（粘到别的属性 / 片段上）。
     key_clipboard: Option<Vec<crate::timeline::Keyframe>>,
     /// 工程模式预览正在放的那个素材文件。同一个文件只 seek，换文件才重新加载。

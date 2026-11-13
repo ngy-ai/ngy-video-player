@@ -113,6 +113,7 @@ impl PlayerApp {
             timeline_menu: None,
             curve_drop: None,
             curve_select: None,
+            speed_drop: None,
             key_clipboard: None,
             timeline_preview: None,
             timeline_playing: false,

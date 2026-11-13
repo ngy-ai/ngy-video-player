@@ -238,6 +238,13 @@ impl Stream {
         self.segments.push(label);
     }
 
+    /// 一段要好几条滤镜链的素材（速度曲线的分段变速就是这样）：中间那几条各自带
+    /// 自己的标签，只有最后一条落在 `label` 上，`segments` 里也只记一次。
+    fn push_chains(&mut self, chains: Vec<String>, label: String) {
+        self.chains.extend(chains);
+        self.segments.push(label);
+    }
+
     /// 拼出 `concat` 滤镜；没有段就没有输出标签。
     fn concat(&self, out: &str, video: bool) -> Option<String> {
         if self.segments.is_empty() {
@@ -313,12 +320,17 @@ fn video_stream(
         let mut head = Tick::ZERO;
         let mut kind = None;
         // 变速片段不接转场：`xfade` 的时长按时间线算，而多取的素材按素材时间算，
-        // 两头一换算就容易错帧。宁可退化成硬切，也不要成片时长对不上。
+        // 两头一换算就容易错帧。宁可退化成硬切，也不要成片时长对不上。速度曲线的
+        // 情况更糟：多取的那一段在素材时间上的落点得反解曲线，索性一起排除。
         let rate = clip.rate();
+        let steady = (rate - 1.0).abs() < 1e-6 && !clip.has_remap();
         if let Some(previous) = pieces.last()
             && previous.end == clip.start
-            && (rate - 1.0).abs() < 1e-6
+            && steady
             && let Some(previous_id) = previous.clip
+            && track
+                .clip(previous_id)
+                .is_some_and(|before| !before.has_remap())
             && let Some(transition) = track
                 .transitions
                 .iter()
@@ -363,7 +375,12 @@ fn video_stream(
         // 输出标签必须拼在链尾：concat 与 xfade 只认标签，链上没有标签时
         // ffmpeg 会报 "Stream specifier 'v3' ... matches no streams"。
         // 变速：`setpts` 按倍率压缩 / 拉伸时间戳，音轨那边用 `atempo` 对齐。
-        let setpts = if (rate - 1.0).abs() < 1e-6 {
+        // 速度曲线换成一条分段线性的表达式（`remap::setpts_filter`，单位已经换回时基）：
+        // 常量倍率只是它的一个特例，但常量走短写法更清楚。
+        let setpts = if clip.has_remap() {
+            crate::timeline::setpts_filter(&clip.remap, clip.span().secs(), rate)
+                .unwrap_or_else(|| "setpts=PTS-STARTPTS".to_string())
+        } else if (rate - 1.0).abs() < 1e-6 {
             "setpts=PTS-STARTPTS".to_string()
         } else {
             format!("setpts=(PTS-STARTPTS)/{rate:.6}")
@@ -448,6 +465,54 @@ fn video_stream(
     Ok(stream)
 }
 
+/// 片段的声音主体：把素材区间 `[入点, 出点)` 变成一路音频，链尾统一落在 `[amN]` 上。
+///
+/// 返回「这几条链 + 末端的标签」：调用方在标签后面接着接采样率 / 格式 / 音量。
+///
+/// 常量倍率是一条 `atempo`（快慢各一档，极端倍率串联）。速度曲线不行：`atempo` 只认
+/// 恒定倍率，只能按曲线折点切成几块、各自变速再 `concat` 拼回来；每块的倍率取
+/// 「调和中项」，让它的时长与曲线积分严格相等（见 `timeline::remap::audio_chunks`）。
+/// 同一条输入流被切进多条链之前要先 `asplit`：filter_complex 里一个输入标签只能用一次。
+fn audio_body(clip: &crate::timeline::ClipItem, index: usize) -> (Vec<String>, String) {
+    let id = clip.id.raw();
+    let start = clip.source_in.secs();
+    let raw = format!("[am{id}]");
+    let chunks = crate::timeline::audio_chunks(&clip.remap, clip.span().secs(), clip.rate());
+    // 常量倍率（含「曲线只有一个点」）：一条 `atrim` 就够。
+    if !clip.has_remap() || chunks.len() <= 1 {
+        let rate = chunks
+            .first()
+            .map_or_else(|| clip.rate(), |chunk| chunk.rate as f32);
+        let tempo = atempo_chain(rate);
+        return (
+            vec![format!(
+                "[{index}:a]atrim=start={start:.6}:end={:.6},asetpts=PTS-STARTPTS{tempo}{raw}",
+                clip.source_out.secs()
+            )],
+            raw,
+        );
+    }
+
+    // `asplit` 的输出标签要唯一：同一份工程里两个片段各切一次也不会撞名。
+    let splits: Vec<String> = (0..chunks.len()).map(|i| format!("[ac{id}_{i}]")).collect();
+    let mut chains = vec![format!(
+        "[{index}:a]asplit={}{}",
+        chunks.len(),
+        splits.concat()
+    )];
+    for (i, (split, chunk)) in splits.iter().zip(&chunks).enumerate() {
+        let tempo = atempo_chain(chunk.rate as f32);
+        chains.push(format!(
+            "{split}atrim=start={:.6}:end={:.6},asetpts=PTS-STARTPTS{tempo}[ad{id}_{i}]",
+            start + chunk.start,
+            start + chunk.end,
+        ));
+    }
+    let done: String = (0..chunks.len()).map(|i| format!("[ad{id}_{i}]")).collect();
+    chains.push(format!("{done}concat=n={}:v=0:a=1{raw}", chunks.len()));
+    (chains, raw)
+}
+
 /// 倍率 → `atempo` 链。
 ///
 /// `atempo` 一档只认 0.5–2.0，更极端的倍率要串联：4x 是 `atempo=2.0,atempo=2.0`，
@@ -514,8 +579,9 @@ fn audio_stream(
 
         let index = input_index(inputs, project, clip.asset_id)?;
         let label = format!("[a{}]", clip.id.raw());
-        // 变速片段的声音跟着改速率；定格段补静音，好和视频那边的 `tpad` 对齐。
-        let tempo = atempo_chain(clip.rate());
+        // 声音主体：常量倍率是一条 `atempo`，速度曲线要分段变速（见 `audio_body`）。
+        let (mut chains, raw) = audio_body(clip, index);
+        // 定格段补静音，好和视频那边的 `tpad` 对齐。
         let pad = if clip.hold > Tick::ZERO {
             format!(",apad=pad_dur={:.6}", clip.hold.secs())
         } else {
@@ -541,17 +607,12 @@ fn audio_stream(
         } else {
             format!(",pan=stereo|c0={left:.4}*c0|c1={right:.4}*c1")
         };
-        stream.push(
-            format!(
-                "[{index}:a]atrim=start={:.6}:end={:.6},asetpts=PTS-STARTPTS{tempo},\
-                 aresample={AUDIO_RATE},\
-                 aformat=sample_fmts=fltp:channel_layouts=stereo{pad}\
-                 {clip_volume}{automation}{volume}{pan}",
-                clip.source_in.secs(),
-                clip.source_out.secs()
-            ),
-            label,
-        );
+        chains.push(format!(
+            "{raw}aresample={AUDIO_RATE},\
+             aformat=sample_fmts=fltp:channel_layouts=stereo{pad}\
+             {clip_volume}{automation}{volume}{pan}{label}"
+        ));
+        stream.push_chains(chains, label);
         cursor = clip.end();
     }
 

@@ -266,13 +266,14 @@ impl PlayerApp {
         {
             return;
         }
-        // 定格段本来就不该有声音：放开 mpv 会把它一路放出去。
-        let frozen = match self.project.as_ref() {
+        // 定格段本来就不该有声音：放开 mpv 会把它一路放出去。速度曲线的片段同理：
+        // 它一直在被逐拍 seek，放开只会把音频输出重启一遍又一遍。
+        let silent = match self.project.as_ref() {
             Some(project) => preview::resolve(project.sequence(), project.ui.playhead)
-                .is_some_and(|frame| frame.frozen),
+                .is_some_and(|frame| frame.frozen || frame.remap),
             None => return,
         };
-        if frozen {
+        if silent {
             return;
         }
         self.scrub_audio = true;

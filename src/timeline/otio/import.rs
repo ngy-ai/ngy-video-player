@@ -10,7 +10,7 @@
 
 use super::*;
 use crate::timeline::{
-    ColorGrade, Effect, EffectKind, Keyframes, Rational, SubtitleItem, Tick, TrackKind,
+    ColorGrade, Effect, EffectKind, Keyframes, Rational, SpeedCurve, SubtitleItem, Tick, TrackKind,
     TransitionKind,
 };
 use serde_json::Value;
@@ -55,6 +55,8 @@ pub struct ImportedClip {
     pub source_in: Tick,
     pub source_out: Tick,
     pub speed: f32,
+    /// 速度曲线（时间重映射）。对方文件里没有就是空曲线，只按 `speed` 算。
+    pub remap: SpeedCurve,
     pub hold: Tick,
     pub effects: Vec<Effect>,
     pub keys: Keyframes,
@@ -363,6 +365,10 @@ fn parse_clip(
         source_in,
         source_out: source_in + span,
         speed,
+        remap: extras
+            .get("remap")
+            .and_then(|remap| serde_json::from_value::<SpeedCurve>(remap.clone()).ok())
+            .unwrap_or_default(),
         hold: extras
             .get("hold")
             .and_then(Value::as_i64)
