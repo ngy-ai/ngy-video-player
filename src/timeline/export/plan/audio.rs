@@ -77,7 +77,7 @@ fn atempo_chain(rate: f32) -> String {
     parts.iter().map(|part| format!(",{part}")).collect()
 }
 
-pub(super) fn audio_stream(
+pub(crate) fn audio_stream(
     project: &Project,
     track: &Track,
     duration: Tick,

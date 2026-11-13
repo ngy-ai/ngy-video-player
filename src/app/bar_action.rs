@@ -101,6 +101,8 @@ pub(super) enum BarAction {
     ShowScope,
     /// 混音台：每条音频轨的推子、声像与音量自动化。
     ShowMixer,
+    /// 导出音频分轨（每条音频轨一个 wav），交给外部 DAW 做插件处理。
+    ExportStems,
     /// 检测整片的镜头切换点。
     ShowScenes,
     /// 双机位并排导出。

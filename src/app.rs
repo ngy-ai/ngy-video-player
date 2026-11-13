@@ -156,6 +156,7 @@ mod sequence_manager;
 mod session;
 mod settings_panel;
 mod source_edit;
+mod stems;
 #[cfg(test)]
 mod tests;
 mod timecode_jump;

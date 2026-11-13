@@ -16,7 +16,7 @@ mod video;
 
 use std::path::PathBuf;
 
-use audio::audio_stream;
+pub(super) use audio::audio_stream;
 use video::video_stream;
 
 use super::MaskAttachment;
@@ -256,9 +256,9 @@ fn build_plan(
 }
 
 /// 一条流（视频或音频）的拼接进度：每段一条滤镜链、一个标签。
-struct Stream {
-    chains: Vec<String>,
-    segments: Vec<String>,
+pub(super) struct Stream {
+    pub(super) chains: Vec<String>,
+    pub(super) segments: Vec<String>,
     /// 这条轨上有没有遮罩：有的话整条轨是 yuva420p，叠之前要先垫黑底。
     masked: bool,
 }

@@ -47,9 +47,9 @@ pub use effect::{
 };
 pub use export::{
     EncodeSpeed, ExportError, ExportPlan, ExportSettings, PRESET_NAME_CHARS, Quality, RenderPreset,
-    RenderPresetStore, SubtitleAttachment, SubtitleMode, VideoCodec,
+    RenderPresetStore, StemPlan, SubtitleAttachment, SubtitleMode, VideoCodec,
     normalize_name as normalize_preset_name, plan_sequence, plan_sequence_id, plan_sequence_range,
-    plan_sequence_with,
+    plan_sequence_with, plan_stems,
 };
 pub use keyframe::{
     Animation, EASING_PRESETS, Interpolation, Keyframe, Keyframes, Property,

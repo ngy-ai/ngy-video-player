@@ -144,6 +144,9 @@ mod mask;
 // 混音（推子 / 自动化）的电平核对在 `tests/timeline_export/mixer.rs`。
 #[path = "timeline_export/mixer.rs"]
 mod mixer;
+// 分轨导出（每条音频轨一个 wav）在 `tests/timeline_export/stems.rs`。
+#[path = "timeline_export/stems.rs"]
+mod stems;
 
 /// `ffmpeg -i` 的 stderr 里有 `..., 30 fps, ...`，用它读回成片帧率。
 fn assert_frame_rate(output: &Path, expected: &str) {

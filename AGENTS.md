@@ -183,6 +183,9 @@ src/timeline/export.rs  序列导出：`ExportPlan`、`ExportSettings`、字幕�
 src/timeline/export/plan.rs  计划的组装：输入表、按范围切一刀、把几条流接起来（含黑底 + overlay）
 src/timeline/export/plan/video.rs  单条视频流的滤镜链：效果 / 调色 / 关键帧 / 遮罩（alphamerge）/ xfade
 src/timeline/export/plan/audio.rs  单条音频流的滤镜链：速度曲线按折点分段 atempo、段间 concat
+src/timeline/export/stems.rs  分轨导出（ADR 0011 的替代路径）：每条听得见的音频轨一个 24bit wav，
+                 长度等于序列，复用 `audio_stream` 的链（推子 / 自动化 / 声像都在里面）
+src/app/stems.rs  「文件 > 导出音频分轨…」：选目录、顺序跑 ExportTask、横幅报进度（无取消）
 src/export/task.rs  导出进程：临时 ASS 与遮罩 PGM 落盘 / 清理、软字幕按容器选编码器、进度与取消
 src/timeline/undo.rs    撤销 / 重做：状态快照栈，一次操作一步，上限 200 步
 src/timeline/autosave.rs  自动保存（30 秒无操作）与 `.autosave` 崩溃恢复
@@ -253,7 +256,9 @@ src/timeline/view.rs    时间线视图状态：缩放（1 像素 = 1 帧 ~ 10 �
 
 现状（2026-11-12 用 `[System.IO.File]::ReadAllText($f).Split("`n").Count - 1` 数过；
 `(Get-Content $f).Count` 与 `Measure-Object -Line` 都少数几十到上百行，别再用它们）：
-**现在都在 700 行以内**：最后三只也拆完了——`player/compositor.rs`（753 → 入口 +
+**现在都在 700 行以内**：最近拆的是 `app/bar.rs`（702 → 入口 + `bar/entries.rs`：
+每套菜单的条目搬出去，入口只留「按当前模式分发」与动作派发）。
+再往前拆过的：`player/compositor.rs`（753 → 入口 +
 `handle` / `layer` / `worker`）、`playlist.rs`（748 → 入口 + `item` / `list` / `set`）、
 `app/overlays.rs`（705 → 入口 + `hud` / `cards` / `menus` / `file_info`）。
 再往前拆过的：`app.rs`（870 → 入口 + `app/types.rs`）、

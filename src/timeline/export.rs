@@ -6,6 +6,7 @@
 mod plan;
 mod presets;
 mod settings;
+mod stems;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -24,6 +25,7 @@ impl ExportPlan {
 }
 pub use presets::{PRESET_NAME_CHARS, RenderPreset, RenderPresetStore, normalize_name};
 pub use settings::{EncodeSpeed, ExportSettings, Quality, SubtitleMode, VideoCodec};
+pub use stems::{StemPlan, plan_stems};
 
 /// 导出计划里附带的字幕：一份 ASS 文本 + 交付方式。
 ///
@@ -136,6 +138,8 @@ pub enum ExportError {
     Empty,
     /// 没有可用的视频轨（没有视频轨，或者视频轨全被隐藏）。
     NoVideoTrack,
+    /// 没有可导出的音频轨（没有音频轨、全是静音，或者全被独奏挤掉）。
+    NoAudioTrack,
     /// 片段引用的素材不在素材表里。
     UnknownAsset(u64),
     /// 素材文件在打开工程时就已经找不到了。
@@ -153,6 +157,9 @@ impl fmt::Display for ExportError {
         match self {
             Self::Empty => write!(f, "时间线上还没有片段"),
             Self::NoVideoTrack => write!(f, "没有启用的视频轨，先在轨道名旁把眼睛打开"),
+            Self::NoAudioTrack => {
+                write!(f, "没有可导出的音频轨：空轨、静音轨与被独奏挤掉的轨都不算")
+            }
             Self::UnknownAsset(raw) => write!(f, "片段引用的素材 {raw} 不在素材表里"),
             Self::MissingAsset(name) => {
                 write!(f, "素材「{name}」找不到了，先把它放回原处或重新链接")
