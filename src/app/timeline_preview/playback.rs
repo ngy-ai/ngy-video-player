@@ -267,10 +267,18 @@ impl PlayerApp {
             return;
         }
         // 定格段本来就不该有声音：放开 mpv 会把它一路放出去。速度曲线的片段同理：
-        // 它一直在被逐拍 seek，放开只会把音频输出重启一遍又一遍。
+        // 它一直在被逐拍 seek，放开只会把音频输出重启一遍又一遍。命中渲染缓存的
+        // 曲线片段不在此列——缓存文件本身没有声音，放开也只是顺着画面播。
         let silent = match self.project.as_ref() {
-            Some(project) => preview::resolve(project.sequence(), project.ui.playhead)
-                .is_some_and(|frame| frame.frozen || frame.remap),
+            Some(project) => match preview::resolve(project.sequence(), project.ui.playhead) {
+                Some(frame) => {
+                    let baked = self
+                        .preview_media(project, &frame, project.ui.playhead)
+                        .is_some_and(|media| media.baked);
+                    frame.frozen || (frame.remap && !baked)
+                }
+                None => false,
+            },
             None => return,
         };
         if silent {

@@ -8,6 +8,16 @@ use std::path::Path;
 use super::*;
 use crate::timeline::Id;
 
+/// 预览这一刻要放的那一份文件。
+pub(crate) struct PreviewMedia {
+    pub path: PathBuf,
+    /// 从文件的第几秒开始：缓存文件是**片段内偏移**，代理与原片是**素材内时刻**。
+    pub at: Tick,
+    /// 放的是渲染缓存：画面（含变速、效果、调色）已经烘焙进文件，文件自己的时间轴
+    /// 就是片段时间轴，所以可以照着文件连续播，不必逐拍补 seek。
+    pub baked: bool,
+}
+
 impl PlayerApp {
     /// 预览要打开的文件。设置里关掉「预览用代理」时一律原片。
     ///
@@ -21,7 +31,7 @@ impl PlayerApp {
 
     /// 预览这一刻该打开哪个文件、从哪一秒开始放。
     ///
-    /// 优先级是 **渲染缓存 > 代理 > 原片**：缓存文件里已经带上了效果、调色与推近，
+    /// 优先级是 **渲染缓存 > 代理 > 原片**：缓存文件里已经带上了效果、调色、推近与变速，
     /// 没有缓存时才有必要退回代理（省解码）或原片。缓存的第 0 秒是**片段**的开头，
     /// 所以要换算成片段内偏移，而不是素材内的时刻。
     pub(crate) fn preview_media(
@@ -29,13 +39,21 @@ impl PlayerApp {
         project: &Project,
         frame: &crate::timeline::preview::PreviewFrame,
         at: Tick,
-    ) -> Option<(PathBuf, Tick)> {
+    ) -> Option<PreviewMedia> {
         if let Some(path) = self.render_cache_hit(project, frame.clip) {
             let clip = project.sequence().clip(frame.clip)?;
-            return Some((path, (at - clip.start).max(Tick::ZERO)));
+            return Some(PreviewMedia {
+                path,
+                at: (at - clip.start).max(Tick::ZERO),
+                baked: true,
+            });
         }
         let path = self.preview_path(project, frame.asset)?;
-        Some((path, frame.source))
+        Some(PreviewMedia {
+            path,
+            at: frame.source,
+            baked: false,
+        })
     }
 
     /// 这个片段有没有可用的渲染缓存文件（M10-T19）。

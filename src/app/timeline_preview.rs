@@ -73,10 +73,12 @@ impl PlayerApp {
             return false;
         };
         // 缓存 / 代理 / 原片的选择在 `preview_media` 里；带缓存时时间换成片段内偏移。
-        let Some((path, source_tick)) = self.preview_media(project, &frame, at) else {
+        let media = self.preview_media(project, &frame, at);
+        let Some(media) = media else {
             return false;
         };
-        let source = source_tick.secs();
+        let path = media.path;
+        let source = media.at.secs();
 
         if self.timeline_preview.as_deref() != Some(path.as_path()) {
             self.timeline_preview = Some(path.clone());
@@ -94,11 +96,13 @@ impl PlayerApp {
         // 拖播放头要看的是「这一帧」，不是从这儿接着放；播放时则要从这里接着走。
         // 定格段没有「接着走」这回事：停在最后一帧，等播放头走出定格再放。
         // 速度曲线的片段同理：mpv 只会按恒定速度放，放出去就跟播放头散了。
+        // 例外是放渲染缓存的时候：变速已经烘焙进文件，文件自己的时间轴就是片段的
+        // 时间轴，照着文件放就是对的（`media.baked`）。
         //
         // 拖动时不按住：scrub 要的就是接着出声，收声交给拖动的尾巴计时器——
         // 每挪一下先 pause 再 unpause，光重启音频输出就够把 100 ms 的预算吃光。
         let pause = if playing {
-            frame.frozen || frame.remap
+            frame.frozen || (frame.remap && !media.baked)
         } else {
             !self.timeline_dragging
         };
@@ -128,10 +132,12 @@ impl PlayerApp {
             }
             return;
         };
-        let Some((path, source_tick)) = self.preview_media(project, &frame, at) else {
+        let media = self.preview_media(project, &frame, at);
+        let Some(media) = media else {
             return;
         };
-        let source = source_tick.secs();
+        let path = media.path;
+        let source = media.at.secs();
 
         if self.timeline_preview.as_deref() != Some(path.as_path()) {
             self.timeline_preview = Some(path.clone());
@@ -157,7 +163,9 @@ impl PlayerApp {
         // 速度曲线：素材位置不再随时间线性走，交给 mpv 自己放必然越走越偏。
         // 每拍补一次 seek（与倒放同一条路径），代价是这一段在预览里没有声音——
         // 真正的变速出声只有导出有（分段 `atempo`）。
-        if frame.remap {
+        // 命中渲染缓存时不用这样：变速已经烘焙进文件，按文件本身放就是对的，
+        // 于是曲线片段也能连续播（下面那条「偏差太大才补 seek」的常规路径）。
+        if frame.remap && !media.baked {
             self.send(Command::SeekAbsolute(source));
             self.send(Command::SetPaused(true));
             return;
@@ -176,7 +184,7 @@ impl PlayerApp {
         {
             return;
         }
-        if preview::out_of_sync(source_tick, self.snapshot.position) {
+        if preview::out_of_sync(media.at, self.snapshot.position) {
             self.send(Command::SeekAbsolute(source));
             self.timeline_loaded_at = Some(Instant::now());
         }

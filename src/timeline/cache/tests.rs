@@ -79,6 +79,26 @@ fn 变速与定格不缓存() {
 }
 
 #[test]
+fn 速度曲线可以缓存且进指纹() {
+    let (project, _asset_path) = project();
+    let sequence = sequence();
+    let mut curved = clip();
+    curved
+        .effects
+        .push(Effect::new(Id::new(1), EffectKind::Denoise));
+    curved.remap.insert(0.0, 2.0);
+    curved.remap.insert(4.0, 0.5);
+    // 变速烘焙进缓存文件，片段的第 N 秒还是文件的第 N 秒。
+    assert!(worth_caching(&curved), "曲线片段也值得缓存");
+
+    // 曲线变了必须换指纹，否则改完曲线还在放旧的变速结果。
+    let base = fingerprint(&project, &sequence, &curved);
+    let mut slower = curved.clone();
+    slower.remap.insert(4.0, 0.25);
+    assert_ne!(base, fingerprint(&project, &sequence, &slower));
+}
+
+#[test]
 fn 指纹随画面参数变化() {
     let (project, _asset_path) = project();
     let sequence = sequence();

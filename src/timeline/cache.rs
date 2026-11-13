@@ -38,15 +38,14 @@ pub const DIR_NAME: &str = "render-cache";
 /// 这个片段值不值得预渲染。
 ///
 /// 判据是「预览少它就会看出差别」：有启用的效果、调过色、或者打了会改画面的关键帧。
-/// 同时要求倍率 1、没有片尾定格、没有速度曲线——只有这些条件成立时，缓存文件里的
-/// 第 N 秒才正好是片段在序列上的第 N 秒。速度曲线本来也能对上（缓存走的是同一条
-/// `setpts` 链），但预览那边对曲线片段是逐拍 seek，命中缓存也不会因此变顺，
-/// 索性不缓存，省得指纹里再挂一条曲线参数。
+/// 同时要求倍率 1、没有片尾定格——只有这两个条件成立时，缓存文件里的第 N 秒才正好
+/// 是片段在序列上的第 N 秒。
+///
+/// **速度曲线可以缓存**：渲染走的是导出那条 `setpts` 链，变速是烘焙进文件的，
+/// 文件自己的时间轴就是片段时间轴，所以命中缓存之后预览能照着文件连续播，
+/// 不必再逐拍 seek（见 `app::preview_proxy::PreviewMedia::baked`）。曲线进指纹。
 pub fn worth_caching(clip: &ClipItem) -> bool {
-    if (clip.rate() - 1.0).abs() > 1e-4
-        || clip.hold > crate::timeline::Tick::ZERO
-        || clip.has_remap()
-    {
+    if (clip.rate() - 1.0).abs() > 1e-4 || clip.hold > crate::timeline::Tick::ZERO {
         return false;
     }
     let effects = clip
@@ -82,6 +81,12 @@ pub fn fingerprint(project: &Project, sequence: &Sequence, clip: &ClipItem) -> u
         text,
         "|{}",
         serde_json::to_string(&clip.keys).unwrap_or_default()
+    );
+    // 速度曲线也决定画面（变速是烘焙进文件的），改曲线必须换指纹。
+    let _ = write!(
+        text,
+        "|{}",
+        serde_json::to_string(&clip.remap).unwrap_or_default()
     );
     fnv1a(text.as_bytes())
 }
@@ -148,7 +153,8 @@ pub fn cache_settings() -> ExportSettings {
 /// 导出「同一个滤镜链」这条约定靠的就是这个。
 ///
 /// 前置条件由 [`worth_caching`] 保证：倍率 1、无定格，于是缓存文件的时间轴与
-/// 片段在序列上的时间轴一一对应。
+/// 片段在序列上的时间轴一一对应。速度曲线不用剥掉：`setpts` 会把文件本身压成
+/// 片段的时长，第 N 秒还是片段的第 N 秒。
 pub fn cache_plan(
     project: &Project,
     sequence: &Sequence,
