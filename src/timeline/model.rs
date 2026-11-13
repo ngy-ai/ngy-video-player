@@ -88,6 +88,10 @@ pub struct ClipItem {
     pub keys: crate::timeline::Keyframes,
     /// 调色：亮度 / 对比度 / 饱和度 / 色温与 3D LUT（见 [`crate::timeline::color`]）。
     pub color: crate::timeline::ColorGrade,
+    /// 片段自己的音量（线性振幅倍数，1.0 = 原样）。与轨道自动化、轨道推子连乘，
+    /// 顺序见 `timeline::mixer`。
+    #[serde(default = "crate::timeline::mixer::unity_gain")]
+    pub gain: f32,
 }
 
 impl ClipItem {
@@ -110,6 +114,7 @@ impl ClipItem {
             effects: Vec::new(),
             keys: crate::timeline::Keyframes::default(),
             color: crate::timeline::ColorGrade::default(),
+            gain: 1.0,
         }
     }
 

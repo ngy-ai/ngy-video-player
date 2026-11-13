@@ -14,6 +14,7 @@ mod effect;
 mod export;
 mod keyframe;
 mod media;
+pub mod mixer;
 mod model;
 mod ops;
 pub mod otio;
@@ -53,6 +54,7 @@ pub use keyframe::{
     fade_filters as keyframe_fades, motion_filter as keyframe_motion,
 };
 pub use media::{AssetState, ColorTags, MediaInfo, MediaStamp};
+pub use mixer::GainPoint;
 pub use model::{
     AssetId, ClipItem, Id, MAX_GAIN, Marker, ModelError, Sequence, Track, TrackKind, Transition,
     TransitionKind,

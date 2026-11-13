@@ -56,6 +56,12 @@ pub struct Track {
     /// 用户点独奏的心意是「只听这条」。
     #[serde(default)]
     pub solo: bool,
+    /// 声像：-1 全左、0 居中、1 全右（等功率，见 `timeline::mixer`）。
+    #[serde(default)]
+    pub pan: f32,
+    /// 音量自动化：轨道时间上的点，空表示「整条按推子」。
+    #[serde(default)]
+    pub automation: Vec<crate::timeline::mixer::GainPoint>,
 }
 
 /// 音量的默认值（原样）。`serde` 的 `default` 需要一个函数，`f32` 的默认 0.0 是
@@ -80,6 +86,8 @@ impl Track {
             locked: false,
             gain: 1.0,
             solo: false,
+            pan: 0.0,
+            automation: Vec::new(),
         }
     }
 

@@ -521,11 +521,32 @@ fn audio_stream(
         } else {
             String::new()
         };
+        // 三层音量（片段 → 自动化 → 推子）连乘，顺序见 `timeline::mixer`；
+        // 连乘与顺序无关，分开写只是为了每一层都能单独看出它在哪儿。
+        let clip_gain = crate::timeline::mixer::clip_gain(clip.gain);
+        let clip_volume = if (clip_gain - 1.0).abs() < 1e-4 {
+            String::new()
+        } else {
+            format!(",volume={clip_gain:.4}")
+        };
+        // 自动化用 `eval=frame`：每帧按轨道时间求值。滤镜链里这一段从 PTS 0 开始，
+        // 所以表达式里把片段起点加回去。
+        let automation = crate::timeline::mixer::gain_expression(track, clip.start)
+            .map(|expr| format!(",volume=volume='{expr}':eval=frame"))
+            .unwrap_or_default();
+        // 声像走 `pan`：左右各乘一个系数（等功率），居中时不插这道。
+        let (left, right) = crate::timeline::mixer::pan_gains(track.pan);
+        let pan = if (left - right).abs() < 1e-4 {
+            String::new()
+        } else {
+            format!(",pan=stereo|c0={left:.4}*c0|c1={right:.4}*c1")
+        };
         stream.push(
             format!(
                 "[{index}:a]atrim=start={:.6}:end={:.6},asetpts=PTS-STARTPTS{tempo},\
                  aresample={AUDIO_RATE},\
-                 aformat=sample_fmts=fltp:channel_layouts=stereo{pad}{volume}",
+                 aformat=sample_fmts=fltp:channel_layouts=stereo{pad}\
+                 {clip_volume}{automation}{volume}{pan}",
                 clip.source_in.secs(),
                 clip.source_out.secs()
             ),

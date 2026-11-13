@@ -140,6 +140,8 @@ src/timeline/time.rs  Tick（i64 微秒）与 Rational 帧率：全项目唯一�
 src/timeline/spec.rs  序列规格：分辨率预设、帧率表、奇数边校验、按素材推导
 src/timeline/timecode.rs  `HH:MM:SS:FF` 的显示与解析：整帧 / 丢帧（29.97、59.94）、省略短写
 src/timeline/media.rs  素材元信息、文件指纹与过期判断；不含 ffmpeg 调用
+src/timeline/mixer.rs  混音：三层音量（片段 → 自动化 → 推子）定序、等功率声像、
+                 自动化到 ffmpeg `volume` 表达式；单测在 `mixer/tests.rs`
 src/timeline/query.rs  素材搜索与智能合集：条件语法（七种字段、否定、并且）、
                  求值与 `Collection`（存条件不存结果），单测在 `query/tests.rs`
 src/timeline/proxy.rs  代理选用规则：素材比序列大且代理在 → 预览用代理；导出拒绝代理素材
