@@ -128,7 +128,7 @@ pub(super) fn render_karaoke(
         .flex()
         .flex_col()
         .gap(px(6.0))
-        .child(option_row("逐字 / 卡拉 OK", vec![toggle]));
+        .child(option_row("逐字", vec![toggle]));
     if !enabled {
         return row
             .child(settings_note(
@@ -233,7 +233,7 @@ pub(super) fn render_karaoke(
 
     row = row.child(strip).child(settings_note(format!(
         "共 {} 个字 · {:.2} 秒；左右拖动分界线改相邻两字的时长（总长不变）。\
-             预览里唱过的字变黄，导出由 libass 按 ASS 的 `\\kf` 逐字填充。",
+             预览里唱过的字用强调色，导出由 libass 按 ASS 的 `\\kf` 逐字填充。",
         chars.len(),
         dialog.draft.duration().secs()
     )));

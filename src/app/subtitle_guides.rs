@@ -47,28 +47,35 @@ pub(super) fn safe_area_layer() -> impl IntoElement {
         .id("subtitle-safe-area")
         .absolute()
         .inset_0()
-        .children(GUIDES.iter().map(|(ratio, label, color)| {
-            let rect = guide_rect(*ratio);
-            div()
-                .absolute()
-                .left(gpui_kit::relative(rect.left))
-                .top(gpui_kit::relative(rect.top))
-                .w(gpui_kit::relative(rect.width))
-                .h(gpui_kit::relative(rect.height))
-                .border_1()
-                .border_color(gpui_kit::rgba(*color))
-                .child(
+        .children(
+            GUIDES
+                .iter()
+                .enumerate()
+                .map(|(index, (ratio, label, color))| {
+                    let rect = guide_rect(*ratio);
+                    // 内圈标签往下挪一行：两圈左上角只差 5% 画面高，标签会叠在一起。
+                    let label_top = if index == 0 { px(2.0) } else { px(20.0) };
                     div()
                         .absolute()
-                        .left(px(4.0))
-                        .top(px(2.0))
-                        .px(px(3.0))
-                        .text_size(px(11.0))
-                        .text_color(gpui_kit::rgba(*color))
-                        .bg(gpui_kit::rgba(0x0000_0066))
-                        .child(*label),
-                )
-        }))
+                        .left(gpui_kit::relative(rect.left))
+                        .top(gpui_kit::relative(rect.top))
+                        .w(gpui_kit::relative(rect.width))
+                        .h(gpui_kit::relative(rect.height))
+                        .border_1()
+                        .border_color(gpui_kit::rgba(*color))
+                        .child(
+                            div()
+                                .absolute()
+                                .left(px(4.0))
+                                .top(label_top)
+                                .px(px(3.0))
+                                .text_size(px(11.0))
+                                .text_color(gpui_kit::rgba(*color))
+                                .bg(gpui_kit::rgba(0x0000_0066))
+                                .child(*label),
+                        )
+                }),
+        )
 }
 
 impl PlayerApp {

@@ -280,10 +280,11 @@ impl PlayerApp {
                 let bubble = match (item.karaoke_enabled(), sung) {
                     (true, Some(index)) => {
                         let (done, rest) = item.karaoke_split(index);
+                        // 高亮用强调色而不是黄：字幕本身就能选「黄」，同色会看不出唱到哪。
                         bubble
                             .flex()
                             .items_center()
-                            .child(div().text_color(gpui_kit::rgba(0xffd5_4aee)).child(done))
+                            .child(div().text_color(ui::accent()).child(done))
                             .child(div().text_color(ink).child(rest))
                     }
                     _ => bubble.text_color(ink).child(item.label()),
