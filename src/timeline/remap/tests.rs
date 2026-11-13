@@ -116,3 +116,46 @@ fn setpts_表达式段数正确且末段回到总时长() {
     // 没有曲线时不给表达式：导出侧照旧用常量倍率。
     assert_eq!(SpeedCurve::default().setpts_expression(4.0, 1.0), None);
 }
+
+#[test]
+fn 速度曲线挂在片段上能存盘读回() {
+    let mut project = crate::timeline::Project::default();
+    let id = project.add_asset(std::path::Path::new("C:/素材/b.mp4"));
+    let mut sequence =
+        crate::timeline::Sequence::new("序列", crate::timeline::Rational::FPS_25, 1920, 1080);
+    sequence.tracks.clear();
+    let track_id = sequence.add_track(crate::timeline::TrackKind::Video);
+    let clip_id = sequence.alloc_id();
+    let mut clip = crate::timeline::ClipItem::new(
+        clip_id,
+        id,
+        crate::timeline::Tick::ZERO,
+        crate::timeline::Tick::from_secs(8.0),
+        crate::timeline::Tick::ZERO,
+    );
+    clip.remap.insert(0.0, 2.0);
+    clip.remap.insert(4.0, 0.5);
+    if let Some(track) = sequence.track_mut(track_id) {
+        track.clips.push(clip);
+    }
+    let sequence_id = sequence.id;
+    project.sequences = vec![sequence];
+    project.active_sequence = sequence_id;
+
+    let path = std::env::temp_dir().join("ngy-remap.ngyproj");
+    project.save(&path).expect("保存");
+    let opened = crate::timeline::Project::open(&path).expect("打开");
+    let back = opened.sequence().clip(clip_id).expect("片段还在");
+    assert_eq!(back.remap.points.len(), 2);
+    assert_eq!(back.remap.rate_at(0.0, 1.0), 2.0);
+    assert_eq!(back.remap.rate_at(4.0, 1.0), 0.5);
+    // 曲线非空时 `duration()` 仍按常量倍率算：这是已知待改的地方，单测把它钉住，
+    // 免得有人以为挂上曲线时长就自动变了。
+    assert_eq!(
+        back.duration(),
+        crate::timeline::Tick::from_secs(
+            (back.source_out - back.source_in).secs() / f64::from(back.rate())
+        )
+    );
+    let _ = std::fs::remove_file(&path);
+}

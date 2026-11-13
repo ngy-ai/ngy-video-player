@@ -95,6 +95,13 @@ pub struct ClipItem {
     /// 遮罩：矩形 / 椭圆 / 自由路径，相对坐标（见 `timeline::mask`）。
     #[serde(default)]
     pub mask: crate::timeline::Mask,
+    /// 速度曲线（时间重映射，见 `timeline::remap`）。空 = 用常量倍率 `speed`。
+    ///
+    /// **注意**：`duration()` 现在还只认 `speed`。曲线一旦非空，时间线时长要改成
+    /// `remap::timeline_duration`，预览与导出必须同时切过去，否则两边时长对不上——
+    /// 这一步没做完之前，界面上不该给出「记速度点」的入口。
+    #[serde(default)]
+    pub remap: crate::timeline::SpeedCurve,
 }
 
 impl ClipItem {
@@ -119,6 +126,7 @@ impl ClipItem {
             color: crate::timeline::ColorGrade::default(),
             gain: 1.0,
             mask: crate::timeline::Mask::default(),
+            remap: crate::timeline::SpeedCurve::default(),
         }
     }
 
