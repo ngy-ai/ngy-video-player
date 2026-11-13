@@ -78,8 +78,9 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                    `timeline_speed/curve.rs` 是曲线画布、可拖的倍率点与坐标换算）、
                  timeline_mask（片段遮罩面板：开关、矩形 / 椭圆、大小、羽化、位移）、
                  mixer_panel（混音台：每轨推子 / 声像条（按住拖动）、M / S、音量自动化点的
-                   打 / 删 / 清空；推子走 dB 刻度，拖动状态在 `PlayerApp.mixer_dragging`，
-                   拖动的像素换算在 `app/mixer_panel/tests.rs`）、
+                   打 / 删 / 清空；推子走 dB 刻度，拖动状态在 `PlayerApp.mixer_dragging`；
+                   `mixer_panel/automation.rs` 是每轨的可拖自动化画布与跨轨复制 / 粘贴
+                   （松手才写回、一步撤销），坐标换算单测在 `app/mixer_panel/tests.rs`）、
                  timeline_curve（曲线编辑器：网格与刻度、折线、贝塞尔手柄拖动、
                    框选删点、复制 / 粘贴曲线）、
                  timeline_subtitle（字幕编辑模态面板、字幕块右键菜单与预览入口，
