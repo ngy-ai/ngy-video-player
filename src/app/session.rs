@@ -118,6 +118,8 @@ impl PlayerApp {
             speed_drop: None,
             mixer_panel: None,
             mixer_dragging: None,
+            mixer_auto_drag: None,
+            automation_clipboard: None,
             key_clipboard: None,
             timeline_preview: None,
             timeline_playing: false,

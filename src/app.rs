@@ -416,6 +416,10 @@ pub struct PlayerApp {
     mixer_panel: Option<mixer_panel::MixerPanel>,
     /// 混音台上正拖着的推子 / 声像条。
     mixer_dragging: Option<mixer_panel::MixerDrag>,
+    /// 混音台上正拖着的自动化点（松手才写回工程）。
+    mixer_auto_drag: Option<mixer_panel::automation::MixerAutoDrag>,
+    /// 复制出来的音量自动化曲线，可以粘到别的音频轨。
+    automation_clipboard: Option<Vec<crate::timeline::GainPoint>>,
     /// 复制出来的关键帧（粘到别的属性 / 片段上）。
     key_clipboard: Option<Vec<crate::timeline::Keyframe>>,
     /// 工程模式预览正在放的那个素材文件。同一个文件只 seek，换文件才重新加载。

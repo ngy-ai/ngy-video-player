@@ -15,6 +15,8 @@ use crate::timeline::mixer::{self, GainPoint};
 use crate::timeline::{Id, TrackKind};
 use std::rc::Rc;
 
+pub(super) mod automation;
+
 /// 面板本身没有状态：所有值都在工程里，拖动状态在 `PlayerApp`。
 #[derive(Default)]
 pub(super) struct MixerPanel;
@@ -73,6 +75,7 @@ impl PlayerApp {
 
     pub(super) fn close_mixer_panel(&mut self, cx: &mut Context<Self>) {
         self.mixer_dragging = None;
+        self.mixer_auto_drag = None;
         if self.mixer_panel.take().is_some() {
             cx.notify();
         }
@@ -239,6 +242,7 @@ impl PlayerApp {
         let project = self.project.as_ref()?;
         let sequence = project.sequence();
         let playhead = project.ui.playhead;
+        let duration = sequence.duration();
         let audio: Vec<_> = sequence
             .tracks
             .iter()
@@ -262,7 +266,7 @@ impl PlayerApp {
 
         let mut rows = div().flex().flex_col().gap(px(10.0));
         for track in audio {
-            rows = rows.child(self.render_mixer_row(track, playhead, cx));
+            rows = rows.child(self.render_mixer_row(track, playhead, duration, cx));
         }
 
         let card = div()
@@ -286,8 +290,10 @@ impl PlayerApp {
             )
             .child(rows)
             .child(div().text_size(px(10.0)).text_color(text_faint()).child(
-                "自动化点在播放头处记录，导出时按 `volume` 表达式逐帧渲染；\
-                         预览跟着播放头走同一条线。",
+                "下面的小画布是音量自动化：横轴是序列时间，纵轴和推子同一套 dB 刻度；\
+                         按住圆点拖到任意时刻与音量，松手才算一步撤销。\
+                         「复制曲线 / 粘贴」可以把一条轨的点整条搬到另一条轨。\
+                         导出时按 `volume` 表达式逐帧渲染，预览跟着播放头走同一条线。",
             ));
 
         // 一行要塞下名字 / M / S / 推子 / dB / 声像 / 左右 / 三个自动化按钮，
@@ -308,6 +314,7 @@ impl PlayerApp {
         &self,
         track: &crate::timeline::Track,
         playhead: Tick,
+        duration: Tick,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let id = track.id;
@@ -336,7 +343,7 @@ impl PlayerApp {
             cx,
         );
 
-        div()
+        let controls = div()
             .flex()
             .items_center()
             .gap(px(8.0))
@@ -426,7 +433,14 @@ impl PlayerApp {
                                 None => format!("{points} 点"),
                             }),
                     ),
-            )
+            );
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .child(controls)
+            .child(self.automation_lane(track, duration, cx))
             .into_any_element()
     }
 

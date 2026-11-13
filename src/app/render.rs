@@ -337,6 +337,10 @@ impl Render for PlayerApp {
                 if this.mixer_dragging.is_some() {
                     this.drag_mixer(event.position.x, cx);
                 }
+                // 自动化点同理，只是横纵两个方向都要跟着指针。
+                if this.mixer_auto_drag.is_some() {
+                    this.drag_automation_point(event.position, cx);
+                }
                 if this.speed_dragging {
                     this.set_speed_from_x(event.position.x, cx);
                 }

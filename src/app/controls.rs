@@ -120,6 +120,8 @@ impl PlayerApp {
         }
         // 混音台的推子 / 声像条同理：指针在窗口外松开时收不到抬起。
         self.mixer_dragging = None;
+        // 自动化点：拖动中只记落点，这一刻才写回工程并压一步历史。
+        self.drop_automation_point(cx);
         if self.speed_dragging {
             self.speed_dragging = false;
             self.settings.save();

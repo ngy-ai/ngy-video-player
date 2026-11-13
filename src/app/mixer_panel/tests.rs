@@ -1,5 +1,6 @@
-//! 混音台面板的坐标换算：推子（dB 刻度）与声像条的比例互转。
+//! 混音台面板的坐标换算：推子（dB 刻度）、声像条与自动化画布的比例互转。
 
+use super::automation::{auto_at, auto_gain, auto_x, auto_y, normalize_automation};
 use super::*;
 
 #[test]
@@ -48,4 +49,51 @@ fn 声像条中间是居中() {
     assert_eq!(pan_label(0.3), "R30");
     // 越界的声像按夹取后的值显示。
     assert_eq!(pan_label(5.0), "R100");
+}
+
+#[test]
+fn 自动化画布横轴按序列时长往返() {
+    let duration = Tick::from_secs(8.0);
+    for (at, expected) in [
+        (Tick::ZERO, 0.0),
+        (Tick::from_secs(2.0), 0.25),
+        (Tick::from_secs(8.0), 1.0),
+    ] {
+        let x = auto_x(at, duration);
+        assert!((x - expected).abs() < 1e-5, "{at:?} → {x}");
+        assert_eq!(auto_at(x, duration), at);
+    }
+    assert_eq!(auto_x(Tick::from_secs(20.0), duration), 1.0, "拖出右边界");
+    assert_eq!(
+        auto_x(Tick::from_secs(1.0), Tick::ZERO),
+        0.0,
+        "空序列不除零"
+    );
+    assert_eq!(auto_at(-1.0, duration), Tick::ZERO);
+}
+
+#[test]
+fn 自动化画布纵轴与推子同一套_db_刻度() {
+    assert_eq!(auto_y(0.0), 1.0, "静音在画布最底");
+    assert_eq!(auto_y(mixer::MAX_GAIN), 0.0, "上限在画布最顶");
+    let y = auto_y(1.0);
+    assert!(y > 0.0 && y < 1.0, "0 dB 在中间偏上：{y}");
+    assert!((auto_gain(y) - 1.0).abs() < 1e-3, "来回一趟回到 0 dB");
+    assert_eq!(auto_gain(1.0), 0.0, "拖到最底是静音档");
+    assert!((auto_gain(0.0) - mixer::MAX_GAIN).abs() < 1e-3);
+}
+
+#[test]
+fn 写回前会钳制排序并去掉同刻重复点() {
+    let mut points = vec![
+        GainPoint::new(Tick::from_secs(3.0), 9.0),
+        GainPoint::new(Tick::from_secs(1.0), -2.0),
+        GainPoint::new(Tick::from_micros(1_000_500), 1.5),
+        GainPoint::new(Tick::from_micros(-500_000), 0.5),
+    ];
+    normalize_automation(&mut points);
+    assert_eq!(points.len(), 3, "1s 与 1.0005s 只留一个：{points:?}");
+    assert_eq!(points[0].at, Tick::ZERO, "负起点夹到 0");
+    assert!((points[1].gain - 1.5).abs() < 1e-5, "同刻留后来的点");
+    assert_eq!(points[2].gain, mixer::MAX_GAIN, "超上限夹到 MAX_GAIN");
 }
