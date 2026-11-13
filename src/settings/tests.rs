@@ -32,3 +32,21 @@ fn 最近工程只留固定条数() {
         "最新的在最前"
     );
 }
+
+#[test]
+fn 老配置缺字幕安全框时按关处理() {
+    let settings: Settings = serde_json::from_str(r#"{"volume": 50}"#).unwrap();
+    assert!(!settings.show_safe_area);
+    assert!(settings.preview_proxy, "别的字段仍按各自的默认值补齐");
+}
+
+#[test]
+fn 字幕安全框开关往返存盘() {
+    let settings = Settings {
+        show_safe_area: true,
+        ..Default::default()
+    };
+    let text = serde_json::to_string(&settings).unwrap();
+    let restored: Settings = serde_json::from_str(&text).unwrap();
+    assert!(restored.show_safe_area);
+}

@@ -157,6 +157,7 @@ mod session;
 mod settings_panel;
 mod source_edit;
 mod stems;
+mod subtitle_guides;
 #[cfg(test)]
 mod tests;
 mod timecode_jump;

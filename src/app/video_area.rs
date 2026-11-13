@@ -1,5 +1,6 @@
 //! 视频区渲染：帧交换、横纵比、进度条与悬停预览。
 
+use super::subtitle_guides;
 use super::*;
 
 /// 没有帧时是否该显示空状态提示。
@@ -245,6 +246,11 @@ impl PlayerApp {
                         .bg(gpui_kit::rgba(u32::from(alpha))),
                 )
             })
+            // 参考线压在字幕文字下面：文字该压得住线，而不是被线穿过。
+            .when(
+                self.project.is_some() && self.settings.show_safe_area,
+                |this| this.child(subtitle_guides::safe_area_layer()),
+            )
             // 字幕压在黑场之上：空档里也应该看得见字幕。字号按预览窗口折一档，
             // ASS 里的数字是按序列高度（1080p / 4K）定义的像素。
             .when_some(subtitle, |this, item| {

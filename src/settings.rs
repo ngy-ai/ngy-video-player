@@ -365,6 +365,10 @@ pub struct Settings {
     /// 渲染缓存目录的容量上限（MB）。超出后按最旧优先删。
     #[serde(default = "default_render_cache_limit_mb")]
     pub render_cache_limit_mb: u64,
+    /// 工程预览上画字幕安全框（动作 90% / 字幕 80% 两圈参考线）。
+    ///
+    /// 默认关：看片时不需要参考线。只在工程模式生效，不进导出成片也不进截图。
+    pub show_safe_area: bool,
 }
 
 impl Default for Settings {
@@ -397,6 +401,7 @@ impl Default for Settings {
             maintain_associations: true,
             render_cache: true,
             render_cache_limit_mb: crate::timeline::DEFAULT_LIMIT_MB,
+            show_safe_area: false,
         }
     }
 }

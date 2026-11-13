@@ -226,6 +226,12 @@ impl PlayerApp {
                             .hint("L")
                             .checked(self.settings.show_playlist),
                     ));
+                } else {
+                    // 安全框是编排字幕时才用得上的参考线：播放模式里没有序列，画出来只会挡画面。
+                    items.push(BarItem::Entry(
+                        BarEntry::new("字幕安全框", ToggleSafeArea)
+                            .checked(self.settings.show_safe_area),
+                    ));
                 }
                 items.push(BarItem::Entry(
                     BarEntry::new("全屏", ToggleFullscreen)
@@ -382,6 +388,7 @@ impl PlayerApp {
             BarAction::ToggleFullscreen => self.toggle_fullscreen(window),
             BarAction::ToggleMini => self.toggle_mini(window, cx),
             BarAction::ToggleHelp => self.toggle_settings(SettingsTab::Shortcuts),
+            BarAction::ToggleSafeArea => self.toggle_safe_area(cx),
             BarAction::OpenSettings(tab) => self.open_settings(tab),
             BarAction::TakeScreenshot => self.take_screenshot(cx),
             BarAction::Trim => self.open_clip_dialog(window, cx),

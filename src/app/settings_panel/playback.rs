@@ -71,17 +71,34 @@ impl PlayerApp {
             }),
         );
 
+        let safe_area_row = picture_option(
+            "settings-safe-area",
+            "预览显示字幕安全框",
+            self.settings.show_safe_area,
+            true,
+            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                this.toggle_safe_area(cx);
+            }),
+        );
+
         div()
             .flex()
             .flex_col()
             .gap(px(18.0))
             .child(option_group("循环模式", loop_rows))
             .child(option_group("窗口置顶", on_top_rows))
-            .child(option_group("剪辑预览", vec![proxy_row, auto_proxy_row]))
+            .child(option_group(
+                "剪辑预览",
+                vec![proxy_row, auto_proxy_row, safe_area_row],
+            ))
             .child(settings_note("都跟着偏好保存，下次启动照这个状态来。"))
             .child(settings_note(
                 "素材比序列大、旁边又有 `<原名>.proxy.mp4` 时，预览改放代理；导出不受影响。\
                  自动补齐是后台串行跑一条队列，进度在素材库底栏，随时可以取消。",
+            ))
+            .child(settings_note(
+                "字幕安全框只在工程预览里画动作 90% / 字幕 80% 两圈参考线，帮着把文字放进安全区域；\
+                 不进导出成片、不进截图。也可以从「视图 > 字幕安全框」开关。",
             ))
             .into_any_element()
     }

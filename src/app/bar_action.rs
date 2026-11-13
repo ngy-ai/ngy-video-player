@@ -81,6 +81,8 @@ pub(super) enum BarAction {
     ToggleFullscreen,
     ToggleMini,
     ToggleHelp,
+    /// 工程预览上的字幕安全框（两圈参考线）。
+    ToggleSafeArea,
     /// 打开设置窗口；`Some` 表示直接切到那一页。
     OpenSettings(Option<SettingsTab>),
     TakeScreenshot,
