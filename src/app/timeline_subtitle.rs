@@ -16,6 +16,8 @@ use gpui_kit::component::input::{Input, InputState};
 
 /// SRT / WebVTT / ASS 的导入与导出（面板之外的两个入口，菜单里的「导入 / 导出字幕文件…」）。
 mod file;
+/// 面板里的逐字 / 卡拉 OK 时间轴。
+mod karaoke;
 
 /// 字幕面板的状态。`track` 为 `None` 表示「确定时自己挑 / 建一条字幕轨」。
 pub(super) struct SubtitleDialog {
@@ -23,6 +25,8 @@ pub(super) struct SubtitleDialog {
     item: Option<Id>,
     draft: SubtitleItem,
     text: Entity<InputState>,
+    /// 逐字条拖动中的落点：松手才写回草稿。
+    karaoke_drag: Option<karaoke::KaraokeDrop>,
 }
 
 /// chip 的 id 必须是静态串：每帧换一个 id 会让 GPUI 认不出同一个元素。
@@ -96,6 +100,7 @@ impl PlayerApp {
             item,
             draft,
             text,
+            karaoke_drag: None,
         });
         self.timeline_menu = None;
         self.menu = None;
@@ -123,6 +128,19 @@ impl PlayerApp {
             return true;
         }
         false
+    }
+
+    /// 输入框里的文字才是用户当下看到的：动逐字条之前先把草稿对齐，
+    /// 否则按旧字数铺出来的权重会马上被 `normalize` 裁掉。
+    fn sync_subtitle_text(&mut self, cx: &mut Context<Self>) {
+        let typed = self
+            .subtitle_dialog
+            .as_ref()
+            .map(|dialog| dialog.text.read(cx).value().to_string());
+        if let (Some(typed), Some(dialog)) = (typed, self.subtitle_dialog.as_mut()) {
+            dialog.draft.text = typed;
+            dialog.draft.normalize();
+        }
     }
 
     /// 改一份草稿（起止或样式），不落撤销，确定时才算一步编辑。
@@ -331,6 +349,8 @@ impl PlayerApp {
         let dialog = self.subtitle_dialog.as_ref()?;
         let draft = &dialog.draft;
         let style = &draft.style;
+        // 逐字条按输入框当下的文字分段，不等「确定」才同步。
+        let typed = dialog.text.read(cx).value().to_string();
 
         let fonts = FONTS
             .iter()
@@ -493,9 +513,10 @@ impl PlayerApp {
             .child(option_row("颜色", colors))
             .child(outline_row)
             .child(option_row("位置", positions))
+            .child(karaoke::render_karaoke(dialog, &typed, cx))
             .child(settings_note(style.summary()))
             .child(settings_note(
-                "预览显示文字、颜色与位置；字体和描边只在导出时由 libass 排版。",
+                "预览显示文字、颜色、位置与逐字高亮；字体、描边和逐字填充只在导出时由 libass 排版。",
             ))
             .child(actions)
             .into_any_element();

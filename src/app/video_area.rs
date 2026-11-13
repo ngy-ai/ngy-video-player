@@ -224,6 +224,14 @@ impl PlayerApp {
                 crate::timeline::subtitle_at(project.sequence(), project.ui.playhead)
             })
         };
+        // 逐字 / 卡拉 OK：播放头落在第几个字，前面的字就换高亮色。libass 那种逐字
+        // 渐变填充在界面叠层里做不了，只能按字分色；导出仍然走 ASS 的 `\kf`。
+        let playhead = self
+            .project
+            .as_ref()
+            .map(|project| project.ui.playhead)
+            .unwrap_or(crate::timeline::Tick::ZERO);
+        let sung = subtitle.and_then(|item| item.karaoke_index(playhead));
         div()
             .id("video-area")
             .absolute()
@@ -263,18 +271,24 @@ impl PlayerApp {
                     "center" => layer.justify_center(),
                     _ => layer.justify_end().pb(px(24.0)),
                 };
-                this.child(
-                    layer.child(
-                        div()
-                            .px(px(10.0))
-                            .py(px(2.0))
-                            .rounded(px(4.0))
-                            .bg(gpui_kit::rgba(0x00000066))
-                            .text_size(px(size))
-                            .text_color(ink)
-                            .child(item.label()),
-                    ),
-                )
+                let bubble = div()
+                    .px(px(10.0))
+                    .py(px(2.0))
+                    .rounded(px(4.0))
+                    .bg(gpui_kit::rgba(0x00000066))
+                    .text_size(px(size));
+                let bubble = match (item.karaoke_enabled(), sung) {
+                    (true, Some(index)) => {
+                        let (done, rest) = item.karaoke_split(index);
+                        bubble
+                            .flex()
+                            .items_center()
+                            .child(div().text_color(gpui_kit::rgba(0xffd5_4aee)).child(done))
+                            .child(div().text_color(ink).child(rest))
+                    }
+                    _ => bubble.text_color(ink).child(item.label()),
+                };
+                this.child(layer.child(bubble))
             })
             // 空状态只看「有没有帧」，不看 mpv 上报的宽高：width/height 属性在
             // 视频解码前是 0，用它会在一段正常播放的画面上盖一层「正在加载」。

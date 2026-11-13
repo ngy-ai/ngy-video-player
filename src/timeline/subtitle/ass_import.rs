@@ -24,6 +24,8 @@ pub struct StyledCue {
     pub end: Tick,
     pub text: String,
     pub style: SubtitleStyle,
+    /// 逐字权重（厘秒）；空表示这条不是卡拉 OK 字幕。
+    pub karaoke: Vec<u32>,
 }
 
 /// 读一整份脚本。文件读不出来才报错；块级问题（时间倒挂、空文本）一律跳过。
@@ -114,6 +116,7 @@ pub fn parse(script: &str) -> Vec<StyledCue> {
                 .get(&event.style.to_ascii_lowercase())
                 .cloned()
                 .unwrap_or_default(),
+            karaoke: event.karaoke,
         })
         .collect();
     cues.sort_by_key(|cue| cue.start);
@@ -255,6 +258,7 @@ struct RawEvent {
     start: Tick,
     end: Tick,
     text: String,
+    karaoke: Vec<u32>,
 }
 
 impl RawEvent {
@@ -262,15 +266,16 @@ impl RawEvent {
         let fields = columns.fields(line);
         let start = parse_time(columns.value(&fields, "start")?)?;
         let end = parse_time(columns.value(&fields, "end")?)?;
-        let text = cue_text(columns.value(&fields, "text")?);
-        if text.is_empty() {
+        let parts = parse_cue_text(columns.value(&fields, "text")?);
+        if parts.text.is_empty() {
             return None;
         }
         Some(Self {
             style: columns.value(&fields, "style").unwrap_or("").to_string(),
             start: start.max(Tick::ZERO),
             end,
-            text,
+            text: parts.text,
+            karaoke: parts.karaoke,
         })
     }
 }
@@ -322,39 +327,160 @@ fn position_of(alignment: u32) -> SubtitlePosition {
     }
 }
 
-/// 事件文本 → 工程里的多行文字。
+/// 事件文本解析出来的文字与逐字权重。
+struct CueParts {
+    text: String,
+    karaoke: Vec<u32>,
+}
+
+/// 一个卡拉 OK 音节：`\kf20` 管着后面这一串字，共 20 厘秒。
+struct Syllable {
+    centis: u32,
+    chars: Vec<char>,
+}
+
+/// 事件文本 → 工程里的多行文字 + 每个字的权重。
 ///
 /// `{}` 里是覆盖标签（`\pos`、`\an8`、`\bord2`…），工程没有对应物，整段丢掉；
-/// `\N` / `\n` 是硬换行，`\h` 是不换行空格。别的反斜杠序列（罕见）原样留着。
-fn cue_text(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
+/// 但 `\k` / `\kf` / `\ko` / `\K` 是**逐字节拍**，要读进来。ASS 的一个标签管一整个音节，
+/// 这里按字数摊成每个字一份权重，界面才能逐字调。
+/// `\N` / `\n` 是硬换行（不占节拍），`\h` 是不换行空格，别的反斜杠序列原样留着。
+fn parse_cue_text(raw: &str) -> CueParts {
+    let mut segments: Vec<Syllable> = Vec::new();
+    let mut current = Syllable {
+        centis: 0,
+        chars: Vec::new(),
+    };
+    let mut has_karaoke = false;
     let mut chars = raw.chars().peekable();
     while let Some(ch) = chars.next() {
         match ch {
             '{' => {
+                let mut block = String::new();
                 for next in chars.by_ref() {
                     if next == '}' {
                         break;
                     }
+                    block.push(next);
+                }
+                if let Some(centis) = karaoke_tag(&block) {
+                    if !current.chars.is_empty() {
+                        segments.push(std::mem::replace(
+                            &mut current,
+                            Syllable {
+                                centis,
+                                chars: Vec::new(),
+                            },
+                        ));
+                    } else {
+                        current.centis = centis;
+                    }
+                    has_karaoke = true;
                 }
             }
             '\\' => match chars.next() {
-                Some('N') | Some('n') => out.push('\n'),
-                Some('h') => out.push(' '),
+                Some('N') | Some('n') => current.chars.push('\n'),
+                Some('h') => current.chars.push(' '),
                 Some(other) => {
-                    out.push('\\');
-                    out.push(other);
+                    current.chars.push('\\');
+                    current.chars.push(other);
                 }
                 None => {}
             },
-            ch => out.push(ch),
+            ch => current.chars.push(ch),
         }
     }
-    out.split('\n')
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<&str>>()
-        .join("\n")
+    if !current.chars.is_empty() {
+        segments.push(current);
+    }
+
+    let mut tracked: Vec<(char, Option<u32>)> = Vec::new();
+    for segment in &segments {
+        let count = segment.chars.iter().filter(|ch| **ch != '\n').count();
+        let each = if count == 0 {
+            0
+        } else {
+            segment.centis / count as u32
+        };
+        let extra = if count == 0 {
+            0
+        } else {
+            segment.centis % count as u32
+        };
+        let mut index = 0usize;
+        for ch in &segment.chars {
+            if *ch == '\n' {
+                tracked.push(('\n', None));
+                continue;
+            }
+            // 权重必须为正：脚本写了 `\kf0`（字比厘秒多的边界情况）时按 1 收。
+            let weight = if index + 1 == count {
+                each + extra
+            } else {
+                each
+            }
+            .max(1);
+            tracked.push((*ch, has_karaoke.then_some(weight)));
+            index += 1;
+        }
+    }
+
+    // 逐行 trim，但权重跟着字走：修掉首尾空格时不能把节拍错位。
+    let mut lines: Vec<Vec<(char, Option<u32>)>> = vec![Vec::new()];
+    for pair in tracked {
+        if pair.0 == '\n' {
+            lines.push(Vec::new());
+        } else {
+            lines.last_mut().unwrap().push(pair);
+        }
+    }
+    let mut text = String::new();
+    let mut karaoke = Vec::new();
+    for line in lines {
+        let start = line
+            .iter()
+            .position(|(ch, _)| !ch.is_whitespace())
+            .unwrap_or(line.len());
+        let end = line
+            .iter()
+            .rposition(|(ch, _)| !ch.is_whitespace())
+            .map(|index| index + 1)
+            .unwrap_or(start);
+        let line = &line[start..end];
+        if line.is_empty() {
+            continue;
+        }
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        for (ch, weight) in line {
+            text.push(*ch);
+            if let Some(weight) = weight {
+                karaoke.push(*weight);
+            }
+        }
+    }
+    CueParts {
+        text,
+        karaoke: if has_karaoke { karaoke } else { Vec::new() },
+    }
+}
+
+/// 覆盖标签块里找卡拉 OK 时长（`\kf20` / `\k20` / `\ko20` / `\K20`）。
+/// 同一个块里可能还有 `\an8`、`\pos(…)` 之类，所以逐个反斜杠段扫。
+fn karaoke_tag(block: &str) -> Option<u32> {
+    for part in block.split('\\').skip(1) {
+        for prefix in ["kf", "ko", "k", "K"] {
+            let Some(rest) = part.strip_prefix(prefix) else {
+                continue;
+            };
+            let digits: String = rest.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+            if !digits.is_empty() {
+                return digits.parse().ok();
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]

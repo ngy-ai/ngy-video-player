@@ -74,11 +74,19 @@ BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding"
             .iter()
             .position(|known| *known == &item.style)
             .unwrap_or(0);
+        // 只导工作区把字幕裁断时，逐字节拍没法按比例切（被裁掉的那几个字没有对应
+        // 时间段），退化成普通文字；整条字幕才写 `\kf` 标签。
+        let clipped = item.start < from || item.end > to;
+        let text = if clipped {
+            escape_text(&item.text)
+        } else {
+            dialogue_text(item, ass_centis(end) - ass_centis(start))
+        };
         lines.push(format!(
             "Dialogue: 0,{},{},S{index},,0,0,0,,{}",
             ass_time(start),
             ass_time(end),
-            escape_text(&item.text)
+            text
         ));
     }
     Some(lines.join("\n"))
@@ -102,9 +110,14 @@ fn style_line(index: usize, style: &SubtitleStyle, height: u32) -> String {
     )
 }
 
+/// Tick → 厘秒（向下取整到四舍五入后的 10 毫秒粒度）。
+fn ass_centis(tick: Tick) -> i64 {
+    (tick.micros().max(0) + 5_000) / 10_000
+}
+
 /// ASS 的厘秒时间戳：`H:MM:SS.CC`。四舍五入到 10 毫秒（字幕能感知的最小粒度）。
 fn ass_time(tick: Tick) -> String {
-    let centis = (tick.micros().max(0) + 5_000) / 10_000;
+    let centis = ass_centis(tick);
     let hours = centis / 360_000;
     let minutes = (centis / 6_000) % 60;
     let seconds = (centis / 100) % 60;
@@ -125,4 +138,30 @@ fn escape_text(text: &str) -> String {
         .replace('\n', "\\N")
         .replace('{', "(")
         .replace('}', ")")
+}
+
+/// 逐字字幕写成 `{\kf20}` 这样的卡拉 OK 标签：每个字一段，数字之和严格等于
+/// Dialogue 的厘秒时长。没开逐字的条目走 `escape_text`，输出与旧脚本逐字节一致。
+fn dialogue_text(item: &SubtitleItem, total_centis: i64) -> String {
+    if !item.karaoke_enabled() {
+        return escape_text(&item.text);
+    }
+    let parts = item.karaoke_centis(total_centis.max(0));
+    let mut out = String::new();
+    let mut index = 0usize;
+    for ch in item.text.chars() {
+        if ch == '\n' || ch == '\r' {
+            out.push_str("\\N");
+            continue;
+        }
+        let centis = parts.get(index).copied().unwrap_or(0);
+        index += 1;
+        out.push_str(&format!("{{\\kf{centis}}}"));
+        match ch {
+            '{' => out.push('('),
+            '}' => out.push(')'),
+            ch => out.push(ch),
+        }
+    }
+    out
 }

@@ -9,6 +9,7 @@
 
 mod ass;
 mod ass_import;
+mod karaoke;
 mod text;
 
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,9 @@ use super::{Id, Sequence, Tick, TrackKind};
 
 pub use ass::ass_script;
 pub use ass_import::{StyledCue, parse as parse_ass, read as read_ass};
+pub use karaoke::{
+    DEFAULT_WEIGHT as DEFAULT_KARAOKE_WEIGHT, move_boundary as move_karaoke_boundary,
+};
 pub use text::{Cue as TextCue, Format, format_srt, format_vtt, parse as parse_text, read, write};
 
 #[cfg(test)]
@@ -151,6 +155,9 @@ pub struct SubtitleItem {
     pub end: Tick,
     pub text: String,
     pub style: SubtitleStyle,
+    /// 逐字 / 卡拉 OK：每个字的相对权重（换行不算字）。空数组 = 没开逐字动画。
+    /// 权重的语义与换算都在 `karaoke` 子模块；改文字后由 `normalize` 补齐 / 裁掉。
+    pub karaoke: Vec<u32>,
 }
 
 impl Default for SubtitleItem {
@@ -162,6 +169,7 @@ impl Default for SubtitleItem {
             end: Tick::from_secs(3.0),
             text: "新字幕".to_string(),
             style: SubtitleStyle::default(),
+            karaoke: Vec::new(),
         }
     }
 }
@@ -174,6 +182,7 @@ impl SubtitleItem {
             end,
             text: text.into(),
             style: SubtitleStyle::default(),
+            karaoke: Vec::new(),
         }
     }
 
@@ -197,6 +206,49 @@ impl SubtitleItem {
             self.text = "新字幕".to_string();
         }
         self.style.normalize();
+        self.karaoke = karaoke::fit(&self.karaoke, &self.text);
+    }
+
+    /// 有没有开逐字 / 卡拉 OK 动画。
+    pub fn karaoke_enabled(&self) -> bool {
+        !self.karaoke.is_empty()
+    }
+
+    /// 开关逐字动画：打开时按字数铺一套匀速权重，关掉就清空。
+    pub fn set_karaoke(&mut self, on: bool) {
+        self.karaoke = if on {
+            vec![karaoke::DEFAULT_WEIGHT; karaoke::visible_count(&self.text)]
+        } else {
+            Vec::new()
+        };
+    }
+
+    /// 当前生效的权重：输入框里刚改过文字时，先按那个文字补齐 / 裁掉。
+    pub fn karaoke_weights(&self, text: &str) -> Vec<u32> {
+        karaoke::fit(&self.karaoke, text)
+    }
+
+    /// 每个字的结束偏移（相对字幕起点）。
+    pub fn karaoke_offsets(&self) -> Vec<Tick> {
+        karaoke::offsets(&self.karaoke_weights(&self.text), self.duration())
+    }
+
+    /// 播放头在 `at` 时唱到第几个字；没开逐字或不在区间内都是 `None`。
+    pub fn karaoke_index(&self, at: Tick) -> Option<usize> {
+        if !self.covers(at) {
+            return None;
+        }
+        karaoke::index_at(&self.karaoke_offsets(), at - self.start)
+    }
+
+    /// 交给 ASS 的 `\kf` 数字（厘秒），总和严格等于传入的 Dialogue 时长。
+    pub fn karaoke_centis(&self, total_centis: i64) -> Vec<i64> {
+        karaoke::centis(&self.karaoke_weights(&self.text), total_centis)
+    }
+
+    /// 预览高亮：把文字切「已唱过 / 还没唱」两段。
+    pub fn karaoke_split(&self, sung: usize) -> (String, String) {
+        karaoke::split(&self.text, sung)
     }
 
     /// 时间线上显示的一行：换行压成空格，条目块很矮。

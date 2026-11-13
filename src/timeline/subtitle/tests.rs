@@ -3,6 +3,8 @@
 use super::*;
 use crate::timeline::{Rational, Sequence, TrackKind};
 
+mod karaoke;
+
 fn sequence_with(items: Vec<SubtitleItem>) -> Sequence {
     let mut sequence = Sequence::new("字幕测试", Rational::FPS_30, 1920, 1080);
     let track = sequence.add_track(TrackKind::Subtitle);

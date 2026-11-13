@@ -274,6 +274,7 @@ fn build_sequence(
                 end: item.end,
                 text: item.text.clone(),
                 style: item.style.clone(),
+                karaoke: item.karaoke.clone(),
             })
             .collect();
         placed.push((track_id, ids));

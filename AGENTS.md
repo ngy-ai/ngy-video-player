@@ -82,7 +82,10 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                    拖动的像素换算在 `app/mixer_panel/tests.rs`）、
                  timeline_curve（曲线编辑器：网格与刻度、折线、贝塞尔手柄拖动、
                    框选删点、复制 / 粘贴曲线）、
-                 timeline_subtitle（字幕编辑模态面板、字幕块右键菜单与预览入口）、
+                 timeline_subtitle（字幕编辑模态面板、字幕块右键菜单与预览入口，
+                   `timeline_subtitle/file.rs` 是 SRT / VTT / ASS 导入导出、
+                   `timeline_subtitle/karaoke.rs` 是可拖的逐字节拍条）、
+                 subtitle_guides（工程预览上的动作 / 字幕安全框两圈参考线）、
                  sequence_manager（多序列管理面板：新建 / 切换 / 改名 / 删除与切换复位）、
                  timecode_jump（跳到时间码：Ctrl/⌘+G 打开、打开即聚焦、超长夹到结尾）、
                  controls、menus、bar、
@@ -175,7 +178,9 @@ src/timeline/effect.rs  片段效果栈：去隔行 / 降噪 / 锐化 / 防抖 /
 src/timeline/keyframe.rs  片段关键帧：缩放 / 位置 / 不透明度的曲线、求值与 ffmpeg 表达式
                  （缓动含自定义贝塞尔；导出侧按 8 段折线采样，单测在 `keyframe/tests.rs`）
 src/timeline/color.rs  片段调色：亮度 / 对比度 / 饱和度 / 色温与 3D LUT 的滤镜映射
-src/timeline/subtitle.rs  字幕条目与样式、预览取字；`subtitle/ass.rs` 生成交给 libass 的 ASS
+src/timeline/subtitle.rs  字幕条目、样式与逐字权重、预览取字；`subtitle/` 下 `ass.rs` 写 ASS 脚本
+                 （含 `\kf`）、`ass_import.rs` 读 ASS、`text.rs` 读写 SRT / VTT、
+                 `karaoke.rs` 算逐字节拍边界与厘秒分配
 src/timeline/otio.rs  OpenTimelineIO 交换：export（序列 → JSON）、import（JSON → 中间结构）
 src/timeline/cache.rs  预览渲染缓存：指纹、落点、LRU 清理计划、单片段渲染计划
 src/timeline/cache.rs  预览渲染缓存：指纹、落点、LRU 清理计划、单片段渲染计划

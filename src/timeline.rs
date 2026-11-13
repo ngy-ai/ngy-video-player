@@ -75,7 +75,7 @@ pub use speed::{set_hold, set_remap, set_speed};
 pub use subtitle::{
     COLORS, FONTS, MAX_OUTLINE, MAX_SIZE, MIN_SIZE, POSITIONS, SIZE_STEP, SubtitleItem,
     SubtitlePosition, SubtitleStyle, ass_script as subtitle_ass_script, at as subtitle_at,
-    items as subtitle_items,
+    items as subtitle_items, move_karaoke_boundary,
 };
 pub use targets::resolve_target;
 pub use three_point::{

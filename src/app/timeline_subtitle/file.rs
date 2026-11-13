@@ -133,6 +133,7 @@ impl PlayerApp {
         for cue in cues {
             let mut item = SubtitleItem::new(next.alloc_id(), cue.start, cue.end, cue.text);
             item.style = cue.style;
+            item.karaoke = cue.karaoke;
             match crate::timeline::apply(&next, &EditOp::AddSubtitle { track, item }) {
                 Ok(applied) => next = applied,
                 // 一条轨道上不放重叠的两条：ASS 里同刻双人对话很常见，跳过并计数，
@@ -282,6 +283,7 @@ fn load_cues(path: &Path) -> std::io::Result<Vec<StyledCue>> {
             end: cue.end,
             text: cue.text,
             style: SubtitleStyle::default(),
+            karaoke: Vec::new(),
         })
         .collect())
 }
