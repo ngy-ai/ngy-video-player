@@ -140,6 +140,8 @@ src/timeline/time.rs  Tick（i64 微秒）与 Rational 帧率：全项目唯一�
 src/timeline/spec.rs  序列规格：分辨率预设、帧率表、奇数边校验、按素材推导
 src/timeline/timecode.rs  `HH:MM:SS:FF` 的显示与解析：整帧 / 丢帧（29.97、59.94）、省略短写
 src/timeline/media.rs  素材元信息、文件指纹与过期判断；不含 ffmpeg 调用
+src/timeline/remap.rs  速度曲线（时间重映射）：素材位置做自变量、∫ds/rate 求时长与反解
+                 （导出 / 预览 / 界面尚未接入，模型先行；与 `timeline/speed.rs` 的改档位不是一回事）
 src/timeline/mask.rs  片段遮罩：相对坐标的形状、羽化与位移换算、退化判定（导出尚未接入）
 src/timeline/mixer.rs  混音：三层音量（片段 → 自动化 → 推子）定序、等功率声像、
                  自动化到 ffmpeg `volume` 表达式；单测在 `mixer/tests.rs`
