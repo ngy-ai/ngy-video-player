@@ -92,6 +92,9 @@ pub struct ClipItem {
     /// 顺序见 `timeline::mixer`。
     #[serde(default = "crate::timeline::mixer::unity_gain")]
     pub gain: f32,
+    /// 遮罩：矩形 / 椭圆 / 自由路径，相对坐标（见 `timeline::mask`）。
+    #[serde(default)]
+    pub mask: crate::timeline::Mask,
 }
 
 impl ClipItem {
@@ -115,6 +118,7 @@ impl ClipItem {
             keys: crate::timeline::Keyframes::default(),
             color: crate::timeline::ColorGrade::default(),
             gain: 1.0,
+            mask: crate::timeline::Mask::default(),
         }
     }
 

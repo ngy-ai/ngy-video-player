@@ -13,6 +13,7 @@ mod color;
 mod effect;
 mod export;
 mod keyframe;
+pub mod mask;
 mod media;
 pub mod mixer;
 mod model;
@@ -53,6 +54,7 @@ pub use keyframe::{
     Animation, EASING_PRESETS, Interpolation, Keyframe, Keyframes, Property,
     fade_filters as keyframe_fades, motion_filter as keyframe_motion,
 };
+pub use mask::{Mask, MaskShape};
 pub use media::{AssetState, ColorTags, MediaInfo, MediaStamp};
 pub use mixer::GainPoint;
 pub use model::{
