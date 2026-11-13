@@ -14,6 +14,9 @@ use crate::timeline::{
 };
 use gpui_kit::component::input::{Input, InputState};
 
+/// SRT / WebVTT 的导入与导出（面板之外的两个入口，菜单里的「导入 / 导出字幕文件…」）。
+mod file;
+
 /// 字幕面板的状态。`track` 为 `None` 表示「确定时自己挑 / 建一条字幕轨」。
 pub(super) struct SubtitleDialog {
     track: Option<Id>,

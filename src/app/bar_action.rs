@@ -67,6 +67,10 @@ pub(super) enum BarAction {
     AddSubtitleTrack,
     /// 在播放头处编辑一条新字幕；没有字幕轨时确定时自动补一条。
     AddSubtitle,
+    /// 从 SRT / WebVTT 导入字幕，整批并成一步撤销。
+    ImportSubtitles,
+    /// 把序列上的字幕写成 SRT / WebVTT。
+    ExportSubtitles,
     LoadSubtitle,
     Previous,
     Next,

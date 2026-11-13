@@ -8,12 +8,14 @@
 //! 界面上的起止点、区间导出的裁切都用整数运算，不会出现「字幕比画面早一帧」。
 
 mod ass;
+mod text;
 
 use serde::{Deserialize, Serialize};
 
 use super::{Id, Sequence, Tick, TrackKind};
 
 pub use ass::ass_script;
+pub use text::{Cue as TextCue, Format, format_srt, format_vtt, parse as parse_text, read, write};
 
 #[cfg(test)]
 mod tests;

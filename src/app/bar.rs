@@ -370,6 +370,8 @@ impl PlayerApp {
                     .unwrap_or(crate::timeline::Tick::ZERO);
                 self.open_subtitle_dialog(None, None, start, window, cx);
             }
+            BarAction::ImportSubtitles => self.import_subtitle_files(window, cx),
+            BarAction::ExportSubtitles => self.export_subtitle_file(window, cx),
             BarAction::LoadSubtitle => self.pick_subtitle(window, cx),
             BarAction::Previous => self.previous_file(cx),
             BarAction::Next => self.next_file(cx),

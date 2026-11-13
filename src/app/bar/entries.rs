@@ -232,6 +232,15 @@ impl PlayerApp {
             "在播放头加字幕…",
             AddSubtitle,
         )));
+        // 导入导出只在工程模式下有意义：没有序列就没有可落的轨道。
+        items.push(BarItem::Entry(BarEntry::new(
+            "导入字幕文件…",
+            ImportSubtitles,
+        )));
+        items.push(BarItem::Entry(BarEntry::new(
+            "导出字幕文件…",
+            ExportSubtitles,
+        )));
     }
 
     /// 剪辑模式「预览」：只留对工程预览有意义的动作。播放列表换集、循环、A-B

@@ -27,7 +27,7 @@ pub mod query;
 pub mod remap;
 mod spec;
 pub mod speed;
-mod subtitle;
+pub mod subtitle;
 mod targets;
 mod three_point;
 mod time;
