@@ -21,6 +21,9 @@ const TAIL_LINES: usize = 12;
 /// 同一进程里排着几条导出时，临时 ASS 文件名也要各不相同。
 static SUBTITLE_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// 遮罩 alpha 图（PGM）的临时文件序号，理由同 `SUBTITLE_SEQ`。
+static MASK_SEQ: AtomicU64 = AtomicU64::new(0);
+
 /// 导出任务回报。
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExportEvent {
@@ -40,11 +43,15 @@ pub struct ExportTask {
 impl ExportTask {
     /// 启动 ffmpeg。`total` 是序列时长，用来把 `out_time_us` 换算成比例。
     pub fn start(
-        plan: ExportPlan,
+        mut plan: ExportPlan,
         output: PathBuf,
         total: Tick,
         sender: UnboundedSender<ExportEvent>,
     ) -> anyhow::Result<Self> {
+        // 遮罩图与字幕文本同理：字节在计划里，文件到任务启动时才写。
+        // 写完的路径替换掉计划里预留的那些占位输入，滤镜图里的 `[N:v]` 才对得上。
+        let mask_paths = write_masks(&plan)?;
+        plan.resolve_masks(&mask_paths);
         // 字幕文本只在计划里，真正落盘要等任务启动：队列里排着的几条导出不能
         // 抢同一个临时文件。写完的路径同时决定 `-i` 与 `subtitles=` 滤镜参数。
         let subtitle = match plan.subtitle.as_ref() {
@@ -57,6 +64,11 @@ impl ExportTask {
         };
         let args = subtitle_args(&plan, &subtitle);
         let subtitle_path = subtitle.as_ref().map(|(path, _, _)| path.clone());
+        let cleanup: Vec<PathBuf> = mask_paths
+            .iter()
+            .cloned()
+            .chain(subtitle_path.clone())
+            .collect();
 
         let executable = ffmpeg::executable()?;
         let mut command = Command::new(executable);
@@ -78,7 +90,7 @@ impl ExportTask {
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
-                if let Some(path) = subtitle_path {
+                for path in &cleanup {
                     let _ = std::fs::remove_file(path);
                 }
                 return Err(error.into());
@@ -112,8 +124,8 @@ impl ExportTask {
                     None => ExportEvent::Failed("ffmpeg 进程已经结束".to_string()),
                 }
             };
-            // 成败都把临时 ASS 收掉：它只对这一次 ffmpeg 进程有意义。
-            if let Some(path) = subtitle_path {
+            // 成败都把临时 ASS 与遮罩图收掉：它们只对这一次 ffmpeg 进程有意义。
+            for path in &cleanup {
                 let _ = std::fs::remove_file(path);
             }
             let _ = sender.unbounded_send(outcome);
@@ -187,6 +199,21 @@ fn subtitle_args(
         Some((path, mode, codec)) => plan.args_with_subtitle(path, *mode, codec),
         None => plan.args(),
     }
+}
+
+/// 把计划里的遮罩 alpha 图写成 PGM 临时文件。
+///
+/// 与空输入位一一对应：调用方随后用 [`ExportPlan::resolve_masks`] 把它们塞回
+/// `inputs` 的占位位置。没有遮罩时返回空表，命令里也不会多出 `-i`。
+fn write_masks(plan: &ExportPlan) -> std::io::Result<Vec<PathBuf>> {
+    let mut paths = Vec::with_capacity(plan.masks.len());
+    for attachment in &plan.masks {
+        let seq = MASK_SEQ.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("ngy-mask-{}-{seq}.pgm", std::process::id()));
+        std::fs::write(&path, &attachment.pgm)?;
+        paths.push(path);
+    }
+    Ok(paths)
 }
 
 /// ASS 文本落到临时文件。`SUBTITLE_SEQ` 保证同进程并发导出也不会互相覆盖。

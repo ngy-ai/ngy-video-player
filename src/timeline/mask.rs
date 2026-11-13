@@ -204,6 +204,129 @@ impl Mask {
             _ => true,
         }
     }
+
+    /// 某个像素的覆盖率（0 = 全透明，1 = 全不透明）。
+    ///
+    /// 羽化按「到边界的距离」算：边界上正好 0.5，往里走 `feather/2` 个像素到 1，
+    /// 往外走同样距离到 0。这样羽化半径就是「从全透明到全不透明」的宽度，
+    /// 与界面上的滑块对得上。`feather` 是相对短边的比例，这里换算成像素。
+    pub fn alpha_at(&self, px: f32, py: f32, width: u32, height: u32) -> f32 {
+        let (dx, dy) = self.offset_pixels(width, height);
+        let x = px - dx as f32;
+        let y = py - dy as f32;
+        let shape = self.shape.normalized();
+        // 有符号距离：正数表示在形状里面，单位是像素。
+        let distance = match &shape {
+            MaskShape::Rect {
+                x: left,
+                y: top,
+                width: w,
+                height: h,
+            } => {
+                let (x0, y0) = (left * width as f32, top * height as f32);
+                let (x1, y1) = (x0 + w * width as f32, y0 + h * height as f32);
+                (x - x0).min(x1 - x).min(y - y0).min(y1 - y)
+            }
+            MaskShape::Ellipse {
+                x: left,
+                y: top,
+                width: w,
+                height: h,
+            } => {
+                let (cx, cy) = (
+                    (left + w * 0.5) * width as f32,
+                    (top + h * 0.5) * height as f32,
+                );
+                let (rx, ry) = (
+                    (w * width as f32 * 0.5).max(0.5),
+                    (h * height as f32 * 0.5).max(0.5),
+                );
+                let (u, v) = ((x - cx) / rx, (y - cy) / ry);
+                // 归一化距离乘以短半轴，回到像素量级；椭圆边上正好 0。
+                (1.0 - (u * u + v * v).sqrt()) * rx.min(ry)
+            }
+            MaskShape::Path(points) => {
+                // 退化路径（不够三点）没有内外之分：整幅透明，导出侧也会跳过它。
+                if points.len() < 3 {
+                    return 0.0;
+                }
+                let scaled: Vec<(f32, f32)> = points
+                    .iter()
+                    .map(|(x, y)| (x * width as f32, y * height as f32))
+                    .collect();
+                let inside = point_in_polygon(x, y, &scaled);
+                let mut nearest = f32::MAX;
+                for (index, (ax, ay)) in scaled.iter().enumerate() {
+                    let (bx, by) = scaled[(index + 1) % scaled.len()];
+                    nearest = nearest.min(distance_to_segment(x, y, *ax, *ay, bx, by));
+                }
+                if inside { nearest } else { -nearest }
+            }
+        };
+
+        let feather = self.normalized_feather() * width.min(height) as f32;
+        if feather <= 0.5 {
+            return if distance >= 0.0 { 1.0 } else { 0.0 };
+        }
+        (distance / feather + 0.5).clamp(0.0, 1.0)
+    }
+
+    /// alpha 图，一行像素接一行，8 位灰度（255 = 不透明）。
+    ///
+    /// 导出侧把它写成 PGM 再 `alphamerge`：与其在滤镜表达式里凑出多边形，
+    /// 不如一次算好这张图——路径遮罩的表达式根本写不出来。
+    pub fn alpha_plane(&self, width: u32, height: u32) -> Vec<u8> {
+        let mut plane = Vec::with_capacity((width * height) as usize);
+        for row in 0..height {
+            for column in 0..width {
+                // 取像素中心：边缘那一列的覆盖率才算得准。
+                let alpha = self.alpha_at(column as f32 + 0.5, row as f32 + 0.5, width, height);
+                plane.push((alpha * 255.0).round() as u8);
+            }
+        }
+        plane
+    }
+
+    /// 上面那张图的 PGM（P5 二进制）字节。ffmpeg 直接认这个格式，解出来是灰度。
+    pub fn pgm(&self, width: u32, height: u32) -> Vec<u8> {
+        let plane = self.alpha_plane(width, height);
+        let header = format!("P5\n{width} {height}\n255\n");
+        let mut bytes = Vec::with_capacity(header.len() + plane.len());
+        bytes.extend_from_slice(header.as_bytes());
+        bytes.extend_from_slice(&plane);
+        bytes
+    }
+}
+
+/// 射线法判断点是否在多边形内（不闭合的多边形按闭合处理）。
+fn point_in_polygon(x: f32, y: f32, points: &[(f32, f32)]) -> bool {
+    let mut inside = false;
+    let count = points.len();
+    if count < 3 {
+        return false;
+    }
+    let mut j = count - 1;
+    for i in 0..count {
+        let (xi, yi) = points[i];
+        let (xj, yj) = points[j];
+        if (yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+/// 点到线段的距离（像素）。
+fn distance_to_segment(x: f32, y: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
+    let (dx, dy) = (bx - ax, by - ay);
+    let length = dx * dx + dy * dy;
+    if length <= f32::EPSILON {
+        return ((x - ax).powi(2) + (y - ay).powi(2)).sqrt();
+    }
+    let t = (((x - ax) * dx + (y - ay) * dy) / length).clamp(0.0, 1.0);
+    let (px, py) = (ax + t * dx, ay + t * dy);
+    ((x - px).powi(2) + (y - py).powi(2)).sqrt()
 }
 
 #[cfg(test)]

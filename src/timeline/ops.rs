@@ -20,12 +20,12 @@ mod remove;
 mod subtitle;
 
 use crate::timeline::{
-    AssetId, ClipItem, ColorGrade, Id, Sequence, SpeedCurve, SubtitleItem, Tick,
+    AssetId, ClipItem, ColorGrade, Id, Mask, Sequence, SpeedCurve, SubtitleItem, Tick,
 };
 use edges::{
     cut_at, ripple_trim_end, ripple_trim_start, roll, slide, slip, split, trim_end, trim_start,
 };
-use params::{set_color, set_hold, set_remap, set_speed};
+use params::{set_color, set_hold, set_mask, set_remap, set_speed};
 use placement::{clear_range, insert, insert_at, overwrite, shift_open};
 use remove::{remove, ripple_delete};
 use std::collections::HashSet;
@@ -118,6 +118,9 @@ pub enum EditOp {
     /// 改调色。整套参数一起换：面板每次改动都是一份完整的 `ColorGrade`，
     /// 单个字段的增删在界面层算好，落一步撤销。
     SetColor { clip: Id, color: ColorGrade },
+    /// 换整个遮罩（形状 / 羽化 / 位移 / 开关）。与调色同一个模式：面板交一整份，
+    /// 形状与位移在 `ops::params::set_mask` 里夹回画面内。
+    SetMask { clip: Id, mask: Mask },
     /// 把片段内 `from` 处的整组关键帧挪到 `to`（都是片段内相对时间）。
     /// 越界不报错，夹到片段两端；`from` 处没有点时序列原样。
     MoveKeyframe { clip: Id, from: Tick, to: Tick },
@@ -222,6 +225,7 @@ pub fn apply(sequence: &Sequence, op: &EditOp) -> Result<Sequence, EditError> {
         EditOp::SetRemap { clip, curve } => set_remap(&mut next, *clip, curve)?,
         EditOp::SetHold { clip, hold } => set_hold(&mut next, *clip, *hold)?,
         EditOp::SetColor { clip, color } => set_color(&mut next, *clip, color)?,
+        EditOp::SetMask { clip, mask } => set_mask(&mut next, *clip, mask)?,
         EditOp::MoveKeyframe { clip, from, to } => move_keyframe(&mut next, *clip, *from, *to)?,
         EditOp::AddSubtitle { track, item } => add_subtitle(&mut next, *track, item)?,
         EditOp::SetSubtitle { id, item } => set_subtitle(&mut next, *id, item)?,

@@ -76,6 +76,7 @@ src/app/         子模块（同一 PlayerApp 的多个 impl 块）：
                  timeline_keys（片段关键帧面板：在播放头处记录与删除）、
                  timeline_speed（变速 / 定格面板：倍率档位与速度曲线，
                    `timeline_speed/curve.rs` 是曲线画布、可拖的倍率点与坐标换算）、
+                 timeline_mask（片段遮罩面板：开关、矩形 / 椭圆、大小、羽化、位移）、
                  timeline_curve（曲线编辑器：网格与刻度、折线、贝塞尔手柄拖动、
                    框选删点、复制 / 粘贴曲线）、
                  timeline_subtitle（字幕编辑模态面板、字幕块右键菜单与预览入口）、
@@ -145,7 +146,8 @@ src/timeline/media.rs  素材元信息、文件指纹与过期判断；不含 ff
 src/timeline/remap.rs  速度曲线（时间重映射）：素材位置做自变量、∫ds/rate 求时长与反解，
                  切片（`slice`，切开与修剪用）；`remap/ffmpeg.rs` 是翻成 ffmpeg 参数的那一侧
                  （`setpts` 表达式 + 音频分段 atempo；与 `timeline/speed.rs` 的改档位不是一回事）
-src/timeline/mask.rs  片段遮罩：相对坐标的形状、羽化与位移换算、退化判定（导出尚未接入）
+src/timeline/mask.rs  片段遮罩：相对坐标的形状、羽化与位移换算、退化判定，以及导出用的
+                 alpha 图（`alpha_at` / `alpha_plane` / `pgm`：有符号距离 + 羽化过渡）
 src/timeline/mixer.rs  混音：三层音量（片段 → 自动化 → 推子）定序、等功率声像、
                  自动化到 ffmpeg `volume` 表达式；单测在 `mixer/tests.rs`
 src/timeline/query.rs  素材搜索与智能合集：条件语法（七种字段、否定、并且）、
@@ -174,8 +176,11 @@ src/timeline/subtitle.rs  字幕条目与样式、预览取字；`subtitle/ass.r
 src/timeline/otio.rs  OpenTimelineIO 交换：export（序列 → JSON）、import（JSON → 中间结构）
 src/timeline/cache.rs  预览渲染缓存：指纹、落点、LRU 清理计划、单片段渲染计划
 src/timeline/cache.rs  预览渲染缓存：指纹、落点、LRU 清理计划、单片段渲染计划
-src/timeline/export.rs  序列导出：`ExportPlan`、`ExportSettings`、字幕附件与 `render-presets.json` 预设
-src/export/task.rs  导出进程：临时 ASS 落盘 / 清理、软字幕按容器选编码器、进度与取消
+src/timeline/export.rs  序列导出：`ExportPlan`、`ExportSettings`、字幕与遮罩附件、`render-presets.json` 预设
+src/timeline/export/plan.rs  计划的组装：输入表、按范围切一刀、把几条流接起来（含黑底 + overlay）
+src/timeline/export/plan/video.rs  单条视频流的滤镜链：效果 / 调色 / 关键帧 / 遮罩（alphamerge）/ xfade
+src/timeline/export/plan/audio.rs  单条音频流的滤镜链：速度曲线按折点分段 atempo、段间 concat
+src/export/task.rs  导出进程：临时 ASS 与遮罩 PGM 落盘 / 清理、软字幕按容器选编码器、进度与取消
 src/timeline/undo.rs    撤销 / 重做：状态快照栈，一次操作一步，上限 200 步
 src/timeline/autosave.rs  自动保存（30 秒无操作）与 `.autosave` 崩溃恢复
 src/timeline/view.rs    时间线视图状态：缩放（1 像素 = 1 帧 ~ 10 秒）、滚动、标尺换挡
@@ -236,6 +241,8 @@ src/timeline/view.rs    时间线视图状态：缩放（1 像素 = 1 帧 ~ 10 �
     顶层文件名保持与源码模块同名（`playlist.rs` 对应 `src/playlist.rs`）。
     注意 `tests/foo.rs` 是 crate root，`mod` 默认只在 `tests/` 同层找文件，
     必须写成 `#[path = "foo/<主题>.rs"] mod <主题>;`（见 `tests/playlist.rs`）。
+    需要本机 ffmpeg 的端到端用例就近放在对应主题文件里、标 `#[ignore]`
+    （如 `tests/timeline_export/mask.rs`、`tests/timeline_export/remap.rs`）。
   - 单元测试就近放在源码文件内的 `#[cfg(test)] mod tests`；超过约 150 行就移到
     同目录的 `tests.rs`（`src/foo/tests.rs`），并在 `foo.rs` 里声明
     `#[cfg(test)] mod tests;`。

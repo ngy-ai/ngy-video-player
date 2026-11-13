@@ -4,7 +4,7 @@
 //! `timeline::set_speed` / `timeline::set_remap` / `timeline::set_hold` 里。值没变时
 //! 序列与原样逐字段相等，界面据此不落撤销。
 
-use super::{ColorGrade, EditError, Id, Sequence, SpeedCurve, Tick, locate};
+use super::{ColorGrade, EditError, Id, Mask, Sequence, SpeedCurve, Tick, locate};
 
 /// 改倍率。夹取与波纹让位都在 [`crate::timeline::set_speed`] 里，这里只做前置校验。
 ///
@@ -57,5 +57,23 @@ pub(super) fn set_color(
 ) -> Result<(), EditError> {
     let (track, index) = locate(sequence, clip_id)?;
     sequence.tracks[track].clips[index].color = color.clone();
+    Ok(())
+}
+
+/// 改遮罩。形状与位移先夹回画面内：工程是明文 JSON，界面也可能给出越界值。
+pub(super) fn set_mask(sequence: &mut Sequence, clip_id: Id, mask: &Mask) -> Result<(), EditError> {
+    let (track, index) = locate(sequence, clip_id)?;
+    let mut mask = mask.clone();
+    mask.shape = mask.shape.normalized();
+    mask.feather = mask.normalized_feather();
+    let clamp = |value: f32| {
+        if value.is_finite() {
+            value.clamp(-1.0, 1.0)
+        } else {
+            0.0
+        }
+    };
+    mask.offset = (clamp(mask.offset.0), clamp(mask.offset.1));
+    sequence.tracks[track].clips[index].mask = mask;
     Ok(())
 }

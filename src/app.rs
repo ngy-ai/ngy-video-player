@@ -163,6 +163,7 @@ mod timeline_curve;
 mod timeline_effects;
 mod timeline_header;
 mod timeline_keys;
+mod timeline_mask;
 mod timeline_menu;
 mod timeline_preview;
 mod timeline_speed;

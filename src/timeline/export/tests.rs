@@ -14,7 +14,9 @@ mod audio;
 mod color;
 #[path = "tests/range.rs"]
 mod range;
-// 速度曲线（时间重映射）在计划里的形状见 `tests/remap.rs`。
+// 速度曲线（时间重映射）在计划里的形状见 `tests/remap.rs`；遮罩见 `tests/mask.rs`。
+#[path = "tests/mask.rs"]
+mod mask;
 #[path = "tests/remap.rs"]
 mod remap;
 #[path = "tests/sequences.rs"]

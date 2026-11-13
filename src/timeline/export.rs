@@ -11,6 +11,17 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 pub use plan::{plan_sequence, plan_sequence_id, plan_sequence_range, plan_sequence_with};
+
+impl ExportPlan {
+    /// 把遮罩占位输入换成真实路径（任务层写好 PGM 之后调用）。
+    pub fn resolve_masks(&mut self, paths: &[PathBuf]) {
+        for (attachment, path) in self.masks.iter().zip(paths) {
+            if let Some(slot) = self.inputs.get_mut(attachment.input) {
+                *slot = path.clone();
+            }
+        }
+    }
+}
 pub use presets::{PRESET_NAME_CHARS, RenderPreset, RenderPresetStore, normalize_name};
 pub use settings::{EncodeSpeed, ExportSettings, Quality, SubtitleMode, VideoCodec};
 
@@ -24,10 +35,20 @@ pub struct SubtitleAttachment {
     pub mode: SubtitleMode,
 }
 
+/// 导出计划里附带的一张遮罩 alpha 图。
+///
+/// 与字幕同一个道理：这里只带字节不带路径。`input` 是它在 [`ExportPlan::inputs`]
+/// 里的位置（生成计划时占好位），任务启动时才把 PGM 写到临时目录并替换那个路径。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaskAttachment {
+    pub input: usize,
+    pub pgm: Vec<u8>,
+}
+
 /// 一条导出计划：喂给 ffmpeg 的全部素材与滤镜。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExportPlan {
-    /// 参与编码的素材文件，按首次出现顺序去重。
+    /// 参与编码的素材文件，按首次出现顺序去重。遮罩图也在这里（见 `masks`）。
     pub inputs: Vec<PathBuf>,
     /// `-filter_complex` 的内容。
     pub filter: String,
@@ -39,6 +60,8 @@ pub struct ExportPlan {
     pub output_args: Vec<String>,
     /// 序列上的字幕条目。没有字幕时是 `None`，命令里也不多一个输入。
     pub subtitle: Option<SubtitleAttachment>,
+    /// 带遮罩的片段：片段 id → 那张 alpha 图落在哪个输入位上。没有遮罩时是空的。
+    pub masks: Vec<MaskAttachment>,
 }
 
 impl ExportPlan {

@@ -7,20 +7,31 @@
 //! 视频自下而上 `overlay`，音频全部丢进 `amix`。等长是硬要求——`overlay` 默认
 //! 按最短的一条截断，轨道没铺满序列的话，成片会莫名少掉尾巴。
 
+//! 本文件只做「组装」：拼输入表、按范围切一刀、把几条流接起来。
+//! 单条流的滤镜链分别在 `plan/video.rs`（含遮罩的 alphamerge）与 `plan/audio.rs`
+//! （含速度曲线的分段 atempo）里。
+
+mod audio;
+mod video;
+
 use std::path::PathBuf;
 
+use audio::audio_stream;
+use video::video_stream;
+
+use super::MaskAttachment;
 use crate::timeline::{AssetId, Id, Project, Sequence, Tick, Track};
 
 use super::{ExportError, ExportPlan, ExportSettings, SubtitleAttachment};
 
 /// 音频统一到 48kHz 立体声。导出链里混采样率是最常见的「声音变调」来源。
-const AUDIO_RATE: u32 = 48_000;
+pub(super) const AUDIO_RATE: u32 = 48_000;
 
 /// HDR → SDR 的转换链：线性化成浮点、换到 bt709 原色、再按 bt709 编码。
 ///
 /// `tonemap=hable` 与预览侧下发的 `tone-mapping=hable` 是同一条曲线（ADR 0007）：
 /// 两边曲线不一致的话，预览里调好的曝光导出来会变一个样。
-const HDR_TO_SDR: &str = "zscale=t=linear:npl=100,format=gbrpf32le,\
+pub(super) const HDR_TO_SDR: &str = "zscale=t=linear:npl=100,format=gbrpf32le,\
 zscale=p=bt709,tonemap=hable:desat=0,\
 zscale=t=bt709:m=bt709:r=tv,format=yuv420p";
 
@@ -108,6 +119,7 @@ fn build_plan(
         None => None,
     };
     let mut inputs = Vec::new();
+    let mut masks: Vec<MaskAttachment> = Vec::new();
     let mut video_layers = Vec::new();
     for track in &video_tracks {
         video_layers.push(video_stream(
@@ -116,6 +128,7 @@ fn build_plan(
             sequence,
             duration,
             &mut inputs,
+            &mut masks,
         )?);
     }
     let mut audio_layers = Vec::new();
@@ -128,9 +141,13 @@ fn build_plan(
 
     // 视频：一层直接出 `[outv]`，多层自下而上叠。
     let layer_count = video_layers.len();
+    // 有没有遮罩：有就得从**黑底**开始叠。遮罩把画面切成透明的地方要露出下面的
+    // 轨道；最底下那条轨没有「下面」，必须自己垫一层黑，否则透明区会留着原画面的
+    // 颜色（`alphamerge` 只改 alpha，不改 RGB）。
+    let masked = video_layers.iter().any(|layer| layer.masked);
     let mut layer_labels = Vec::new();
     for (index, layer) in video_layers.into_iter().enumerate() {
-        let label = if layer_count == 1 {
+        let label = if layer_count == 1 && !masked {
             "outv".to_string()
         } else {
             format!("layerv{index}")
@@ -141,10 +158,29 @@ fn build_plan(
         parts.push(concat);
         layer_labels.push(format!("[{label}]"));
     }
-    if layer_count > 1 {
+    if layer_count > 1 || masked {
         // 最底层是列表里的最后一条，往上依次 overlay，最后一次落到 `[outv]`。
-        let mut current = layer_labels.last().cloned().expect("至少两层");
-        for index in (0..layer_labels.len() - 1).rev() {
+        // 有遮罩时改成从一块黑底开始叠：遮罩切出来的透明区要落到黑上，
+        // 而不是露出原画面的颜色（`alphamerge` 只改 alpha，不改 RGB）。
+        let mut current = if masked {
+            parts.push(format!(
+                "color=c=black:s={}x{}:r={}/{}:d={:.6}[maskbase]",
+                sequence.width,
+                sequence.height,
+                sequence.fps.num(),
+                sequence.fps.den(),
+                duration.secs()
+            ));
+            "[maskbase]".to_string()
+        } else {
+            layer_labels.last().cloned().expect("至少两层")
+        };
+        let top = if masked {
+            layer_labels.len()
+        } else {
+            layer_labels.len() - 1
+        };
+        for index in (0..top).rev() {
             let out = if index == 0 {
                 "[outv]".to_string()
             } else {
@@ -215,6 +251,7 @@ fn build_plan(
         audio_label,
         output_args,
         subtitle,
+        masks,
     })
 }
 
@@ -222,6 +259,8 @@ fn build_plan(
 struct Stream {
     chains: Vec<String>,
     segments: Vec<String>,
+    /// 这条轨上有没有遮罩：有的话整条轨是 yuva420p，叠之前要先垫黑底。
+    masked: bool,
 }
 
 impl Stream {
@@ -229,6 +268,7 @@ impl Stream {
         Self {
             chains: Vec::new(),
             segments: Vec::new(),
+            masked: false,
         }
     }
 
@@ -257,387 +297,6 @@ impl Stream {
             self.segments.len()
         ))
     }
-}
-
-/// 一道要拼进 concat 的画面：一条或几条滤镜链，加上最终输出标签。
-struct Piece {
-    /// 按顺序发出去的链，**每条链尾都带着自己的输出标签**。合并了转场时，
-    /// 前面几段的链也在这里面；最后一条链（xfade）的标签就是 [`Piece::label`]。
-    chains: Vec<String>,
-    /// 最终输出标签，进 concat 的就是它。
-    label: String,
-    start: Tick,
-    end: Tick,
-    /// 空档为 `None`：转场只认片段，不认黑场。
-    clip: Option<crate::timeline::Id>,
-}
-
-impl Piece {
-    fn len(&self) -> Tick {
-        self.end - self.start
-    }
-}
-
-fn video_stream(
-    project: &Project,
-    track: &Track,
-    sequence: &Sequence,
-    duration: Tick,
-    inputs: &mut Vec<PathBuf>,
-) -> Result<Stream, ExportError> {
-    let mut cursor = Tick::ZERO;
-    let mut gap_index = 0;
-    // `color` 的尺寸必须写成 `WxH`：滤镜参数用 `:` 分隔，`W:H` 会被当成两个参数。
-    // `scale` / `pad` 反过来只能用 `W:H`（它们是位置参数 w/h/x/y）。
-    let color_size = format!("{}x{}", sequence.width, sequence.height);
-    let dims = format!("{}:{}", sequence.width, sequence.height);
-    let fps = format!("{}/{}", sequence.fps.num(), sequence.fps.den());
-    let mut pieces: Vec<Piece> = Vec::new();
-
-    for clip in &track.clips {
-        // 空档补黑：不补的话 concat 会把后面的画面整体提前。
-        if clip.start > cursor {
-            // 带上轨道 id：多条轨都有空档时，各轨的 gap_index 都从 0 开始，
-            // 不带轨道会产出两个同名 `[bgv0]`，ffmpeg 会拒绝重复的标签。
-            let label = format!("[bgv{}_{gap_index}]", track.id.raw());
-            pieces.push(Piece {
-                chains: vec![format!(
-                    "color=c=black:s={color_size}:r={fps}:d={:.6}{label}",
-                    (clip.start - cursor).secs()
-                )],
-                label,
-                start: cursor,
-                end: clip.start,
-                clip: None,
-            });
-            gap_index += 1;
-        }
-
-        let index = input_index(inputs, project, clip.asset_id)?;
-
-        // 交叉溶解要多取一段前一段的素材（往后延）和本片段之前的素材（往前挪）。
-        // 前一段没有余量就退化成硬切——宁可切得生硬，也不要 ffmpeg 因缺帧把时长算错。
-        let mut head = Tick::ZERO;
-        let mut kind = None;
-        // 变速片段不接转场：`xfade` 的时长按时间线算，而多取的素材按素材时间算，
-        // 两头一换算就容易错帧。宁可退化成硬切，也不要成片时长对不上。速度曲线的
-        // 情况更糟：多取的那一段在素材时间上的落点得反解曲线，索性一起排除。
-        let rate = clip.rate();
-        let steady = (rate - 1.0).abs() < 1e-6 && !clip.has_remap();
-        if let Some(previous) = pieces.last()
-            && previous.end == clip.start
-            && steady
-            && let Some(previous_id) = previous.clip
-            && track
-                .clip(previous_id)
-                .is_some_and(|before| !before.has_remap())
-            && let Some(transition) = track
-                .transitions
-                .iter()
-                .find(|transition| transition.before == previous_id && transition.after == clip.id)
-        {
-            let usable = transition.duration.min(previous.len()).min(clip.source_in);
-            if usable > Tick::ZERO {
-                head = usable;
-                kind = Some(transition.kind);
-            }
-        }
-
-        // HDR 素材先转成 SDR 再缩放：成片的色彩空间固定是 bt709（见 ADR 0007），
-        // 混进一段没做 tonemap 的 HLG 画面，整条片子都会发灰。
-        let tonemap = if asset_is_hdr(project, clip.asset_id) {
-            format!(",{HDR_TO_SDR}")
-        } else {
-            String::new()
-        };
-        // 视频必须用 `trim` + `setpts`：`atrim` 是音频滤镜，它的输出 pad 是 audio，
-        // 接到 `setpts` 的 video 输入上会让整张 filter_complex 图连不起来。
-        // 效果链排在缩放补边之后、转场之前：构图先定下来，降噪 / 锐化 / 水印
-        // 都作用在成片尺寸上，字号与锐化强度才不会随素材分辨率乱跳。
-        let effects = crate::timeline::effect_chain(sequence, clip.id);
-        // 关键帧排在最前（缩放 / 位置 → 不透明度 → 效果）：先把画面构图推到该有的
-        // 样子，再压噪点、再盖水印，水印不会跟着推近一起放大。
-        let motion = match crate::timeline::keyframe_motion(&clip.keys, sequence) {
-            filter if filter.is_empty() => String::new(),
-            filter => format!(",{filter}"),
-        };
-        // 调色排在构图之后、淡入淡出之前：先定画面尺寸与位移，再统一色彩，
-        // 最后才做不透明度。水印在 `effects` 里，排在后面，不会被调色一起染上。
-        let color = match clip.color.filter_chain(project.base_dir()) {
-            chain if chain.is_empty() => String::new(),
-            chain => format!(",{chain}"),
-        };
-        let fades = crate::timeline::keyframe_fades(&clip.keys, clip.duration())
-            .iter()
-            .map(|filter| format!(",{filter}"))
-            .collect::<String>();
-        let label = format!("[v{}]", clip.id.raw());
-        // 输出标签必须拼在链尾：concat 与 xfade 只认标签，链上没有标签时
-        // ffmpeg 会报 "Stream specifier 'v3' ... matches no streams"。
-        // 变速：`setpts` 按倍率压缩 / 拉伸时间戳，音轨那边用 `atempo` 对齐。
-        // 速度曲线换成一条分段线性的表达式（`remap::setpts_filter`，单位已经换回时基）：
-        // 常量倍率只是它的一个特例，但常量走短写法更清楚。
-        let setpts = if clip.has_remap() {
-            crate::timeline::setpts_filter(&clip.remap, clip.span().secs(), rate)
-                .unwrap_or_else(|| "setpts=PTS-STARTPTS".to_string())
-        } else if (rate - 1.0).abs() < 1e-6 {
-            "setpts=PTS-STARTPTS".to_string()
-        } else {
-            format!("setpts=(PTS-STARTPTS)/{rate:.6}")
-        };
-        // 片尾定格：克隆最后一帧停 `hold` 秒，音轨补等长静音。
-        let freeze = if clip.hold > Tick::ZERO {
-            format!(
-                ",tpad=stop_mode=clone:stop_duration={:.6}",
-                clip.hold.secs()
-            )
-        } else {
-            String::new()
-        };
-        let chain = format!(
-            "[{index}:v]trim=start={:.6}:end={:.6},{setpts}{freeze},\
-             scale={dims}:force_original_aspect_ratio=decrease,\
-             pad={dims}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}{tonemap}{motion}{color}{fades}{effects}{label}",
-            (clip.source_in - head).secs(),
-            clip.source_out.secs()
-        );
-
-        match kind {
-            Some(kind) => {
-                let previous = pieces.pop().expect("有转场就一定有前一段");
-                // `xfade` 从 `offset` 开始溶到本片段：offset 落在前一段的尾巴上，
-                // 也就是「前一段总长 - 溶接时长」。两段加起来仍等于原时长。
-                // 两个 label 都自带方括号，直接相连：`[[v4]]` 会被 ffmpeg 当成
-                // 一个不存在的滤镜名（报 "No such filter: ']xfade'"）。
-                let xfade = format!(
-                    "{}{label}xfade=transition={}:duration={:.6}:offset={:.6}[xf{}]",
-                    previous.label,
-                    xfade_name(kind),
-                    head.secs(),
-                    (previous.len() - head).secs().max(0.0),
-                    clip.id.raw()
-                );
-                let mut chains = previous.chains;
-                chains.push(chain);
-                chains.push(xfade);
-                pieces.push(Piece {
-                    chains,
-                    label: format!("[xf{}]", clip.id.raw()),
-                    start: previous.start,
-                    end: clip.end(),
-                    clip: Some(clip.id),
-                });
-            }
-            None => pieces.push(Piece {
-                chains: vec![chain],
-                label,
-                start: clip.start,
-                end: clip.end(),
-                clip: Some(clip.id),
-            }),
-        }
-        cursor = clip.end();
-    }
-
-    // 这条轨没铺满序列：补齐到整条序列的长度。多层 overlay 要求等长，
-    // 而 `overlay` 默认按最短的一条截断——少这一段的成片会缺尾巴。
-    if cursor < duration {
-        let label = format!("[bgv{}_{gap_index}]", track.id.raw());
-        pieces.push(Piece {
-            chains: vec![format!(
-                "color=c=black:s={color_size}:r={fps}:d={:.6}{label}",
-                (duration - cursor).secs()
-            )],
-            label,
-            start: cursor,
-            end: duration,
-            clip: None,
-        });
-    }
-
-    let mut stream = Stream::new();
-    for piece in pieces {
-        // 黑场、片段、xfade 的链都自带输出标签，和 audio_stream 的 push 一样；
-        // 这里只收集，不能再拼一次，否则转场那条链会多出一个标签。
-        stream.chains.extend(piece.chains);
-        stream.segments.push(piece.label);
-    }
-    Ok(stream)
-}
-
-/// 片段的声音主体：把素材区间 `[入点, 出点)` 变成一路音频，链尾统一落在 `[amN]` 上。
-///
-/// 返回「这几条链 + 末端的标签」：调用方在标签后面接着接采样率 / 格式 / 音量。
-///
-/// 常量倍率是一条 `atempo`（快慢各一档，极端倍率串联）。速度曲线不行：`atempo` 只认
-/// 恒定倍率，只能按曲线折点切成几块、各自变速再 `concat` 拼回来；每块的倍率取
-/// 「调和中项」，让它的时长与曲线积分严格相等（见 `timeline::remap::audio_chunks`）。
-/// 同一条输入流被切进多条链之前要先 `asplit`：filter_complex 里一个输入标签只能用一次。
-fn audio_body(clip: &crate::timeline::ClipItem, index: usize) -> (Vec<String>, String) {
-    let id = clip.id.raw();
-    let start = clip.source_in.secs();
-    let raw = format!("[am{id}]");
-    let chunks = crate::timeline::audio_chunks(&clip.remap, clip.span().secs(), clip.rate());
-    // 常量倍率（含「曲线只有一个点」）：一条 `atrim` 就够。
-    if !clip.has_remap() || chunks.len() <= 1 {
-        let rate = chunks
-            .first()
-            .map_or_else(|| clip.rate(), |chunk| chunk.rate as f32);
-        let tempo = atempo_chain(rate);
-        return (
-            vec![format!(
-                "[{index}:a]atrim=start={start:.6}:end={:.6},asetpts=PTS-STARTPTS{tempo}{raw}",
-                clip.source_out.secs()
-            )],
-            raw,
-        );
-    }
-
-    // `asplit` 的输出标签要唯一：同一份工程里两个片段各切一次也不会撞名。
-    let splits: Vec<String> = (0..chunks.len()).map(|i| format!("[ac{id}_{i}]")).collect();
-    let mut chains = vec![format!(
-        "[{index}:a]asplit={}{}",
-        chunks.len(),
-        splits.concat()
-    )];
-    for (i, (split, chunk)) in splits.iter().zip(&chunks).enumerate() {
-        let tempo = atempo_chain(chunk.rate as f32);
-        chains.push(format!(
-            "{split}atrim=start={:.6}:end={:.6},asetpts=PTS-STARTPTS{tempo}[ad{id}_{i}]",
-            start + chunk.start,
-            start + chunk.end,
-        ));
-    }
-    let done: String = (0..chunks.len()).map(|i| format!("[ad{id}_{i}]")).collect();
-    chains.push(format!("{done}concat=n={}:v=0:a=1{raw}", chunks.len()));
-    (chains, raw)
-}
-
-/// 倍率 → `atempo` 链。
-///
-/// `atempo` 一档只认 0.5–2.0，更极端的倍率要串联：4x 是 `atempo=2.0,atempo=2.0`，
-/// 0.25x 是 `atempo=0.5,atempo=0.5`。串起来乘起来必须正好等于目标倍率。
-fn atempo_chain(rate: f32) -> String {
-    if (rate - 1.0).abs() < 1e-6 || !rate.is_finite() || rate <= 0.0 {
-        return String::new();
-    }
-    let mut rest = f64::from(rate);
-    let mut parts: Vec<String> = Vec::new();
-    while rest > 2.0 {
-        parts.push("atempo=2.0".to_string());
-        rest /= 2.0;
-    }
-    while rest < 0.5 {
-        parts.push("atempo=0.5".to_string());
-        rest /= 0.5;
-    }
-    parts.push(format!("atempo={rest:.6}"));
-    parts.iter().map(|part| format!(",{part}")).collect()
-}
-
-/// 转场类型 → `xfade` 的 `transition` 取值。
-fn xfade_name(kind: crate::timeline::TransitionKind) -> &'static str {
-    match kind {
-        crate::timeline::TransitionKind::CrossDissolve => "dissolve",
-        crate::timeline::TransitionKind::Fade => "fade",
-        crate::timeline::TransitionKind::Wipe => "wipeleft",
-        crate::timeline::TransitionKind::Slide => "slideleft",
-    }
-}
-
-fn audio_stream(
-    project: &Project,
-    track: &Track,
-    duration: Tick,
-    inputs: &mut Vec<PathBuf>,
-) -> Result<Stream, ExportError> {
-    let mut stream = Stream::new();
-    let mut cursor = Tick::ZERO;
-    let mut gap_index = 0;
-    // 轨道音量落成 `volume=`：它是振幅倍数，与预览侧乘到 mpv 音量上的那个数同量纲。
-    // 静音段不用乘——`anullsrc` 多少倍都是静音，少插一道滤镜更清楚。
-    let gain = track.normalized_gain();
-    let volume = if (gain - 1.0).abs() < 1e-4 {
-        String::new()
-    } else {
-        format!(",volume={gain:.4}")
-    };
-
-    for clip in &track.clips {
-        if clip.start > cursor {
-            let duration = (clip.start - cursor).secs();
-            stream.push(
-                format!(
-                    "anullsrc=r={AUDIO_RATE}:cl=stereo,\
-                     atrim=duration={duration:.6}"
-                ),
-                // 同理：静音段标签也要带轨道 id，避免多轨同名。
-                format!("[bga{}_{gap_index}]", track.id.raw()),
-            );
-            gap_index += 1;
-        }
-
-        let index = input_index(inputs, project, clip.asset_id)?;
-        let label = format!("[a{}]", clip.id.raw());
-        // 声音主体：常量倍率是一条 `atempo`，速度曲线要分段变速（见 `audio_body`）。
-        let (mut chains, raw) = audio_body(clip, index);
-        // 定格段补静音，好和视频那边的 `tpad` 对齐。
-        let pad = if clip.hold > Tick::ZERO {
-            format!(",apad=pad_dur={:.6}", clip.hold.secs())
-        } else {
-            String::new()
-        };
-        // 三层音量（片段 → 自动化 → 推子）连乘，顺序见 `timeline::mixer`；
-        // 连乘与顺序无关，分开写只是为了每一层都能单独看出它在哪儿。
-        let clip_gain = crate::timeline::mixer::clip_gain(clip.gain);
-        let clip_volume = if (clip_gain - 1.0).abs() < 1e-4 {
-            String::new()
-        } else {
-            format!(",volume={clip_gain:.4}")
-        };
-        // 自动化用 `eval=frame`：每帧按轨道时间求值。滤镜链里这一段从 PTS 0 开始，
-        // 所以表达式里把片段起点加回去。
-        let automation = crate::timeline::mixer::gain_expression(track, clip.start)
-            .map(|expr| format!(",volume=volume='{expr}':eval=frame"))
-            .unwrap_or_default();
-        // 声像走 `pan`：左右各乘一个系数（等功率），居中时不插这道。
-        let (left, right) = crate::timeline::mixer::pan_gains(track.pan);
-        let pan = if (left - right).abs() < 1e-4 {
-            String::new()
-        } else {
-            format!(",pan=stereo|c0={left:.4}*c0|c1={right:.4}*c1")
-        };
-        chains.push(format!(
-            "{raw}aresample={AUDIO_RATE},\
-             aformat=sample_fmts=fltp:channel_layouts=stereo{pad}\
-             {clip_volume}{automation}{volume}{pan}{label}"
-        ));
-        stream.push_chains(chains, label);
-        cursor = clip.end();
-    }
-
-    // 跟视频一样补齐到整条序列：`amix` 的 duration=longest 才不会把别的轨
-    // 提前砍掉，各条轨也都在同一个时间零点上。
-    if cursor < duration {
-        stream.push(
-            format!(
-                "anullsrc=r={AUDIO_RATE}:cl=stereo,atrim=duration={:.6}",
-                (duration - cursor).secs()
-            ),
-            format!("[bga{}_{gap_index}]", track.id.raw()),
-        );
-    }
-
-    Ok(stream)
-}
-
-/// 这段素材是不是 HDR。没探测过（老工程、音频文件）按 SDR 处理：
-/// 多插一条 tonemap 链要多一道浮点转换，猜错比漏做更贵。
-fn asset_is_hdr(project: &Project, asset_id: AssetId) -> bool {
-    project
-        .asset(asset_id)
-        .and_then(|asset| asset.media.as_ref())
-        .is_some_and(|media| media.color.is_hdr())
 }
 
 /// 素材文件在 ffmpeg 输入里的下标；同一个文件只加一次 `-i`。

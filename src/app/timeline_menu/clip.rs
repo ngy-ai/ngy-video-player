@@ -44,7 +44,7 @@ impl PlayerApp {
             (true, false) => "与左侧片段加转场…",
         };
         let clip_id = menu.clip;
-        let origin = menu_origin(menu.position, menu_height(10, 1), window);
+        let origin = menu_origin(menu.position, menu_height(11, 1), window);
 
         Some(
             div()
@@ -152,6 +152,16 @@ impl PlayerApp {
                     cx.listener(move |this, _: &ClickEvent, _window, cx| {
                         cx.stop_propagation();
                         this.open_color_menu(clip_id, menu.position, cx);
+                    }),
+                ))
+                .child(item_menu_entry(
+                    "timeline-menu-mask",
+                    IconName::Square,
+                    "遮罩…",
+                    text(),
+                    cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                        cx.stop_propagation();
+                        this.open_mask_menu(clip_id, menu.position, cx);
                     }),
                 ))
                 .child(

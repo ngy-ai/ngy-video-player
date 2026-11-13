@@ -138,6 +138,9 @@ fn assert_duration(output: &Path, expected: &str) {
 // 速度曲线那条用例连着它的时长读数工具一起放在 `tests/timeline_export/remap.rs`。
 #[path = "timeline_export/remap.rs"]
 mod remap;
+// 遮罩那条用例（PGM alpha 图 + alphamerge + 黑底）在 `tests/timeline_export/mask.rs`。
+#[path = "timeline_export/mask.rs"]
+mod mask;
 
 /// `ffmpeg -i` 的 stderr 里有 `..., 30 fps, ...`，用它读回成片帧率。
 fn assert_frame_rate(output: &Path, expected: &str) {
