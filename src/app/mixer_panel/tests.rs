@@ -1,7 +1,9 @@
 //! 混音台面板的坐标换算：推子（dB 刻度）、声像条与自动化画布的比例互转。
 
 use super::automation::{auto_at, auto_gain, auto_x, auto_y, normalize_automation};
+use super::meter::{meter_level, overloaded, track_gain};
 use super::*;
+use crate::timeline::{Rational, Sequence, TrackKind};
 
 #[test]
 fn 推子零_db_在量程里的位置固定() {
@@ -96,4 +98,25 @@ fn 写回前会钳制排序并去掉同刻重复点() {
     assert_eq!(points[0].at, Tick::ZERO, "负起点夹到 0");
     assert!((points[1].gain - 1.5).abs() < 1e-5, "同刻留后来的点");
     assert_eq!(points[2].gain, mixer::MAX_GAIN, "超上限夹到 MAX_GAIN");
+}
+
+#[test]
+fn 有效增益条与推子同刻度且能标出过载() {
+    assert_eq!(meter_level(0.0), 0.0, "静音应该是空条");
+    assert_eq!(meter_level(-1.0), 0.0);
+    assert_eq!(meter_level(f32::NAN), 0.0, "坏值不能画出 NaN 高度");
+    let unity = meter_level(1.0);
+    assert!((unity - ratio_from_gain(1.0)).abs() < 1e-6);
+    assert!(meter_level(2.0) > unity, "增益越高条越长");
+    assert!(!overloaded(1.0), "正好 0 dB 不算过载");
+    assert!(overloaded(1.5));
+    assert!(!overloaded(0.0));
+    assert!(!overloaded(f32::NAN));
+}
+
+#[test]
+fn 空轨不发声所以增益条是零() {
+    let mut sequence = Sequence::new("meter", Rational::FPS_30, 320, 240);
+    let track = sequence.add_track(TrackKind::Audio);
+    assert_eq!(track_gain(&sequence, track, Tick::from_secs(1.0)), 0.0);
 }

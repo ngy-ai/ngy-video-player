@@ -16,6 +16,7 @@ use crate::timeline::{Id, TrackKind};
 use std::rc::Rc;
 
 pub(super) mod automation;
+mod meter;
 
 /// 面板本身没有状态：所有值都在工程里，拖动状态在 `PlayerApp`。
 #[derive(Default)]
@@ -290,8 +291,10 @@ impl PlayerApp {
             )
             .child(rows)
             .child(div().text_size(px(10.0)).text_color(text_faint()).child(
-                "下面的小画布是音量自动化：横轴是序列时间，纵轴和推子同一套 dB 刻度；\
-                         按住圆点拖到任意时刻与音量，松手才算一步撤销。\
+                "名字左边的细竖条是这一刻的**有效增益**（片段 × 自动化 × 推子，随播放头变；\
+                         越过 0 dB 变红），不是实时采样电平——预览的 PCM 由 mpv 直接交给系统，\
+                         Rust 侧读不到。下面的小画布是音量自动化：横轴是序列时间，\
+                         纵轴和推子同一套 dB 刻度；按住圆点拖到任意时刻与音量，松手才算一步撤销。\
                          「复制曲线 / 粘贴」可以把一条轨的点整条搬到另一条轨。\
                          导出时按 `volume` 表达式逐帧渲染，预览跟着播放头走同一条线。",
             ));
@@ -325,6 +328,12 @@ impl PlayerApp {
         let solo = track.solo;
         let locked = track.locked;
         let points = track.automation.len();
+        // 这一刻的有效增益（片段 × 自动化 × 推子）：不发声的轨自然是 0。
+        let level_gain = self
+            .project
+            .as_ref()
+            .map(|project| meter::track_gain(project.sequence(), id, playhead))
+            .unwrap_or(0.0);
 
         let fader = self.slider(
             id,
@@ -348,6 +357,28 @@ impl PlayerApp {
             .items_center()
             .gap(px(8.0))
             .h(px(30.0))
+            .child(
+                div()
+                    .w(px(4.0))
+                    .h(px(24.0))
+                    .flex_none()
+                    .flex()
+                    .flex_col()
+                    .justify_end()
+                    .rounded(px(2.0))
+                    .bg(gpui_kit::rgb(0x2a2a32))
+                    .child(
+                        div()
+                            .w_full()
+                            .h(gpui_kit::relative(meter::meter_level(level_gain)))
+                            .rounded(px(2.0))
+                            .bg(if meter::overloaded(level_gain) {
+                                ui::danger()
+                            } else {
+                                ui::accent()
+                            }),
+                    ),
+            )
             .child(
                 div()
                     .w(px(116.0))
